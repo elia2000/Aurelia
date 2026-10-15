@@ -49,6 +49,13 @@ export default [
     },
   },
   {
+    // Unit tests run in Node (Buffer, setImmediate) as well as the browser.
+    files: ["test/**/*.{js,jsx}"],
+    languageOptions: {
+      globals: { ...globals.browser, ...globals.node },
+    },
+  },
+  {
     files: ["vite.config.js", "vitest.config.js"],
     languageOptions: {
       globals: globals.node,
