@@ -466,7 +466,9 @@ export class CallManager {
       iceCandidatePoolSize: 0, // pre-gathering wakes the radio for nothing
       bundlePolicy: "max-bundle",
       rtcpMuxPolicy: "require",
-      ...(this.#opts.relayOnly ? { iceTransportPolicy: "relay" } : {}),
+      // The admin can require every call to go through the relay so that
+      // neither person learns the other's IP address.
+      ...(call.iceConfig?.forceRelay || this.#opts.relayOnly ? { iceTransportPolicy: "relay" } : {}),
     });
     call.pc = pc;
     call.remoteStream = this.#opts.createMediaStream();

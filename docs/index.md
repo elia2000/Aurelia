@@ -2,21 +2,25 @@
 layout: home
 
 hero:
-  name: Songbird
-  text: Self-hosted chat
-  tagline: A secure, lightweight chat platform designed to empower digital freedom worldwide.
+  name: Aurelle
+  text: Private, self-hosted messenger
+  tagline: Chat, end-to-end encrypted voice and video calls, and round video messages, on your own server, light on battery and data.
   image:
-    src: /songbird-hero.svg
-    alt: Songbird
+    src: /aurelle-hero.svg
+    alt: Aurelle
   actions:
     - theme: brand
       text: Get Started
       link: /Deployment-Script
     - theme: alt
       text: View on GitHub
-      link: https://github.com/bllackbull/Songbird
+      link: https://github.com/elia2000/aurelia
 
 features:
+  - icon: 🔐
+    title: Encrypted Calls & Video Messages
+    details: End-to-end encrypted 1:1 voice and video calls and Telegram-style round video messages, built to save battery and mobile data.
+    link: /Calls-and-Video-Messages
   - icon: 🚀
     title: Easy Install
     details: One-line deployment script handles dependencies, build, Nginx, and SSL for you.
@@ -39,7 +43,7 @@ features:
     link: /Object-Storage
   - icon: 📡
     title: Remote Channels
-    details: Mirror Telegram channels or other Songbird channels into your own channels.
+    details: Mirror Telegram channels or Songbird channels into your own channels.
     link: /Remote-Channel-Setup
   - icon: 🗃️
     title: Database Tools

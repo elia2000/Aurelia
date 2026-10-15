@@ -2,21 +2,25 @@
 layout: home
 
 hero:
-  name: Songbird
-  text: پیام‌رسان شخصی
-  tagline: یک پلتفرم پیام‌رسان سبک و امن که با هدف حمایت از آزادی دیجیتال در سراسر جهان ساخته شده است.
+  name: Aurelle
+  text: پیام‌رسان خصوصی و self-hosted
+  tagline: چت، تماس صوتی و تصویری با رمزنگاری سرتاسری و پیام‌های ویدیویی گرد، روی سرور خودتان و با مصرف کم باتری و اینترنت.
   image:
-    src: /songbird-hero.svg
-    alt: Songbird
+    src: /aurelle-hero.svg
+    alt: Aurelle
   actions:
     - theme: brand
       text: شروع کنید
       link: /fa/Deployment-Script
     - theme: alt
       text: مشاهده در GitHub
-      link: https://github.com/bllackbull/Songbird
+      link: https://github.com/elia2000/aurelia
 
 features:
+  - icon: 🔐
+    title: تماس و پیام ویدیویی رمزنگاری‌شده
+    details: تماس صوتی و تصویری یک‌به‌یک با رمزنگاری سرتاسری و پیام‌های ویدیویی گرد به سبک تلگرام، ساخته‌شده برای صرفه‌جویی در باتری و اینترنت موبایل.
+    link: /fa/Calls-and-Video-Messages
   - icon: 🚀
     title: نصب آسان
     details: اسکریپت نصب تک خطی، وابستگی ها، build، Nginx و SSL را برای شما مدیریت میکند.

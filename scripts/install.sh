@@ -44,7 +44,7 @@ APP_NAME="songbird"
 INSTALL_DIR="/opt/songbird"
 LOG_FILE="/opt/songbird/logs/install.log"
 DATA_COMMAND_LAUNCHER="${DATA_COMMAND_LAUNCHER:-${INSTALL_DIR}/scripts/run-data-command.sh}"
-REPO_URL="${REPO_URL:-https://github.com/bllackbull/Songbird.git}"
+REPO_URL="${REPO_URL:-https://github.com/elia2000/aurelia.git}"
 SERVICE_USER="songbird"
 SERVICE_GROUP="songbird"
 SERVICE_NAME="songbird"
@@ -67,17 +67,14 @@ DEFAULT_SIGN_UP="true"
 DEFAULT_CHAT_VOICE_WAVEFORM_MAX_DECODE_MB="5"
 DEFAULT_CHAT_VOICE_WAVEFORM_MAX_DECODE_SECONDS="480"
 NODE_MAJOR="24"
-SCRIPT_REMOTE_URL="${SCRIPT_REMOTE_URL:-https://raw.githubusercontent.com/bllackbull/Songbird/main/scripts/install.sh}"
+SCRIPT_REMOTE_URL="${SCRIPT_REMOTE_URL:-https://raw.githubusercontent.com/elia2000/aurelia/main/scripts/install.sh}"
 LOG_LINES="${LOG_LINES:-100}"
 CERT_INSTALL_DIR="/etc/ssl/songbird"
 ACME_WEBROOT="/var/lib/songbird/certbot"
 LEGO_STATE_DIR="/var/lib/songbird/lego"
 LEGO_BIN="/usr/local/bin/lego"
 GLOBAL_COMMAND_PATH="/usr/local/bin/songbird-deploy"
-SONGBIRD_SOCIAL_GITHUB="https://github.com/bllackbull/Songbird"
-SONGBIRD_SOCIAL_TELEGRAM="https://t.me/songbirdapp"
-SONGBIRD_SOCIAL_WEBSITE="https://chat.songbird.website/invite/songbird"
-SONGBIRD_NOWPAYMENTS="https://nowpayments.io/donation/blackbull"
+SONGBIRD_SOCIAL_GITHUB="https://github.com/elia2000/aurelia"
 
 # Mirror URLs
 MIRROR_NODESOURCE="${MIRROR_NODESOURCE:-}"
@@ -437,9 +434,6 @@ show_deployment_success_frame() {
   lines+=("")
   lines+=("Links:")
   lines+=("GitHub: ${SONGBIRD_SOCIAL_GITHUB}")
-  lines+=("Telegram: ${SONGBIRD_SOCIAL_TELEGRAM}")
-  lines+=("Main Server Channel: ${SONGBIRD_SOCIAL_WEBSITE}")
-  lines+=("Support: ${SONGBIRD_NOWPAYMENTS}")
 
   print_success_frame "$title" "${lines[@]}"
 }

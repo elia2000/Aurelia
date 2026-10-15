@@ -7,6 +7,9 @@ import crypto from "node:crypto";
 //   CALLS_TURN_SECRET                 coturn `static-auth-secret`
 //   CALLS_TURN_CREDENTIAL_TTL_SECONDS default 21600 (6h)
 //   CALLS_STUN_URLS                   extra comma-separated stun: URLs
+//   CALLS_FORCE_RELAY                 default false; send ALL media through the
+//                                     TURN relay so the two people never learn
+//                                     each other's IP address (needs TURN)
 //
 // With no STUN/TURN configured calls still connect on a LAN or between hosts
 // with public addresses, but NOT across typical NATs. No third-party STUN
@@ -31,6 +34,7 @@ export function readCallsConfig(env = process.env) {
     turnUrls: splitUrls(env.CALLS_TURN_URLS),
     stunUrls: splitUrls(env.CALLS_STUN_URLS),
     turnSecret: String(env.CALLS_TURN_SECRET || "").trim(),
+    forceRelay: truthy(env.CALLS_FORCE_RELAY, false),
     credentialTtlSeconds:
       Number.isFinite(ttlRaw) && ttlRaw >= 60 ? Math.trunc(ttlRaw) : 6 * 60 * 60,
   };
@@ -57,6 +61,9 @@ export function buildIceServers(config, userId, nowMs = Date.now()) {
   return {
     iceServers: servers,
     hasRelay: Boolean(expiresAt),
+    // Only meaningful (and only honoured) when a relay is actually available;
+    // forcing relay-only without one would make every call fail.
+    forceRelay: Boolean(config.forceRelay && expiresAt),
     expiresAt,
     ttlSeconds: expiresAt ? config.credentialTtlSeconds : null,
   };

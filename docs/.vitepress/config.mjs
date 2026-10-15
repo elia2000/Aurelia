@@ -28,6 +28,14 @@ const enSidebar = [
     ],
   },
   {
+    text: '🔐 Calls & Encryption',
+    collapsed: false,
+    items: [
+      {text: '📞 Calls & Video Messages', link: '/Calls-and-Video-Messages'},
+      {text: '🧬 Encryption Protocol', link: '/E2EE-Protocol'},
+    ],
+  },
+  {
     text: '🔨 Operations',
     collapsed: false,
     items: [
@@ -66,6 +74,14 @@ const faSidebar = [
     ],
   },
   {
+    text: '🔐 تماس و رمزنگاری',
+    collapsed: false,
+    items: [
+      {text: '📞 تماس‌ها و پیام‌های ویدیویی', link: '/fa/Calls-and-Video-Messages'},
+      {text: '🧬 پروتکل رمزنگاری', link: '/fa/E2EE-Protocol'},
+    ],
+  },
+  {
     text: '🔨 عملیات',
     collapsed: false,
     items: [
@@ -78,8 +94,8 @@ const faSidebar = [
 
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
-  title: 'Songbird Docs',
-  description: 'Documentation of Songbird, a secure, lightweight, self-hosted chat platform.',
+  title: 'Aurelle Docs',
+  description: 'Documentation of Aurelle, a private, self-hosted messenger with end-to-end encrypted calls and video messages.',
 
   // Served from a custom domain at the site root.
   base: '/',
@@ -94,15 +110,10 @@ export default defineConfig({
 
   themeConfig: {
     // Shared across locales
-    logo: '/songbird-logo.svg',
+    logo: '/aurelle-logo.svg',
 
     socialLinks: [
-      {icon: 'docker', link: 'https://hub.docker.com/r/bllackbull/songbird'},
-      {icon: 'railway', link: 'https://railway.app/template/songbird'},
-      {icon: 'github', link: 'https://github.com/bllackbull/Songbird'},
-      {icon: 'telegram', link: 'https://t.me/songbirdapp'},
-      {icon: 'linkedin', link: 'https://www.linkedin.com/in/pouyakhalilii/'},
-
+      {icon: 'github', link: 'https://github.com/elia2000/aurelia'},
     ],
 
     search: {
@@ -118,16 +129,16 @@ export default defineConfig({
         nav: [
           {text: 'Home', link: '/'},
           {text: 'Guide', link: '/Deployment-Script'},
-          {text: 'Releases', link: 'https://github.com/bllackbull/Songbird/releases'},
+          {text: 'Releases', link: 'https://github.com/elia2000/aurelia/releases'},
         ],
         sidebar: enSidebar,
         editLink: {
-          pattern: 'https://github.com/bllackbull/Songbird/edit/main/docs/:path',
+          pattern: 'https://github.com/elia2000/aurelia/edit/main/docs/:path',
           text: 'Edit this page on GitHub',
         },
         footer: {
           message: 'Released under the MIT License.',
-          copyright: 'Copyright © 2026 Songbird',
+          copyright: 'Copyright © 2026 Aurelle · built on Songbird (MIT)',
         },
       },
     },
@@ -140,16 +151,16 @@ export default defineConfig({
         nav: [
           {text: 'خانه', link: '/fa/'},
           {text: 'راهنما', link: '/fa/Deployment-Script'},
-          {text: 'نسخه‌ها', link: 'https://github.com/bllackbull/Songbird/releases'},
+          {text: 'نسخه‌ها', link: 'https://github.com/elia2000/aurelia/releases'},
         ],
         sidebar: faSidebar,
         editLink: {
-          pattern: 'https://github.com/bllackbull/Songbird/edit/main/docs/:path',
+          pattern: 'https://github.com/elia2000/aurelia/edit/main/docs/:path',
           text: 'ویرایش این صفحه در GitHub',
         },
         footer: {
           message: 'تحت لایسنس MIT منتشر شده است.',
-          copyright: 'کپی‌رایت © ۲۰۲۶ Songbird',
+          copyright: 'کپی‌رایت © ۲۰۲۶ Aurelle · ساخته‌شده بر پایه‌ی Songbird (MIT)',
         },
         docFooter: {
           prev: 'صفحه قبل',

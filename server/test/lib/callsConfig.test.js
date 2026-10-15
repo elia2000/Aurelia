@@ -52,6 +52,19 @@ describe("buildIceServers", () => {
     expect(out.ttlSeconds).toBe(3600);
   });
 
+  test("force-relay is only advertised when a relay exists", () => {
+    const withRelay = readCallsConfig({
+      CALLS_TURN_URLS: "turn:t.example.com:3478",
+      CALLS_TURN_SECRET: "s",
+      CALLS_FORCE_RELAY: "true",
+    });
+    expect(buildIceServers(withRelay, "u").forceRelay).toBe(true);
+    const noRelay = readCallsConfig({ CALLS_FORCE_RELAY: "true" });
+    expect(noRelay.forceRelay).toBe(true);
+    expect(buildIceServers(noRelay, "u").forceRelay).toBe(false);
+    expect(buildIceServers(readCallsConfig({}), "u").forceRelay).toBe(false);
+  });
+
   test("does not hand out TURN URLs without a secret", () => {
     const cfg = readCallsConfig({ CALLS_TURN_URLS: "turn:t.example.com:3478" });
     expect(buildIceServers(cfg, "u").iceServers).toEqual([]);

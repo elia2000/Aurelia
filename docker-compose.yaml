@@ -1,11 +1,13 @@
 services:
   songbird:
-    # Use the pre-built image from Docker Hub (recommended):
-    image: ${SONGBIRD_IMAGE:-bllackbull/songbird:latest}
-    # Or build locally from source (uncomment and remove the image line above):
-    # build:
-    #   context: .
-    #   dockerfile: Dockerfile
+    # Aurelle is built from this source tree: calls, video messages and the new
+    # branding are not in the upstream Songbird image on Docker Hub.
+    # To use a prebuilt image of your own instead, remove the `build` block and
+    # set SONGBIRD_IMAGE to it.
+    image: ${SONGBIRD_IMAGE:-aurelle:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: songbird
     restart: unless-stopped
     expose:
@@ -60,7 +62,8 @@ services:
 
   # TURN/STUN relay for voice and video calls (optional, enable with
   #   docker compose --profile calls up -d
-  # and set CALLS_TURN_SECRET / CALLS_TURN_URLS / CALLS_TURN_EXTERNAL_IP in .env).
+  # and set CALLS_TURN_SECRET, CALLS_TURN_URLS and CALLS_TURN_EXTERNAL_IP (all
+  # three are required) in .env).
   # Calls are end-to-end encrypted and peer-to-peer; the relay is only used when
   # a direct path is impossible (strict NAT / carrier networks) and only ever
   # forwards ciphertext. Host networking is used so the UDP relay range works

@@ -118,6 +118,26 @@ nano .env
 
 :::
 
+## Calls
+
+Settings for [voice and video calls](./Calls-and-Video-Messages.md). They are read by the server at request time; a restart is needed after editing `.env`.
+
+| Variable | Type | Default | Description |
+|---|---|---:|---|
+| `CALLS_ENABLED` | `boolean` | `true` | Turn calling on or off for everyone. When off, the call buttons are hidden. |
+| `CALLS_TURN_URLS` | `string` | `""` | Comma-separated `stun:`, `turn:` or `turns:` URLs of your relay, for example `stun:turn.example.com:3478,turn:turn.example.com:3478?transport=udp`. |
+| `CALLS_TURN_SECRET` | `string` | `""` | The relay's `static-auth-secret`. Short-lived per-user credentials are derived from it. Without it no relay is offered. |
+| `CALLS_TURN_CREDENTIAL_TTL_SECONDS` | `integer` | `21600` | Lifetime of the relay credentials (minimum 60). Keep it longer than your longest calls. |
+| `CALLS_STUN_URLS` | `string` | `""` | Optional extra STUN servers. Empty by default so peer IP addresses are not sent to a third party. |
+| `CALLS_FORCE_RELAY` | `boolean` | `false` | Send **all** call media through the relay so the two people never learn each other's IP address. Needs a working relay. |
+| `CALLS_TURN_EXTERNAL_IP` | `string` | `""` | Bundled coturn only: the server's public IPv4 address. **Required** for the bundled relay; it will not start without it. |
+| `CALLS_TURN_REALM` | `string` | `aurelle` | Bundled coturn only: the realm. |
+| `CALLS_TURN_PORT` | `integer` | `3478` | Bundled coturn only: listening port. |
+| `CALLS_TURN_MIN_PORT` / `CALLS_TURN_MAX_PORT` | `integer` | `49160` / `49260` | Bundled coturn only: UDP relay port range. Open it in your firewall. |
+| `CALLS_TURN_USER_QUOTA` | `integer` | `6` | Bundled coturn only: concurrent relay allocations per user. |
+| `CALLS_TURN_TOTAL_QUOTA` | `integer` | `200` | Bundled coturn only: concurrent relay allocations in total. |
+| `CALLS_TURN_MAX_BPS` | `integer` | `262144` | Bundled coturn only: bandwidth cap per session, in bytes per second. |
+
 ## Apply Changes
 
 :::tip

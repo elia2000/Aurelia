@@ -1,6 +1,6 @@
 // Recording settings for round video messages, tuned for small files and low
-// battery use: a 384-px square at 24 fps and ~350 kbps is about 2.6 MB per
-// minute (a typical phone clip is 10-20x that).
+// battery use: a 384-px square at 24 fps and ~350 kbps video plus 32 kbps
+// audio is about 3 MB per minute (a typical phone clip is several times that).
 
 export const VIDEO_NOTE_MAX_MS = 60_000;
 export const VIDEO_NOTE_MIN_MS = 800;

@@ -86,6 +86,26 @@ describe("happy path", () => {
     expect(pcA.config.iceServers[0].urls[0]).toMatch(/^turn:/);
   });
 
+  test("the admin's force-relay setting makes both sides use relay candidates only", async () => {
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    for (const u of [alice, bob]) {
+      u.api.fetchIceConfig.mockResolvedValue({ iceServers: [{ urls: ["turn:t:3478"], username: "u", credential: "c" }], forceRelay: true });
+    }
+    await alice.manager.startCall({ chatId: "c", peer: { userId: bob.user.id, username: "bob" } });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(bob));
+    await bob.manager.accept();
+    await waitFor(() => alice.pc && bob.pc);
+    expect(alice.pc.config.iceTransportPolicy).toBe("relay");
+    expect(bob.pc.config.iceTransportPolicy).toBe("relay");
+  });
+
+  test("by default both candidate types are allowed", async () => {
+    const { pcA } = await connectedCall();
+    expect(pcA.config.iceTransportPolicy).toBeUndefined();
+  });
+
   test("hang up ends both sides and releases every resource", async () => {
     const { alice, bob, pcA, pcB } = await connectedCall();
     const stream = alice.manager.getState().localStream;

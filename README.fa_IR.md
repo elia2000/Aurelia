@@ -2,108 +2,93 @@
 
 <div align="center">
 
-# <img src="./client/public/songbird-logo.svg" alt="Songbird"> Songbird
+# <img src="./client/src/assets/aurelle-logo.svg" alt="Aurelle" width="40"> Aurelle
 
-[![Version](https://img.shields.io/github/v/release/bllackbull/Songbird?label=version&color=blue)](https://github.com/bllackbull/Songbird/releases)
-![Build](https://img.shields.io/github/actions/workflow/status/bllackbull/Songbird/build.yml)
-[![Last commit](https://img.shields.io/github/last-commit/bllackbull/Songbird)](https://github.com/bllackbull/Songbird/commits/main/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-red.svg)](https://opensource.org/licenses/MIT)
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/bllackbull/Songbird)
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy?repo=https://github.com/bllackbull/Songbird)
-
-**پلتفرم پیام‌رسان امن و سبک برای میزبانی شخصی**
+**پیام‌رسان خصوصی و self-hosted با تماس رمزنگاری‌شده‌ی سرتاسری و پیام‌های ویدیویی گرد.**
 
 </div>
 
+Aurelle یک فورک از [Songbird](https://github.com/bllackbull/Songbird) (با لایسنس MIT) است که تماس صوتی و تصویری با رمزنگاری سرتاسری و پیام‌های ویدیویی گرد به سبک تلگرام را اضافه می‌کند و با هدف مصرف کم باتری و اینترنت موبایل ساخته شده است. نام آن از واژه‌ی لاتین *aurum* به معنی طلا گرفته شده است.
+
 ## قابلیت‌های کلیدی
 
+- 📞 **تماس رمزنگاری‌شده**: تماس صوتی و تصویری یک‌به‌یک با رمزنگاری سرتاسری، همتا به همتا، با کد اموجی تأیید و شماره‌ی ایمنی
+- ⭕ **پیام ویدیویی گرد**: ضبط تا ۶۰ ثانیه که روی دستگاه خودتان رمز می‌شود؛ گیرنده فقط هنگام پخش دانلود و رمزگشایی می‌کند
+- 🔋 **سبک برای باتری و اینترنت**: Opus با DTX و ۲۴ کیلوبیت، کدک‌های سازگار با سخت‌افزار، ویدیوی تطبیقی که به صدا-فقط برمی‌گردد و آزاد کردن دوربین در پس‌زمینه
+- 🛡️ **گزینه‌ی امنیت بالا**: عبور همه‌ی تماس‌ها از رله‌ی خودتان تا طرفین آدرس IP یکدیگر را نفهمند
 - 💬 **انواع چت**: پیام مستقیم، گروه و کانال
 - 📁 **پشتیبانی از رسانه**: آپلود فایل، پیام صوتی، تبدیل ویدئو
-- 🔔 **Push Notification**: اعلان وب با VAPID
-- 📡 **کانال‌های ریموت**: آینه‌کردن کانال‌های Telegram یا Songbird (نسخه v0.10.3+)
-- 🛡️ **پنل مدیریت**: رابط مدیریتی کامل با نقش مالک (نسخه v0.11.0+)
-- 🔒 **امنیت**: رمزنگاری، هش bcrypt، محدودیت نرخ
+- 🔔 **Push Notification**: اعلان وب با VAPID (برای تماس ورودی هم)
+- 📡 **کانال‌های ریموت**: آینه‌کردن کانال‌های Telegram یا Songbird
+- 🛡️ **پنل مدیریت**: رابط مدیریتی کامل با نقش مالک
+- 🔒 **امنیت**: رمزنگاری در حالت ذخیره، هش bcrypt، محدودیت نرخ
 - 📱 **PWA**: اپلیکیشن وب نصب‌شدنی
 - ☁️ **نصب ابری**: نصب به صورت PaaS و CaaS با پشتیبانی از فضای ابری
 - 🌍 **چندزبانه**: پشتیبانی از انگلیسی و فارسی
 
+## چه چیزی رمزنگاری سرتاسری می‌شود
+
+| | رمزنگاری سرتاسری |
+|---|---|
+| صدا و تصویر تماس | ✅ |
+| سیگنالینگ تماس (SDP و ICE) | ✅ |
+| پیام‌های ویدیویی گرد (و پیش‌نمایش آن‌ها) | ✅ |
+| پیام‌های متنی، پیام‌های صوتی، فایل‌ها | ❌ (روی سرور در حالت ذخیره رمز می‌شوند) |
+
+سرور همچنان فراداده را می‌بیند (چه کسی با چه کسی، چه زمانی، حجم‌ها). پیش از تکیه بر آن، [مدل تهدید](docs/fa/E2EE-Protocol.md#threat-model) را بخوانید: مانند هر رمزنگاری سرتاسری مبتنی بر مرورگر، کد توسط سرور تحویل داده می‌شود؛ پس شماره‌های ایمنی را با افرادی که برایتان مهم هستند تأیید کنید.
+
 ## نصب سریع
 
-ساده‌ترین روش نصب Songbird، اسکریپت نصب آسان است. روی یک سرور Ubuntu (نسخه 22.04+) با دسترسی `sudo` این دستور را اجرا کنید:
+Aurelle از روی سورس ساخته می‌شود. با Docker:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bllackbull/Songbird/main/scripts/install.sh | bash
+git clone https://github.com/elia2000/aurelia.git
+cd aurelia
+cp .env.example .env
+docker compose up -d --build
 ```
 
-این اسکریپت پیش‌نیازها را نصب می‌کند، برنامه را build می‌کند، Nginx را کانفیگ می‌کند و می‌تواند SSL را هم برایتان راه‌اندازی کند. بعد از نصب، هر زمان با این دستور دوباره به آن دسترسی دارید:
+یا روی یک سرور Ubuntu (نسخه 22.04+) با دسترسی `sudo` از اسکریپت نصب استفاده کنید:
 
 ```bash
-songbird-deploy
+curl -fsSL https://raw.githubusercontent.com/elia2000/aurelia/main/scripts/install.sh | bash
 ```
 
 > [!TIP]
-> داشتن یک دامنه که به IP عمومی سرور شما اشاره کند پیشنهاد می‌شود، و برای push notification به HTTPS نیاز دارید (به‌جز روی `localhost`).
+> داشتن یک دامنه که به IP عمومی سرور شما اشاره کند پیشنهاد می‌شود. برای تماس، پیام ویدیویی و push notification **به HTTPS نیاز دارید** (به‌جز روی `localhost`).
+
+برای تماس بین شبکه‌های مختلف، رله‌ی همراه پروژه را فعال کنید: پس از تنظیم `CALLS_TURN_SECRET`، `CALLS_TURN_URLS` و `CALLS_TURN_EXTERNAL_IP` در `.env` دستور `docker compose --profile calls up -d` را اجرا کنید. [تماس‌ها و پیام‌های ویدیویی](docs/fa/Calls-and-Video-Messages.md) را ببینید.
+
+> [!NOTE]
+> نام‌های داخلی (سرویس Docker با نام `songbird`، دستور `songbird-deploy`، فایل `songbird.db` و کلیدهای cookie و storage) از پروژه‌ی اصلی حفظ شده‌اند تا نصب‌های موجود به کار خود ادامه دهند.
 
 ## مستندات
 
-مستندات کامل در [docs.songbird.website](https://docs.songbird.website/fa/) قرار دارد:
+مستندات در پوشه‌ی [`docs/`](docs/) قرار دارد (VitePress، انگلیسی و فارسی). برای مرور محلی `npm run docs:dev` را اجرا کنید.
 
-- [اسکریپت نصب](https://docs.songbird.website/fa/Deployment-Script)
-- [نصب از طریق Docker](https://docs.songbird.website/fa/Installation-Docker)
-- [نصب ابری](https://docs.songbird.website/fa/Cloud-Deployment)
-- [نصب دستی](https://docs.songbird.website/fa/Manual-Installation)
-- [کانفیگ Nginx](https://docs.songbird.website/fa/Nginx-Configuration)
-- [گواهی‌های SSL](https://docs.songbird.website/fa/SSL-Certificates)
-- [اجرا پشت CDN](https://docs.songbird.website/fa/CDN-Setup)
-- [اجرا روی دامنه + subpath](https://docs.songbird.website/fa/Subpath-Hosting)
-- [متغیرهای محیطی](https://docs.songbird.website/fa/Environment-Variables)
-- [فضای ابری](https://docs.songbird.website/fa/Object-Storage)
-- [ورکر مدیا](https://docs.songbird.website/fa/Media-Worker)
-- [پنل مدیریت](https://docs.songbird.website/fa/Admin-Panel)
-- [راه‌اندازی Remote Channel](https://docs.songbird.website/fa/Remote-Channel-Setup)
-- [پراکسی Push Notification](https://docs.songbird.website/fa/Push-Notification-Proxy)
-- [به‌روزرسانی برنامه](https://docs.songbird.website/fa/Updating)
-- [دستورات دیتابیس](https://docs.songbird.website/fa/Database-Commands)
-- [عیب‌یابی](https://docs.songbird.website/fa/Troubleshooting)
+- [تماس‌ها و پیام‌های ویدیویی](docs/fa/Calls-and-Video-Messages.md)
+- [پروتکل رمزنگاری سرتاسری](docs/fa/E2EE-Protocol.md) (برای توسعه‌دهندگان اپلیکیشن بومی)
+- [اسکریپت نصب](docs/fa/Deployment-Script.md)
+- [نصب از طریق Docker](docs/fa/Installation-Docker.md)
+- [نصب ابری](docs/fa/Cloud-Deployment.md)
+- [نصب دستی](docs/fa/Manual-Installation.md)
+- [کانفیگ Nginx](docs/fa/Nginx-Configuration.md)
+- [گواهی‌های SSL](docs/fa/SSL-Certificates.md)
+- [متغیرهای محیطی](docs/fa/Environment-Variables.md)
+- [فضای ابری](docs/fa/Object-Storage.md)
+- [ورکر مدیا](docs/fa/Media-Worker.md)
+- [پنل مدیریت](docs/fa/Admin-Panel.md)
+- [عیب‌یابی](docs/fa/Troubleshooting.md)
 
-## نویسنده
+## قدردانی
 
-- سازنده: [@bllackbull](https://github.com/bllackbull)
-- مشارکت کنندگان: [@nkhalili](https://github.com/nkhalili), [@modos](https://github.com/modos), [@iPmartNetwork](https://github.com/iPmartNetwork)
+Aurelle بر پایه‌ی [Songbird](https://github.com/bllackbull/Songbird) ساخته‌ی [@bllackbull](https://github.com/bllackbull) و مشارکت‌کنندگان آن ([@nkhalili](https://github.com/nkhalili)، [@modos](https://github.com/modos)، [@iPmartNetwork](https://github.com/iPmartNetwork)) است و تحت لایسنس MIT منتشر می‌شود. اعلان کپی‌رایت آن‌ها در [LICENSE](LICENSE) حفظ شده است.
 
 ## مشارکت
 
-- از تقاضای مشارکت، استقبال میشود.
-- اگر قصد مشارکت دارید، اول در این آدرس issue باز کنید: `https://github.com/bllackbull/Songbird/issues`
-- برای هماهنگی مستقیم، قبل از باز کردن PR با [@bllackbull](https://github.com/bllackbull) در GitHub در ارتباط باشید.
-- برای اطلاعات بیشتر، راهنمای [Contributing](/CONTRIBUTING.md) را ببینید.
-
-## حمایت
-
-اگر این پروژه را دوست دارید، می‌توانید از آن حمایت کنید:
-
-<a href="https://nowpayments.io/donation?api_key=0b61dd3e-6508-4849-ad92-1dde65442937" target="_blank" rel="noreferrer noopener">
-    <img src="https://nowpayments.io/images/embeds/donation-button-black.svg" alt="Crypto donation button by NOWPayments">
-</a>
-
-### TRX:
-
-```
-TPf1bEhipKpGkjo5N2Scj9nufNNh5TNrwX
-```
-
-### BTC:
-
-```
-bc1q9hupvcc39juhf0k7rgzn6phn8s8jez365kzmuj
-```
-
-### TON:
-
-```
-UQDzQ3xbWzKQvw8X8sWU82dksBeYqTHrT9sLzhBOyaESPjVy
-```
+issue و pull request خوش‌آمد است. [Contributing](/CONTRIBUTING.md) را ببینید.
 
 ## لایسنس
 

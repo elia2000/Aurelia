@@ -32,6 +32,7 @@
 | بیلد Docker متوقف به نظر میرسد | دانلود وابستگی ها | [مشکلات بیلد Docker](#docker-build-issues) |
 | خطاهای TLS/گواهینامه | مسیرهای گواهینامه یا تمدید | [مشکلات TLS / گواهینامه](#tls--certificate-problems) |
 | خطای SSL / گواهی CA پایگاه داده PostgreSQL | گواهی SSL / CA دیتابیس ابری | [خطاهای SSL و گواهی CA در PostgreSQL](#postgresql-ssl--ca-certificate-errors) |
+| تماس روی «Connecting» می‌ماند یا شکست می‌خورد | نبودن رله / فایروال | [تماس برقرار نمی‌شود](#calls-not-connecting) |
 | کانال ریموت بازتاب نمیدهد | اعتبارنامه های Telegram / صف | [کانال ریموت](#remote-channel-not-mirroring) |
 | کنترل سرویس در پنل مدیریت شکست میخورد | مجوزها | [مشکلات پنل مدیریت](#مشکلات-پنل-مدیریت) |
 
@@ -238,6 +239,19 @@ Acquire connection error: Error: self-signed certificate in certificate chain
      ```txt
      NODE_EXTRA_CA_CERTS=/opt/songbird/certs/ca.pem
      ```
+
+## تماس برقرار نمی‌شود {#calls-not-connecting}
+
+تماس‌ها همتا به همتا هستند. وقتی دو دستگاه نتوانند مستقیماً به هم برسند (اینترنت موبایل، NAT سخت‌گیر، فایروال سازمانی) به یک رله نیاز است.
+
+- دکمه‌های تماس وجود ندارند: روی HTTPS (یا `localhost`) نیستید، مرورگر از WebRTC/دوربین پشتیبانی نمی‌کند، یا `CALLS_ENABLED=false` است.
+- تماس زنگ می‌خورد اما بین شبکه‌های مختلف روی *Connecting…* می‌ماند: رله را راه‌اندازی کنید. [تماس‌ها و پیام‌های ویدیویی](./Calls-and-Video-Messages.md#setting-up-the-relay) را ببینید.
+- پس از ورود به حساب، `/api/calls/ice-config` را باز کنید. اگر `iceServers` خالی است، `CALLS_TURN_URLS` یا `CALLS_TURN_SECRET` تنظیم نشده (یا سرور راه‌اندازی مجدد نشده) است.
+- بررسی کنید که پورت `3478` (UDP و TCP) و بازه‌ی پورت رله `49160-49260` (UDP) در فایروال باز باشند و `CALLS_TURN_EXTERNAL_IP` آدرس عمومی سرور باشد. گزارش رله را با `docker compose logs coturn` ببینید.
+- احراز هویت رله شکست می‌خورد: `CALLS_TURN_SECRET` باید در `.env` برنامه و در `static-auth-secret` مربوط به coturn دقیقاً یکی باشد. ساعت سرور و کلاینت باید تقریباً هماهنگ باشد، چون اعتبارنامه‌ها منقضی می‌شوند.
+- *Security check failed* یا *keys changed*: کلیدهای دستگاه طرف مقابل با آنچه این دستگاه به خاطر دارد یکی نیست. پیش از اعتماد به چت، شماره‌ی ایمنی را با او تأیید کنید.
+- تماس در آزمایش کار می‌کند اما پشت load balancer نه: وضعیت تماس در یک پروسه‌ی برنامه نگه‌داری می‌شود؛ برای `/api/calls` از sticky routing استفاده کنید.
+- صدا نیست: دسترسی میکروفون مرورگر و دستگاه خروجی سیستم را بررسی کنید. وقتی طرف مقابل میکروفونش را بسته باشد، صفحه‌ی تماس عبارت *is muted* را نشان می‌دهد.
 
 ## کانال ریموت بازتاب نمیدهد {#remote-channel-not-mirroring}
 

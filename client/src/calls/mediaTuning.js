@@ -13,7 +13,7 @@
 export const OPUS_VOICE = Object.freeze({
   usedtx: 1, // silence suppression: no packets while nobody talks
   useinbandfec: 1, // loss concealment without retransmission round trips
-  maxaveragebitrate: 24000, // wideband voice; ~11 kB/min per direction
+  maxaveragebitrate: 24000, // wideband voice; ~0.2 MB/min per direction while talking
   stereo: 0,
   "sprop-stereo": 0,
   cbr: 0,
