@@ -1,6 +1,15 @@
 import { describe, test, expect, vi } from "vitest";
 import { render } from "vitest-browser-react";
 import { page } from "vitest/browser";
+const e2ee = vi.hoisted(() => ({
+  services: {
+    api: { listMyDevices: async () => ({ devices: [] }) },
+    directory: { getUserDevices: async () => ({ devices: [], assessment: { status: "ok", added: [] } }) },
+    trust: { isVerified: async () => false },
+  },
+}));
+vi.mock("../../../src/e2ee/services.js", () => ({ getE2eeServices: () => e2ee.services }));
+
 import CallOverlay from "../../../src/components/calls/CallOverlay.jsx";
 import CallButtons from "../../../src/components/calls/CallButtons.jsx";
 import { CallContext } from "../../../src/calls/callContext.js";
@@ -63,6 +72,38 @@ describe("CallOverlay", () => {
     await expect.element(page.getByText(/new device was added/i)).toBeInTheDocument();
   });
 
+  test("a new device of a verified contact is called out more strongly and offers a review", async () => {
+    renderOverlay({ phase: "incoming", ringing: true, peer, trust: { status: "devices_added", verified: true } });
+    await expect.element(page.getByText(/safety number changed/i)).toBeInTheDocument();
+    await expect.element(page.getByRole("button", { name: "Review" })).toBeInTheDocument();
+  });
+
+  test("an incoming call does not take focus away from the message being typed", async () => {
+    const input = document.createElement("textarea");
+    document.body.appendChild(input);
+    input.focus();
+    renderOverlay({ phase: "incoming", ringing: true, peer, trust: { status: "ok" } });
+    await expect.element(page.getByText("Incoming voice call")).toBeInTheDocument();
+    // Space or Enter typed now must still go into the message box, not press Accept.
+    expect(document.activeElement).toBe(input);
+    input.remove();
+  });
+
+  test("with nothing being typed, the call dialog (not the Accept button) takes focus", async () => {
+    document.activeElement?.blur?.();
+    renderOverlay({ phase: "incoming", ringing: true, peer, trust: { status: "ok" } });
+    await expect.element(page.getByText("Incoming voice call")).toBeInTheDocument();
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(document.activeElement).toBe(dialog);
+    expect(document.activeElement?.getAttribute("aria-label")).not.toBe("Accept call");
+  });
+
+  test("the running clock is a timer that is not announced every second", async () => {
+    renderOverlay({ phase: "connected", peer, connectedAt: Date.now() - 5000 });
+    await expect.element(page.getByRole("timer")).toBeInTheDocument();
+    expect(document.querySelector('[role="timer"]').getAttribute("aria-live")).toBe("off");
+  });
+
   test("an outgoing call shows ringing and can be cancelled", async () => {
     const value = renderOverlay({ phase: "outgoing", ringing: true, peer });
     await expect.element(page.getByText("Ringing…")).toBeInTheDocument();
@@ -106,9 +147,12 @@ describe("CallOverlay", () => {
   test.each([
     ["declined", "Call declined"],
     ["busy", "User is busy"],
+    ["busy_self", "You are already in a call"],
+    ["clock_skew", "This device's clock looks wrong. Check the date and time."],
+    ["relay_unavailable", "This server only allows relayed calls, but no relay is set up."],
     ["no_answer", "No answer"],
     ["handshake_failed", "Security check failed. The call was blocked."],
-    ["key_mismatch", "This contact's security keys changed. The call was blocked."],
+    ["key_mismatch", "This contact's security keys changed (a new device). The call was blocked."],
     ["permission_denied", "Microphone or camera access was blocked"],
   ])("explains why a call ended: %s", async (reason, text) => {
     renderOverlay({ phase: "ended", endReason: reason, peer });
@@ -160,6 +204,13 @@ describe("CallButtons", () => {
   test("is hidden when the browser cannot call, or the admin turned calls off", async () => {
     renderButtons({ supported: false });
     expect(document.querySelector('button[aria-label="Voice call"]')).toBeNull();
+  });
+
+  test("the safety-number button is there even when calls are not available, and opens the verification screen", async () => {
+    renderButtons({ supported: false }, { user: { id: "u-alice", username: "alice" } });
+    expect(document.querySelector('button[aria-label="Voice call"]')).toBeNull();
+    await page.getByRole("button", { name: "Encryption and safety number" }).click();
+    await expect.element(page.getByText("Verify security")).toBeInTheDocument();
   });
 
   test("is hidden for deleted accounts", async () => {

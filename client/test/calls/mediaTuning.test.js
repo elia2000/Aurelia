@@ -119,6 +119,28 @@ describe("summarizeStats", () => {
     expect(out.relayed).toBe(true);
     expect(out.availableKbps).toBe(800);
   });
+  test("only the pair the connection uses counts, not every pair that passed its check", () => {
+    const direct = { id: "p1", type: "candidate-pair", nominated: true, state: "succeeded", currentRoundTripTime: 0.03, localCandidateId: "l1", remoteCandidateId: "r1", bytesSent: 900000 };
+    const spare = { id: "p2", type: "candidate-pair", nominated: false, state: "succeeded", currentRoundTripTime: 0.4, localCandidateId: "l2", remoteCandidateId: "r2", bytesSent: 0 };
+    const reports = [
+      direct,
+      spare,
+      { id: "l1", type: "local-candidate", candidateType: "host" },
+      { id: "r1", type: "remote-candidate", candidateType: "host" },
+      { id: "l2", type: "local-candidate", candidateType: "relay" },
+      { id: "r2", type: "remote-candidate", candidateType: "host" },
+    ];
+    // Whatever the order, the spare relayed pair must not turn the badge on.
+    for (const order of [reports, [...reports].reverse()]) {
+      const out = summarizeStats(order);
+      expect(out.relayed).toBe(false);
+      expect(out.rttMs).toBeCloseTo(30);
+    }
+    // The transport names the selected pair explicitly.
+    const viaTransport = summarizeStats([{ id: "t", type: "transport", selectedCandidatePairId: "p2" }, ...reports]);
+    expect(viaTransport.relayed).toBe(true);
+    expect(viaTransport.rttMs).toBeCloseTo(400);
+  });
   test("handles an empty report", () => {
     expect(summarizeStats([])).toEqual({ rttMs: null, lossPct: 0, relayed: false, availableKbps: null });
   });

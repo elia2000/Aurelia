@@ -163,6 +163,11 @@ export const resolveReplyPreview = (msg) => {
   ) {
     summary = `Sent ${files.length} media files`;
   }
+  // An encrypted video message is stored as one opaque file, which would
+  // otherwise be summarised (and drawn) as a document.
+  if (/^Sent a video message$/i.test(rawBody)) {
+    return { text: "Sent a video message", icon: "video" };
+  }
   const text =
     isGenericBody && summary ? summary : rawBody || summary || "Message";
   return { text, icon: icon || (docCount > 0 ? "document" : null) };

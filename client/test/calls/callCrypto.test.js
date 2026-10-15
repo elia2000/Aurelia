@@ -3,11 +3,13 @@ import {
   createAccept,
   createInvite,
   deriveCallSession,
+  ephemeralCommitment,
   INVITE_MAX_AGE_MS,
   openSignal,
   sealSignal,
   verifyAccept,
   verifyInvite,
+  verifyReveal,
 } from "../../src/calls/callCrypto.js";
 import { sasEmoji } from "../../src/e2ee/sas.js";
 import { fromB64u, randomUuid, toB64u, randomBytes } from "../../src/e2ee/encoding.js";
@@ -23,7 +25,16 @@ async function setup() {
   const inviteArgs = {
     invite, callId, callerUserId: "alice", calleeUserId: "bob", kind: "video", callerDevice: alice.record,
   };
-  return { alice, bob, callId, ephA, invite, inviteArgs };
+  const acceptArgs = (accept, overrides = {}) => ({
+    accept, callId, invite, callerUserId: "alice", calleeUserId: "bob", kind: "video", calleeDevice: bob.record,
+    ...overrides,
+  });
+  const answer = (overrides = {}) =>
+    createAccept({
+      callId, invite, callerUserId: "alice", calleeUserId: "bob", kind: "video", identity: bob.identity,
+      ...overrides,
+    });
+  return { alice, bob, callId, ephA, invite, inviteArgs, acceptArgs, answer };
 }
 
 describe("invite / accept authentication", () => {
@@ -32,12 +43,19 @@ describe("invite / accept authentication", () => {
     expect(await verifyInvite(inviteArgs)).toBe(true);
   });
 
+  test("the invite carries a commitment to the caller's key, not the key", async () => {
+    const { invite, ephA, callId } = await setup();
+    expect(invite.eph).toBeUndefined();
+    expect(fromB64u(invite.commit)).toHaveLength(32);
+    expect(invite.commit).toBe(await ephemeralCommitment(callId, ephA.pub));
+  });
+
   test.each([
     ["call id", (a) => ({ ...a, callId: randomUuid() })],
     ["callee", (a) => ({ ...a, calleeUserId: "carol" })],
     ["caller", (a) => ({ ...a, callerUserId: "mallory" })],
     ["kind", (a) => ({ ...a, kind: "audio" })],
-    ["ephemeral key", (a) => ({ ...a, invite: { ...a.invite, eph: toB64u(randomBytes(65)) } })],
+    ["commitment", (a) => ({ ...a, invite: { ...a.invite, commit: toB64u(randomBytes(32)) } })],
     ["timestamp", (a) => ({ ...a, invite: { ...a.invite, ts: a.invite.ts + 1 } })],
   ])("an invite with a different %s is rejected", async (_n, mutate) => {
     const { inviteArgs } = await setup();
@@ -56,35 +74,86 @@ describe("invite / accept authentication", () => {
     expect(await verifyInvite({ ...inviteArgs, callerDevice: null })).toBe(false);
   });
 
-  test("stale invites are rejected", async () => {
+  test("stale invites are rejected, but a few minutes of clock difference are tolerated", async () => {
     const { inviteArgs } = await setup();
     expect(await verifyInvite({ ...inviteArgs, now: inviteArgs.invite.ts + INVITE_MAX_AGE_MS + 1 })).toBe(false);
+    expect(await verifyInvite({ ...inviteArgs, now: inviteArgs.invite.ts + 4 * 60 * 1000 })).toBe(true);
   });
 
-  test("a genuine accept verifies; one for a different caller ephemeral does not", async () => {
-    const { bob, callId, invite } = await setup();
-    const { accept } = await createAccept({ callId, ephCaller: invite.eph, identity: bob.identity });
-    const args = { accept, callId, ephCaller: invite.eph, calleeUserId: "bob", calleeDevice: bob.record };
-    expect(await verifyAccept(args)).toBe(true);
-    expect(await verifyAccept({ ...args, ephCaller: toB64u(randomBytes(65)) })).toBe(false);
-    expect(await verifyAccept({ ...args, calleeUserId: "eve" })).toBe(false);
-    expect(await verifyAccept({ ...args, accept: { ...accept, eph: toB64u(randomBytes(65)) } })).toBe(false);
+  test("a genuine accept verifies and is bound to the whole invite", async () => {
+    const { acceptArgs, answer, invite } = await setup();
+    const { accept } = await answer();
+    expect(await verifyAccept(acceptArgs(accept))).toBe(true);
+    expect(await verifyAccept(acceptArgs(accept, { calleeUserId: "eve" }))).toBe(false);
+    expect(await verifyAccept(acceptArgs(accept, { kind: "audio" }))).toBe(false);
+    expect(await verifyAccept(acceptArgs(accept, { callerUserId: "mallory" }))).toBe(false);
+    expect(await verifyAccept(acceptArgs(accept, { invite: { ...invite, deviceId: randomUuid() } }))).toBe(false);
+    expect(await verifyAccept(acceptArgs(accept, { invite: { ...invite, commit: toB64u(randomBytes(32)) } }))).toBe(false);
+    expect(await verifyAccept(acceptArgs({ ...accept, eph: toB64u(randomBytes(65)) }))).toBe(false);
+  });
+
+  test("identity misbinding: an accept given for another caller's invite never verifies for this call", async () => {
+    // A hostile server replays Alice's commitment inside an invite signed by Mallory.
+    // Bob answers "Mallory"; that answer must not authenticate a session with Alice.
+    const { callId, invite, bob } = await setup();
+    const mallory = await makeIdentity("mallory");
+    const forged = { ...invite, deviceId: mallory.identity.deviceId };
+    const { accept } = await createAccept({
+      callId, invite: forged, callerUserId: "mallory", calleeUserId: "bob", kind: "video", identity: bob.identity,
+    });
+    expect(
+      await verifyAccept({
+        accept, callId, invite, callerUserId: "alice", calleeUserId: "bob", kind: "video", calleeDevice: bob.record,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("key commitment", () => {
+  test("only the key that was committed to is accepted as the reveal", async () => {
+    const { invite, ephA, callId } = await setup();
+    expect(await verifyReveal({ callId, commit: invite.commit, eph: ephA.pub })).toBe(true);
+    const other = await createInvite({ callId, calleeUserId: "bob", kind: "video", identity: (await makeIdentity("alice")).identity });
+    expect(await verifyReveal({ callId, commit: invite.commit, eph: other.ephemeral.pub })).toBe(false);
+    // The commitment is also specific to the call.
+    expect(await verifyReveal({ callId: randomUuid(), commit: invite.commit, eph: ephA.pub })).toBe(false);
+    expect(await verifyReveal({ callId, commit: invite.commit, eph: undefined })).toBe(false);
+    expect(await verifyReveal({ callId, commit: invite.commit, eph: "not a key" })).toBe(false);
+  });
+
+  test("the caller's key is fixed before the callee's is chosen, so a code cannot be ground", async () => {
+    // Everything the callee signs and every key it derives depends on the
+    // commitment, which exists before the callee picks its own key. Changing
+    // the caller key afterwards (to search for matching emoji) breaks the reveal.
+    const { callId, invite, answer } = await setup();
+    const { accept } = await answer();
+    const attacker = await createInvite({ callId, calleeUserId: "bob", kind: "video", identity: (await makeIdentity("alice")).identity });
+    expect(accept.eph).toBeTruthy();
+    expect(await verifyReveal({ callId, commit: invite.commit, eph: attacker.ephemeral.pub })).toBe(false);
   });
 });
 
 async function handshake() {
   const ctx = await setup();
-  const { ephemeral: ephB, accept } = await createAccept({
-    callId: ctx.callId, ephCaller: ctx.invite.eph, identity: ctx.bob.identity,
-  });
-  const common = { callId: ctx.callId, ephCaller: ctx.invite.eph, ephCallee: accept.eph };
+  const { ephemeral: ephB, accept } = await ctx.answer();
+  const common = {
+    callId: ctx.callId,
+    callerUserId: "alice",
+    callerDeviceId: ctx.alice.identity.deviceId,
+    calleeUserId: "bob",
+    calleeDeviceId: ctx.bob.identity.deviceId,
+    kind: "video",
+    commit: ctx.invite.commit,
+    ephCaller: ctx.ephA.pub,
+    ephCallee: accept.eph,
+  };
   const caller = await deriveCallSession({
     ...common, ephemeralPrivateKey: ctx.ephA.privateKey, peerEph: accept.eph, role: "caller",
   });
   const callee = await deriveCallSession({
-    ...common, ephemeralPrivateKey: ephB.privateKey, peerEph: ctx.invite.eph, role: "callee",
+    ...common, ephemeralPrivateKey: ephB.privateKey, peerEph: ctx.ephA.pub, role: "callee",
   });
-  return { ...ctx, caller, callee, accept };
+  return { ...ctx, caller, callee, accept, ephB, common };
 }
 
 describe("call session and encrypted signaling", () => {
@@ -135,20 +204,35 @@ describe("call session and encrypted signaling", () => {
     await expect(openSignal(b.callee, { kind: "ice", seq: 3, blob })).rejects.toThrow();
   });
 
-  test("a man in the middle that swaps ephemeral keys ends up with different codes", async () => {
-    const { callId, ephA, invite, bob } = await setup();
-    // Server replaces the callee's accept with its own ephemeral key.
-    const mitm = await createAccept({ callId, ephCaller: invite.eph, identity: bob.identity });
-    const real = await createAccept({ callId, ephCaller: invite.eph, identity: bob.identity });
+  test("a man in the middle that swaps ephemeral keys ends up with different codes and keys", async () => {
+    const { ephA, answer, common } = await handshake();
+    // The server replaces the callee's accept with a different ephemeral key.
+    const mitm = await answer();
+    const real = await answer();
     const callerView = await deriveCallSession({
-      callId, ephCaller: invite.eph, ephCallee: mitm.accept.eph,
+      ...common, ephCallee: mitm.accept.eph,
       ephemeralPrivateKey: ephA.privateKey, peerEph: mitm.accept.eph, role: "caller",
     });
     const calleeView = await deriveCallSession({
-      callId, ephCaller: invite.eph, ephCallee: real.accept.eph,
-      ephemeralPrivateKey: real.ephemeral.privateKey, peerEph: invite.eph, role: "callee",
+      ...common, ephCallee: real.accept.eph,
+      ephemeralPrivateKey: real.ephemeral.privateKey, peerEph: ephA.pub, role: "callee",
     });
     expect(sasEmoji(callerView.sasBytes)).not.toEqual(sasEmoji(calleeView.sasBytes));
+    const blob = await sealSignal(callerView, { kind: "offer", seq: 1, payload: { sdp: "x" } });
+    await expect(openSignal(calleeView, { kind: "offer", seq: 1, blob })).rejects.toThrow();
+  });
+
+  test("the identities are part of the key derivation", async () => {
+    const { ephA, ephB, accept, common } = await handshake();
+    const sameKeysOtherCaller = await deriveCallSession({
+      ...common, callerUserId: "mallory",
+      ephemeralPrivateKey: ephB.privateKey, peerEph: ephA.pub, role: "callee",
+    });
+    const honest = await deriveCallSession({
+      ...common, ephemeralPrivateKey: ephB.privateKey, peerEph: ephA.pub, role: "callee",
+    });
+    expect(Array.from(sameKeysOtherCaller.sasBytes)).not.toEqual(Array.from(honest.sasBytes));
+    expect(accept.eph).toBeTruthy();
   });
 
   test("sessions from different calls derive different codes", async () => {

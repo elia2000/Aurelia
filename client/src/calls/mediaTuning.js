@@ -126,6 +126,27 @@ export function orderVideoCodecs(codecs) {
     .map((x) => x.codec);
 }
 
+/**
+ * The candidate pair the connection is actually using. Browsers list several
+ * pairs that passed their connectivity check (a direct one and, when a relay
+ * is configured, lower-priority relayed ones), so "succeeded" is not enough.
+ */
+function selectedCandidatePair(reports, byId) {
+  for (const r of reports) {
+    if (r.type === "transport" && r.selectedCandidatePairId) {
+      const pair = byId.get(r.selectedCandidatePairId);
+      if (pair) return pair;
+    }
+  }
+  const pairs = reports.filter((r) => r.type === "candidate-pair");
+  const flagged = pairs.find((p) => p.selected === true);
+  if (flagged) return flagged;
+  const nominated = pairs
+    .filter((p) => p.nominated === true && (p.state === undefined || p.state === "succeeded"))
+    .sort((a, b) => (b.bytesSent || 0) + (b.bytesReceived || 0) - ((a.bytesSent || 0) + (a.bytesReceived || 0)));
+  return nominated[0] || null;
+}
+
 /** Reduces an `RTCStatsReport` (as an array) to what the adaptation needs. */
 export function summarizeStats(reports) {
   let rttMs = null;
@@ -134,14 +155,15 @@ export function summarizeStats(reports) {
   let availableKbps = null;
   const byId = new Map(reports.map((r) => [r.id, r]));
 
+  const pair = selectedCandidatePair(reports, byId);
+  if (pair) {
+    if (typeof pair.currentRoundTripTime === "number") rttMs = pair.currentRoundTripTime * 1000;
+    if (typeof pair.availableOutgoingBitrate === "number") availableKbps = pair.availableOutgoingBitrate / 1000;
+    const local = byId.get(pair.localCandidateId);
+    const remote = byId.get(pair.remoteCandidateId);
+    relayed = local?.candidateType === "relay" || remote?.candidateType === "relay";
+  }
   for (const r of reports) {
-    if (r.type === "candidate-pair" && (r.nominated || r.state === "succeeded") && r.selected !== false) {
-      if (typeof r.currentRoundTripTime === "number") rttMs = r.currentRoundTripTime * 1000;
-      if (typeof r.availableOutgoingBitrate === "number") availableKbps = r.availableOutgoingBitrate / 1000;
-      const local = byId.get(r.localCandidateId);
-      const remote = byId.get(r.remoteCandidateId);
-      relayed = local?.candidateType === "relay" || remote?.candidateType === "relay";
-    }
     if (r.type === "remote-inbound-rtp" && typeof r.fractionLost === "number") {
       lossPct = Math.max(lossPct, r.fractionLost * 100);
       if (rttMs === null && typeof r.roundTripTime === "number") rttMs = r.roundTripTime * 1000;

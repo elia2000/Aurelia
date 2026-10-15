@@ -51,8 +51,18 @@ export const listMyDevices = () => request("/api/e2ee/devices");
 export const revokeDevice = (deviceId) =>
   request(`/api/e2ee/devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" });
 
-export const fetchUserDevices = (userId) =>
-  request(`/api/e2ee/users/${encodeURIComponent(userId)}/devices`);
+/**
+ * `chatId`: a chat both people are in (group members often have no direct
+ * chat). `deviceId`: also return that device if it has been revoked, so
+ * something it signed earlier can still be verified.
+ */
+export const fetchUserDevices = (userId, { chatId, deviceId } = {}) => {
+  const query = new URLSearchParams();
+  if (chatId) query.set("chatId", chatId);
+  if (deviceId) query.set("deviceId", deviceId);
+  const suffix = query.toString() ? `?${query}` : "";
+  return request(`/api/e2ee/users/${encodeURIComponent(userId)}/devices${suffix}`);
+};
 
 export const fetchChatDevices = (chatId) =>
   request(`/api/e2ee/chats/${encodeURIComponent(chatId)}/devices`);
@@ -68,8 +78,9 @@ export const startCall = ({ callId, chatId, kind, invite }) =>
 export const acceptCall = (callId, accept) =>
   post(`/api/calls/${encodeURIComponent(callId)}/accept`, { accept });
 
-export const sendCallSignal = (callId, { kind, blob, seq }) =>
-  post(`/api/calls/${encodeURIComponent(callId)}/signal`, { kind, blob, seq });
+/** `eph`: the caller's committed ephemeral key, sent once with its first offer. */
+export const sendCallSignal = (callId, { kind, blob, seq, eph }) =>
+  post(`/api/calls/${encodeURIComponent(callId)}/signal`, { kind, blob, seq, ...(eph ? { eph } : {}) });
 
 export const markCallConnected = (callId) =>
   post(`/api/calls/${encodeURIComponent(callId)}/connected`, {});

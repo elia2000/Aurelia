@@ -141,7 +141,10 @@ export function useAppContextMenu({
                 },
               ]
             : []),
-          ...(files.length
+          // An encrypted video message is one opaque file: saving it would
+          // download ciphertext, and the server refuses to forward it (the key
+          // is wrapped only for the devices that were in the chat).
+          ...(files.length && !message?.e2ee
             ? [
                 {
                   id: "save",
@@ -151,12 +154,16 @@ export function useAppContextMenu({
                 },
               ]
             : []),
-          {
-            id: "forward",
-            label: "Forward",
-            icon: Forward,
-            onSelect: () => onForwardMessage?.(message),
-          },
+          ...(message?.e2ee
+            ? []
+            : [
+                {
+                  id: "forward",
+                  label: "Forward",
+                  icon: Forward,
+                  onSelect: () => onForwardMessage?.(message),
+                },
+              ]),
           {
             id: "delete",
             label: "Delete",

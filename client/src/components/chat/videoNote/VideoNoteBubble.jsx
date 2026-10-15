@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Lock, Play, Pause, LoaderCircle, TriangleAlert } from "../../../icons/lucide.js";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Lock, Play, Pause, LoaderCircle, ShieldOff, TriangleAlert } from "../../../icons/lucide.js";
 import { getE2eeServices } from "../../../e2ee/services.js";
 import { fetchCiphertext } from "../../../api/e2eeApi.js";
 import { formatDurationMs } from "../../../videoNote/config.js";
@@ -10,6 +10,9 @@ import {
   loadVideoNotePoster,
   videoNoteKey,
 } from "../../../videoNote/receive.js";
+
+// Only loaded when the sender's keys need a look.
+const SafetyNumberModal = lazy(() => import("../../calls/SafetyNumberModal.jsx"));
 
 const SIZE = 224;
 const STROKE = 5;
@@ -33,6 +36,9 @@ export default function VideoNoteBubble({ msg, user }) {
   const [source, setSource] = useState(() => getRememberedVideoNote(key)?.url || null);
   const [status, setStatus] = useState("idle"); // idle | loading | playing | paused | error
   const [error, setError] = useState("");
+  const [hint, setHint] = useState("");
+  const [senderPending, setSenderPending] = useState(() => Boolean(getRememberedVideoNote(key)?.senderPending));
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [progress, setProgress] = useState(0);
   const videoRef = useRef(null);
   const abortRef = useRef(null);
@@ -48,6 +54,15 @@ export default function VideoNoteBubble({ msg, user }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, Boolean(envelope)]);
+
+  // The message can be replaced (optimistic copy -> server copy) with a
+  // different key; pick up what this device already has for it.
+  useEffect(() => {
+    const remembered = key ? getRememberedVideoNote(key) : null;
+    if (!remembered) return;
+    setSource((current) => current || remembered.url || null);
+    setPoster((current) => current || remembered.posterUrl || null);
+  }, [key]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -65,9 +80,18 @@ export default function VideoNoteBubble({ msg, user }) {
       try {
         if (el.src !== url) el.src = url;
         await el.play();
+        setHint("");
         setStatus("playing");
-      } catch {
-        setStatus("paused");
+      } catch (e) {
+        if (e?.name === "NotAllowedError") {
+          // The tap that asked for the video was used up by the download and
+          // decryption; the video is ready now, so one more tap plays it.
+          setHint("Ready. Tap again to play.");
+          setStatus("paused");
+        } else {
+          setError("This device can't play this video.");
+          setStatus("error");
+        }
       }
     },
     [pause],
@@ -80,6 +104,7 @@ export default function VideoNoteBubble({ msg, user }) {
 
     setStatus("loading");
     setError("");
+    setHint("");
     const controller = new AbortController();
     abortRef.current = controller;
     try {
@@ -92,6 +117,7 @@ export default function VideoNoteBubble({ msg, user }) {
       });
       if (controller.signal.aborted) return;
       setSource(loaded.url);
+      setSenderPending(Boolean(loaded.senderPending));
       if (loaded.posterUrl && !poster) setPoster(loaded.posterUrl);
       setStatus("paused");
       await play(loaded.url);
@@ -129,6 +155,11 @@ export default function VideoNoteBubble({ msg, user }) {
             preload="none"
             disablePictureInPicture
             controlsList="nodownload noplaybackrate"
+            onError={() => {
+              if (!videoRef.current?.getAttribute("src")) return;
+              setError("This device can't play this video.");
+              setStatus("error");
+            }}
             onTimeUpdate={(e) => {
               const total = durationMs || (Number.isFinite(e.currentTarget.duration) ? e.currentTarget.duration * 1000 : 0);
               if (total) setProgress(Math.min(1, (e.currentTarget.currentTime * 1000) / total));
@@ -181,6 +212,32 @@ export default function VideoNoteBubble({ msg, user }) {
         <p className="max-w-[16rem] text-center text-xs text-rose-600 dark:text-rose-300" role="alert">
           {error}
         </p>
+      ) : null}
+      {hint && status !== "error" ? (
+        <p className="max-w-[16rem] text-center text-xs text-slate-500 dark:text-slate-400" role="status">
+          {hint}
+        </p>
+      ) : null}
+      {senderPending ? (
+        <p className="flex max-w-[16rem] items-center justify-center gap-1.5 text-center text-xs text-amber-700 dark:text-amber-300">
+          <ShieldOff size={12} aria-hidden="true" />
+          <span>Sent from a new device.</span>
+          <button type="button" className="font-semibold underline" onClick={() => setReviewOpen(true)}>
+            Check
+          </button>
+        </p>
+      ) : null}
+      {reviewOpen ? (
+        <Suspense fallback={null}>
+          <SafetyNumberModal
+            open
+            onClose={() => setReviewOpen(false)}
+            selfUser={user}
+            chatId={msg?.chat_id || msg?.chatId}
+            peer={{ userId: msg?.user_id || msg?.userId, username: msg?.username, nickname: msg?.nickname }}
+            onChanged={() => setSenderPending(false)}
+          />
+        </Suspense>
       ) : null}
     </div>
   );

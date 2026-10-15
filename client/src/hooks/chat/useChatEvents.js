@@ -5,6 +5,7 @@ import {
   isRemoteChannelMessage,
 } from "../../utils/messageOwnership.js";
 import { normalizeUuid } from "../../utils/uuidUtils.js";
+import { REALTIME_OPEN_EVENT } from "../../calls/callContext.js";
 
 const CALL_EVENT_TYPES = new Set([
   "call_invite",
@@ -185,6 +186,9 @@ export function useChatEvents({
         }
         setSseConnected(true);
         reconnectAttempts = 0;
+        // Events sent while the connection was down are gone (a call invite
+        // cannot be replayed), so let interested parts of the app catch up.
+        window.dispatchEvent(new Event(REALTIME_OPEN_EVENT));
       };
 
       const handleMessageData = (dataStr) => {

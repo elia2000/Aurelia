@@ -4,7 +4,7 @@
 
 export const BRAND = Object.freeze({
   name: "Aurelle",
-  tagline: "Private messaging, calls and video messages, encrypted end to end",
+  tagline: "Private self-hosted messaging with end-to-end encrypted calls and video messages",
   repository: "https://github.com/elia2000/Aurelle",
   upstream: Object.freeze({
     name: "Songbird",

@@ -6,26 +6,38 @@ import { computeSafetyNumber } from "../../e2ee/safetyNumber.js";
 import { getE2eeServices } from "../../e2ee/services.js";
 import { hasPersian } from "../../utils/fontUtils.js";
 
+const EMPTY = { loading: true, error: "", groups: null, digits: "", verified: false, devices: [], pending: 0, wasVerified: false };
+
 /**
  * Shows the safety number for a conversation partner. If both people see the
  * same number, nobody (including the server) swapped the keys. Marking it
  * verified is remembered on this device until the number changes.
+ *
+ * When the person has devices this device has not seen before, that is shown
+ * here and can be accepted (or the new number verified). Until then calls and
+ * video messages treat those devices with suspicion.
+ *
+ * @param {string} [chatId] a chat both people are in; lets the lookup work for
+ *                          group members who have no direct chat
+ * @param {() => void} [onChanged] called after a device was accepted or the
+ *                          verification changed
  */
-export default function SafetyNumberModal({ open, onClose, selfUser, peer, sas = null }) {
+export default function SafetyNumberModal({ open, onClose, selfUser, peer, chatId, sas = null, onChanged }) {
   const dialogRef = useRef(null);
   useFocusTrap(dialogRef, open);
-  const [status, setStatus] = useState({ loading: true, error: "", groups: null, digits: "", verified: false });
+  const [status, setStatus] = useState(EMPTY);
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     if (!open || !selfUser?.id || !peer?.userId) return undefined;
     let cancelled = false;
-    setStatus({ loading: true, error: "", groups: null, digits: "", verified: false });
+    setStatus(EMPTY);
     (async () => {
       try {
         const services = getE2eeServices();
         const [{ devices: mine }, theirs] = await Promise.all([
           services.api.listMyDevices(),
-          services.directory.getUserDevices(peer.userId, { force: true }),
+          services.directory.getUserDevices(peer.userId, { force: true, chatId }),
         ]);
         const { digits, groups } = await computeSafetyNumber({
           selfUserId: selfUser.id,
@@ -34,7 +46,18 @@ export default function SafetyNumberModal({ open, onClose, selfUser, peer, sas =
           peerDevices: theirs.devices,
         });
         const verified = await services.trust.isVerified(peer.userId, digits);
-        if (!cancelled) setStatus({ loading: false, error: "", groups, digits, verified });
+        if (!cancelled) {
+          setStatus({
+            loading: false,
+            error: "",
+            groups,
+            digits,
+            verified,
+            devices: theirs.devices,
+            pending: theirs.devices.filter((d) => d.pending).length,
+            wasVerified: Boolean(theirs.assessment?.verified),
+          });
+        }
       } catch (error) {
         const message =
           error?.name === "KeyMismatchError"
@@ -42,13 +65,13 @@ export default function SafetyNumberModal({ open, onClose, selfUser, peer, sas =
             : error?.message === "Both people need at least one registered device."
               ? "This contact has not set up secure messaging yet."
               : "Could not load the safety number.";
-        if (!cancelled) setStatus({ loading: false, error: message, groups: null, digits: "", verified: false });
+        if (!cancelled) setStatus({ ...EMPTY, loading: false, error: message });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [open, selfUser?.id, peer?.userId]);
+  }, [open, selfUser?.id, peer?.userId, chatId, reload]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -63,8 +86,17 @@ export default function SafetyNumberModal({ open, onClose, selfUser, peer, sas =
 
   const toggleVerified = async () => {
     const next = !status.verified;
-    await getE2eeServices().trust.setVerified(peer.userId, status.digits, next);
-    setStatus((prev) => ({ ...prev, verified: next }));
+    const services = getE2eeServices();
+    // Verifying the number of the devices listed right now also accepts them.
+    await services.trust.setVerified(peer.userId, status.digits, next, next ? status.devices : null);
+    services.directory.invalidate(peer.userId);
+    setStatus((prev) => ({ ...prev, verified: next, pending: next ? 0 : prev.pending }));
+    onChanged?.();
+  };
+  const acceptDevices = async () => {
+    await getE2eeServices().directory.acknowledge(peer.userId, status.devices);
+    setReload((n) => n + 1);
+    onChanged?.();
   };
   const peerName = peer?.nickname || peer?.username || "this contact";
 
@@ -107,6 +139,19 @@ export default function SafetyNumberModal({ open, onClose, selfUser, peer, sas =
                 <span key={index}>{group}</span>
               ))}
             </div>
+            {status.pending > 0 ? (
+              <p
+                role="alert"
+                className="mt-3 flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-100"
+              >
+                <ShieldOff size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
+                <span>
+                  {status.wasVerified
+                    ? `${peerName}'s safety number changed because a new device was added. Compare the new number with them, then mark it as verified.`
+                    : `${peerName} has ${status.pending === 1 ? "a new device" : `${status.pending} new devices`} that you have not seen before. Calls and video messages stay cautious about them until you accept.`}
+                </span>
+              </p>
+            ) : null}
             {sas ? (
               <p className="mt-3 text-center text-xs text-slate-500 dark:text-slate-400">
                 Current call code: <span className="text-base">{sas.join(" ")}</span>
@@ -123,7 +168,16 @@ export default function SafetyNumberModal({ open, onClose, selfUser, peer, sas =
           </>
         )}
 
-        <div className="mt-5 flex items-center justify-end gap-2">
+        <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+          {!status.loading && !status.error && status.pending > 0 && !status.wasVerified ? (
+            <button
+              type="button"
+              onClick={acceptDevices}
+              className="rounded-full border border-amber-300 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-800 transition hover:border-amber-400 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-100"
+            >
+              Accept new devices
+            </button>
+          ) : null}
           {!status.loading && !status.error ? (
             <button
               type="button"

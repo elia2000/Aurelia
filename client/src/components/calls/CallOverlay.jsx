@@ -30,11 +30,14 @@ const END_MESSAGES = {
   missed: "Missed call",
   no_answer: "No answer",
   busy: "User is busy",
+  busy_self: "You are already in a call",
   failed: "Call failed",
+  clock_skew: "This device's clock looks wrong. Check the date and time.",
+  relay_unavailable: "This server only allows relayed calls, but no relay is set up.",
   permission_denied: "Microphone or camera access was blocked",
   no_device: "No microphone found",
   handshake_failed: "Security check failed. The call was blocked.",
-  key_mismatch: "This contact's security keys changed. The call was blocked.",
+  key_mismatch: "This contact's security keys changed (a new device). The call was blocked.",
   e2ee_unavailable: "Secure calling is not available in this browser",
 };
 
@@ -65,7 +68,7 @@ function useStream(ref, stream) {
   }, [ref, stream]);
 }
 
-function RoundButton({ label, onClick, active = false, danger = false, accept = false, children, autoFocus = false, size = "h-14 w-14" }) {
+function RoundButton({ label, onClick, active = false, danger = false, accept = false, children, size = "h-14 w-14" }) {
   const tone = danger
     ? "bg-rose-600 text-white hover:bg-rose-500 shadow-[0_0_14px_rgba(244,63,94,0.35)]"
     : accept
@@ -80,7 +83,6 @@ function RoundButton({ label, onClick, active = false, danger = false, accept = 
       aria-label={label}
       aria-pressed={active && !danger && !accept ? true : undefined}
       title={label}
-      autoFocus={autoFocus}
       className={`inline-flex ${size} items-center justify-center rounded-full transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ${tone}`}
     >
       {children}
@@ -94,6 +96,7 @@ export default function CallOverlay({ user }) {
   const remoteVideoRef = useRef(null);
   const remoteAudioRef = useRef(null);
   const localVideoRef = useRef(null);
+  const dialogRef = useRef(null);
 
   const { phase, peer, kind, muted, cameraOn, remoteCameraOn, remoteMuted, sas, trust, relayed, networkPaused } = state;
   const active = phase && phase !== CALL_PHASE.IDLE;
@@ -115,6 +118,18 @@ export default function CallOverlay({ user }) {
     if (!active) setSafetyOpen(false);
   }, [active]);
 
+  // An incoming call must not steal focus from what the person is typing:
+  // pressing Space or Enter in the message box would otherwise answer it (and
+  // turn the microphone on). Take focus only when nothing editable has it.
+  const ringing = phase === CALL_PHASE.INCOMING;
+  useEffect(() => {
+    if (!ringing) return;
+    const el = document.activeElement;
+    const editing =
+      el && (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName));
+    if (!editing) dialogRef.current?.focus();
+  }, [ringing]);
+
   if (!active || typeof document === "undefined") return null;
 
   const peerName = peer?.nickname || peer?.username || "Unknown";
@@ -131,7 +146,9 @@ export default function CallOverlay({ user }) {
 
   const trustWarning =
     trust?.status === TRUST.DEVICES_ADDED
-      ? "A new device was added for this contact. Verify before sharing anything sensitive."
+      ? trust.verified
+        ? "This contact's safety number changed: a new device was added. Check it before you trust this call."
+        : "A new device was added for this contact. Verify before sharing anything sensitive."
       : trust?.status === TRUST.NEW
         ? "First secure call with this contact. Once connected, compare the emoji code at the top with theirs."
         : "";
@@ -183,9 +200,11 @@ export default function CallOverlay({ user }) {
     <>
       {sink}
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-label={`${statusText} with ${peerName}`}
-        className="fixed inset-0 z-[340] flex flex-col overflow-hidden bg-slate-950 text-slate-50 md:inset-auto md:bottom-6 md:right-6 md:h-[560px] md:w-[360px] md:rounded-3xl md:border md:border-emerald-500/30 md:shadow-2xl md:shadow-emerald-500/20"
+        className="fixed inset-0 z-[340] flex flex-col overflow-hidden bg-slate-950 text-slate-50 outline-none md:inset-auto md:bottom-6 md:right-6 md:h-[560px] md:w-[360px] md:rounded-3xl md:border md:border-emerald-500/30 md:shadow-2xl md:shadow-emerald-500/20"
       >
         {showRemoteVideo ? (
           <video
@@ -226,7 +245,16 @@ export default function CallOverlay({ user }) {
         {trustWarning ? (
           <p className="relative z-10 mx-4 mt-3 flex items-start gap-2 rounded-xl border border-amber-400/40 bg-amber-500/15 px-3 py-2 text-xs text-amber-100">
             <ShieldOff size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
-            {trustWarning}
+            <span className="min-w-0 flex-1">{trustWarning}</span>
+            {trust?.status === TRUST.DEVICES_ADDED ? (
+              <button
+                type="button"
+                onClick={() => setSafetyOpen(true)}
+                className="shrink-0 rounded-full border border-amber-300/60 px-2 py-0.5 font-semibold hover:bg-amber-400/20"
+              >
+                Review
+              </button>
+            ) : null}
           </p>
         ) : null}
 
@@ -243,7 +271,12 @@ export default function CallOverlay({ user }) {
           <h2 className={`max-w-full truncate text-2xl font-semibold ${fa}`} dir="auto">
             {peerName}
           </h2>
-          <p className="text-sm tabular-nums text-slate-300" aria-live="polite">
+          {/* Status changes are announced; the running clock is not (it would
+              interrupt the call audio for screen-reader users every second). */}
+          <p
+            className="text-sm tabular-nums text-slate-300"
+            {...(connected ? { role: "timer", "aria-live": "off" } : { "aria-live": "polite" })}
+          >
             {statusText}
           </p>
           {connected && remoteMuted ? (
@@ -279,7 +312,7 @@ export default function CallOverlay({ user }) {
               <RoundButton label="Decline call" danger onClick={decline}>
                 <PhoneOff size={22} />
               </RoundButton>
-              <RoundButton label="Accept call" accept autoFocus onClick={accept}>
+              <RoundButton label="Accept call" accept onClick={accept}>
                 {kind === "video" ? <Video size={22} /> : <Phone size={22} />}
               </RoundButton>
             </>
@@ -308,6 +341,7 @@ export default function CallOverlay({ user }) {
       <SafetyNumberModal
         open={safetyOpen}
         onClose={() => setSafetyOpen(false)}
+        chatId={state.chatId}
         selfUser={user}
         peer={peer ? { userId: peer.userId, username: peer.username, nickname: peer.nickname } : null}
         sas={sas}

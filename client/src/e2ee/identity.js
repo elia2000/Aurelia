@@ -43,12 +43,22 @@ export async function loadOrCreateIdentity({ userId, api, store = getSharedKeySt
   const ecdhPublic = toB64u(await exportPublicRaw(record.keys.ecdh.publicKey));
   const ecdsaPublic = toB64u(await exportPublicRaw(record.keys.ecdsa.publicKey));
 
-  const { device } = await api.registerDevice({
-    deviceId: record.deviceId || undefined,
-    ecdhPublic,
-    ecdsaPublic,
-    label: label || describeThisDevice(),
-  });
+  let device;
+  try {
+    ({ device } = await api.registerDevice({
+      deviceId: record.deviceId || undefined,
+      ecdhPublic,
+      ecdsaPublic,
+      label: label || describeThisDevice(),
+    }));
+  } catch (error) {
+    // Re-confirming a device the server already knows only refreshes its
+    // "last seen" time. If that request fails (offline, throttled) the device
+    // is still perfectly usable, so do not take calls and video messages down
+    // with it. A device that was never registered has nothing to fall back on.
+    if (!record.deviceId) throw error;
+    device = { id: record.deviceId };
+  }
   if (device.id !== record.deviceId) {
     record = { ...record, deviceId: device.id };
     await store.putIdentity(userId, record);

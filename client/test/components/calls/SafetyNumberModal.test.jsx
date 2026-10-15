@@ -4,7 +4,7 @@ import { page } from "vitest/browser";
 
 const services = vi.hoisted(() => ({
   api: { listMyDevices: vi.fn() },
-  directory: { getUserDevices: vi.fn() },
+  directory: { getUserDevices: vi.fn(), invalidate: vi.fn(), acknowledge: vi.fn() },
   trust: { isVerified: vi.fn(), setVerified: vi.fn() },
 }));
 vi.mock("../../../src/e2ee/services.js", () => ({ getE2eeServices: () => services }));
@@ -18,7 +18,9 @@ const peer = { userId: "u-bob", username: "bob", nickname: "Bob" };
 
 beforeEach(() => {
   services.api.listMyDevices.mockReset().mockResolvedValue({ devices: [device(1)] });
-  services.directory.getUserDevices.mockReset().mockResolvedValue({ devices: [device(2)] });
+  services.directory.getUserDevices.mockReset().mockResolvedValue({ devices: [device(2)], assessment: { status: "ok", added: [], verified: false } });
+  services.directory.invalidate.mockReset();
+  services.directory.acknowledge.mockReset().mockResolvedValue();
   services.trust.isVerified.mockReset().mockResolvedValue(false);
   services.trust.setVerified.mockReset().mockResolvedValue();
 });
@@ -38,13 +40,45 @@ describe("SafetyNumberModal", () => {
     render(<SafetyNumberModal open onClose={() => {}} selfUser={self} peer={peer} />);
     await page.getByRole("button", { name: "Mark as verified" }).click();
     expect(services.trust.setVerified).toHaveBeenCalledTimes(1);
-    const [userId, digits, flag] = services.trust.setVerified.mock.calls[0];
+    const [userId, digits, flag, accepted] = services.trust.setVerified.mock.calls[0];
     expect(userId).toBe("u-bob");
     expect(digits).toMatch(/^\d{60}$/);
     expect(flag).toBe(true);
+    // Verifying a number also accepts the devices it was computed from.
+    expect(accepted.map((d) => d.id)).toEqual(["d2"]);
     await expect.element(page.getByText("You verified this number.")).toBeInTheDocument();
     await page.getByRole("button", { name: "Remove verification" }).click();
     expect(services.trust.setVerified.mock.calls[1][2]).toBe(false);
+  });
+
+  test("a new device is called out and can be accepted when the contact was never verified", async () => {
+    services.directory.getUserDevices.mockResolvedValue({
+      devices: [device(2), { ...device(3), pending: true }],
+      assessment: { status: "devices_added", added: ["d3"], verified: false },
+    });
+    render(<SafetyNumberModal open onClose={() => {}} selfUser={self} peer={peer} />);
+    await expect.element(page.getByText(/has a new device that you have not seen before/)).toBeInTheDocument();
+    await page.getByRole("button", { name: "Accept new devices" }).click();
+    expect(services.directory.acknowledge).toHaveBeenCalledTimes(1);
+    expect(services.directory.acknowledge.mock.calls[0][0]).toBe("u-bob");
+    expect(services.directory.acknowledge.mock.calls[0][1].map((d) => d.id)).toEqual(["d2", "d3"]);
+  });
+
+  test("for a contact you verified, a new device means comparing the new number: there is no quick accept", async () => {
+    services.directory.getUserDevices.mockResolvedValue({
+      devices: [device(2), { ...device(3), pending: true }],
+      assessment: { status: "devices_added", added: ["d3"], verified: true },
+    });
+    render(<SafetyNumberModal open onClose={() => {}} selfUser={self} peer={peer} />);
+    await expect.element(page.getByText(/safety number changed because a new device was added/)).toBeInTheDocument();
+    await expect.element(page.getByRole("button", { name: "Accept new devices" })).not.toBeInTheDocument();
+    await expect.element(page.getByRole("button", { name: "Mark as verified" })).toBeInTheDocument();
+  });
+
+  test("the lookup names the shared chat so group members can be checked too", async () => {
+    render(<SafetyNumberModal open onClose={() => {}} selfUser={self} peer={peer} chatId="group-1" />);
+    await expect.element(page.getByLabelText("Safety number")).toBeInTheDocument();
+    expect(services.directory.getUserDevices).toHaveBeenCalledWith("u-bob", { force: true, chatId: "group-1" });
   });
 
   test("an already verified number is shown as verified", async () => {

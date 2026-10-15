@@ -21,7 +21,8 @@ const ERROR_TEXT = {
   permission: "Camera or microphone access was blocked. Allow it in your browser settings to record.",
   no_device: "No camera or microphone was found.",
   unsupported: "Video recording is not supported in this browser.",
-  too_short: "That was too short. Hold the button a little longer.",
+  too_short: "That was too short. Tap record, speak, then tap stop.",
+  interrupted: "The camera was interrupted, so the recording stopped early. What was captured is below.",
   failed: "The camera could not be started.",
 };
 
@@ -49,6 +50,9 @@ export function useVideoNoteRecorder({ open, videoElementRef }) {
   const resultRef = useRef(null);
   const mountedRef = useRef(true);
   const phaseRef = useRef(RECORDER_PHASE.IDLE);
+  const stopReasonRef = useRef(null);
+  const posterRef = useRef(null);
+  const facingRef = useRef("user");
 
   const setPhaseBoth = useCallback((next) => {
     phaseRef.current = next;
@@ -118,34 +122,60 @@ export function useVideoNoteRecorder({ open, videoElementRef }) {
     [fail, setPhaseBoth],
   );
 
+  // Builds the clip once the MediaRecorder has stopped, whatever stopped it:
+  // the person, the length limit, the page being hidden, or the camera being
+  // taken away (another app, a phone call, an unplugged webcam).
+  const finalizeRecording = useCallback(() => {
+    const recorder = recorderRef.current;
+    if (!recorder) return;
+    recorderRef.current = null;
+    clearTimers();
+    const reason = stopReasonRef.current || "lost";
+    stopReasonRef.current = null;
+    const durationMs = Math.min(VIDEO_NOTE_MAX_MS, Math.round(performance.now() - startedAtRef.current));
+    const posterBlob = posterRef.current;
+    posterRef.current = null;
+    const mime = normalizeContainer(recorder.mimeType || chunksRef.current[0]?.type);
+    const blob = new Blob(chunksRef.current, { type: mime });
+    chunksRef.current = [];
+    stopStream(); // camera off as soon as the clip exists
+    if (!mountedRef.current) return;
+    if (durationMs < VIDEO_NOTE_MIN_MS || blob.size === 0) {
+      setElapsedMs(0);
+      if (document.hidden) {
+        // Do not switch the camera back on behind the person's back; it is
+        // reopened when the page is visible again.
+        setPhaseBoth(RECORDER_PHASE.IDLE);
+        return;
+      }
+      void openCamera(facingRef.current); // clears any message first ...
+      setError(ERROR_TEXT.too_short); // ... so this one is not wiped
+      return;
+    }
+    const next = { blob, mime, durationMs, posterBlob, previewUrl: URL.createObjectURL(blob) };
+    resultRef.current = next;
+    setResult(next);
+    setElapsedMs(durationMs);
+    setError(reason === "lost" ? ERROR_TEXT.interrupted : "");
+    setPhaseBoth(RECORDER_PHASE.REVIEW);
+  }, [clearTimers, openCamera, setPhaseBoth, stopStream]);
+
   const finishRecording = useCallback(
     async (reason) => {
       const recorder = recorderRef.current;
-      if (!recorder || recorder.state === "inactive") return;
-      const durationMs = Math.min(VIDEO_NOTE_MAX_MS, Math.round(performance.now() - startedAtRef.current));
+      if (!recorder) return;
+      stopReasonRef.current = stopReasonRef.current || reason;
       clearTimers();
-      const posterBlob = reason === "hidden" ? null : await captureVideoPoster(videoElementRef?.current);
-      recorder.onstop = () => {
-        recorderRef.current = null;
-        const mime = normalizeContainer(recorder.mimeType || chunksRef.current[0]?.type);
-        const blob = new Blob(chunksRef.current, { type: mime });
-        chunksRef.current = [];
-        stopStream(); // camera off as soon as the clip exists
-        if (!mountedRef.current) return;
-        if (durationMs < VIDEO_NOTE_MIN_MS || blob.size === 0) {
-          setElapsedMs(0);
-          setError(ERROR_TEXT.too_short);
-          return void openCamera(facing);
-        }
-        const next = { blob, mime, durationMs, posterBlob, previewUrl: URL.createObjectURL(blob) };
-        resultRef.current = next;
-        setResult(next);
-        setElapsedMs(durationMs);
-        setPhaseBoth(RECORDER_PHASE.REVIEW);
-      };
-      recorder.stop();
+      if (recorder.state === "inactive") {
+        // It stopped by itself already (its tracks ended).
+        finalizeRecording();
+        return;
+      }
+      posterRef.current =
+        reason === "hidden" ? null : await captureVideoPoster(videoElementRef?.current);
+      if (recorder.state !== "inactive") recorder.stop(); // -> onstop -> finalizeRecording
     },
-    [clearTimers, facing, openCamera, setPhaseBoth, stopStream, videoElementRef],
+    [clearTimers, finalizeRecording, videoElementRef],
   );
 
   const startRecording = useCallback(() => {
@@ -169,7 +199,25 @@ export function useVideoNoteRecorder({ open, videoElementRef }) {
       if (e.data?.size) chunksRef.current.push(e.data);
     };
     recorder.onerror = () => fail("failed");
+    recorder.onstop = () => finalizeRecording();
     recorderRef.current = recorder;
+    stopReasonRef.current = null;
+    posterRef.current = null;
+    // If the camera or microphone is taken away mid-recording the recorder
+    // stops on its own; keep what was captured instead of hanging in
+    // "recording" with a Stop button that does nothing.
+    media.getTracks().forEach((track) => {
+      track.onended = () => {
+        if (phaseRef.current !== RECORDER_PHASE.RECORDING) return;
+        stopReasonRef.current = stopReasonRef.current || "lost";
+        const active = recorderRef.current;
+        if (active && active.state !== "inactive") {
+          try {
+            active.stop();
+          } catch (_) {}
+        }
+      };
+    });
     setError("");
     setElapsedMs(0);
     startedAtRef.current = performance.now();
@@ -181,7 +229,7 @@ export function useVideoNoteRecorder({ open, videoElementRef }) {
       setElapsedMs(Math.min(VIDEO_NOTE_MAX_MS, performance.now() - startedAtRef.current));
     }, 250);
     limitRef.current = setTimeout(() => finishRecording("limit"), VIDEO_NOTE_MAX_MS);
-  }, [fail, finishRecording, setPhaseBoth]);
+  }, [fail, finalizeRecording, finishRecording, setPhaseBoth]);
 
   const stopRecording = useCallback(() => finishRecording("user"), [finishRecording]);
 
@@ -194,17 +242,19 @@ export function useVideoNoteRecorder({ open, videoElementRef }) {
   const switchCamera = useCallback(() => {
     if (phaseRef.current !== RECORDER_PHASE.PREVIEW) return;
     const next = facing === "user" ? "environment" : "user";
+    facingRef.current = next;
     setFacing(next);
     stopStream();
     openCamera(next);
   }, [facing, openCamera, stopStream]);
 
-  /** Hands the recorded file to the caller, which then owns (and revokes) its preview URL. */
-  const release = useCallback(() => {
-    const r = resultRef.current;
+  /**
+   * The clip was delivered and its preview URL now belongs to the caller (it
+   * keeps it for replaying our own message). Closing the recorder afterwards
+   * must not revoke it. The clip stays on screen until the recorder closes.
+   */
+  const handOver = useCallback(() => {
     resultRef.current = null;
-    setResult(null);
-    return r;
   }, []);
 
   const reset = useCallback(() => {
@@ -217,6 +267,8 @@ export function useVideoNoteRecorder({ open, videoElementRef }) {
       }
     } catch (_) {}
     recorderRef.current = null;
+    stopReasonRef.current = null;
+    posterRef.current = null;
     chunksRef.current = [];
     stopStream();
     revokeResult();
@@ -266,7 +318,7 @@ export function useVideoNoteRecorder({ open, videoElementRef }) {
     stopRecording,
     retake,
     switchCamera,
-    release,
+    handOver,
     reset,
   };
 }

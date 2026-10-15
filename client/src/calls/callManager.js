@@ -15,8 +15,10 @@ import {
   deriveCallSession,
   openSignal,
   sealSignal,
+  INVITE_MAX_AGE_MS,
   verifyAccept,
   verifyInvite,
+  verifyReveal,
 } from "./callCrypto.js";
 import {
   CAPTURE_CONSTRAINTS,
@@ -75,6 +77,8 @@ const idleState = () => ({
 const FAILURE_REASONS = new Set([
   "failed",
   "handshake_failed",
+  "clock_skew",
+  "relay_unavailable",
   "key_mismatch",
   "permission_denied",
   "no_device",
@@ -152,7 +156,11 @@ export class CallManager {
 
   // ── outgoing ─────────────────────────────────────────────────────────────
   async startCall({ chatId, peer, kind = "audio" }) {
-    if (this.#call) throw new Error("A call is already in progress.");
+    if (this.#call) {
+      // The "call ended" card lingers for a moment; a new call replaces it.
+      if (this.#state.phase !== CALL_PHASE.ENDED) throw new Error("A call is already in progress.");
+      this.#silentReset(this.#call);
+    }
     const call = this.#begin({
       id: randomUuid(),
       kind: kind === "video" ? "video" : "audio",
@@ -163,21 +171,20 @@ export class CallManager {
     this.#set({ phase: CALL_PHASE.OUTGOING, ringing: false, trust: null });
 
     try {
-      const [identity, localStream, iceConfig] = await Promise.all([
+      // The microphone/camera stream is attached to the call the moment it
+      // arrives (see #acquireForCall), so it is released with the call even if
+      // the permission prompt is answered after something else already failed.
+      const [identity, , iceConfig] = await Promise.all([
         this.#opts.getIdentity(),
-        this.#acquireMedia(call.kind),
+        this.#acquireForCall(call),
         this.#api.fetchIceConfig(),
       ]);
-      if (this.#isStale(call)) {
-        this.#stopStream(localStream);
-        return;
-      }
+      if (this.#isStale(call)) return;
       call.identity = identity;
       call.iceConfig = iceConfig;
-      this.#attachLocalStream(call, localStream);
 
       // Fetching the callee's keys also runs the trust-on-first-use check.
-      const peerKeys = await this.#opts.directory.getUserDevices(peer.userId);
+      const peerKeys = await this.#opts.directory.getUserDevices(peer.userId, { chatId });
       if (this.#isStale(call)) return;
       this.#set({ trust: peerKeys.assessment });
 
@@ -187,6 +194,7 @@ export class CallManager {
         kind: call.kind,
         identity,
       });
+      if (this.#isStale(call)) return;
       call.ephemeral = ephemeral;
       call.invite = invite;
       await this.#api.startCall({
@@ -195,48 +203,84 @@ export class CallManager {
         kind: call.kind,
         invite,
       });
-      if (this.#isStale(call)) return;
+      if (this.#isStale(call)) {
+        // Hung up while the request was in flight: it may have reached the
+        // server after (or without) our cancel, so cancel again now that the
+        // call is known there.
+        this.#api.endCall(call.id).catch(() => {});
+        return;
+      }
+      call.posted = true;
+      call.deferredInvite = null; // we won; the server turned the other call away
       this.#set({ ringing: true });
       call.ringTimer = setTimeout(() => this.#finish(call, "no_answer", { notifyServer: true }), RING_TIMEOUT_MS);
     } catch (error) {
+      const deferred = call.deferredInvite;
       this.#failStart(call, error);
+      // Both people called each other at the same moment and the other call
+      // won: ring for it instead of leaving the caller with nobody to answer.
+      if (deferred) this.#onInvite(deferred);
     }
   }
 
   async #onAccept(event) {
     const call = this.#call;
     if (!call || call.id !== event.callId || call.direction !== "outgoing") return;
-    if (this.#state.phase !== CALL_PHASE.OUTGOING || call.session) return;
+    if (this.#state.phase !== CALL_PHASE.OUTGOING || call.session || !call.ephemeral) return;
     clearTimeout(call.ringTimer);
 
     try {
       const accept = event.accept;
-      const calleeDevice = await this.#opts.directory.findDevice(call.peer.userId, accept.deviceId);
+      const directory = this.#opts.directory;
+      const calleeDevice = await directory.findDevice(call.peer.userId, accept.deviceId, {
+        chatId: call.chatId,
+      });
       const ok = await verifyAccept({
         accept,
         callId: call.id,
-        ephCaller: call.invite.eph,
+        invite: call.invite,
+        callerUserId: this.#opts.selfUser.id,
         calleeUserId: call.peer.userId,
+        kind: call.kind,
         calleeDevice,
       });
       if (!ok) throw new HandshakeError("The answer could not be verified.");
       if (this.#isStale(call)) return;
 
-      call.calleeDeviceId = accept.deviceId;
-      call.session = await deriveCallSession({
+      // The answering device is one this device has never acknowledged. For a
+      // person you verified that stops the call; for everybody else it is shown.
+      if (calleeDevice.pending) {
+        const { assessment } = await directory.getUserDevices(call.peer.userId, { chatId: call.chatId });
+        if (this.#isStale(call)) return;
+        if (assessment.verified) throw new KeyMismatchError(call.peer.userId, [calleeDevice.id]);
+        this.#set({ trust: assessment });
+      }
+
+      const revealEph = call.ephemeral.pub;
+      const session = await deriveCallSession({
         ephemeralPrivateKey: call.ephemeral.privateKey,
         peerEph: accept.eph,
         callId: call.id,
-        ephCaller: call.invite.eph,
+        callerUserId: this.#opts.selfUser.id,
+        callerDeviceId: call.identity.deviceId,
+        calleeUserId: call.peer.userId,
+        calleeDeviceId: accept.deviceId,
+        kind: call.kind,
+        commit: call.invite.commit,
+        ephCaller: revealEph,
         ephCallee: accept.eph,
         role: "caller",
       });
+      if (this.#isStale(call)) return;
+      call.calleeDeviceId = accept.deviceId;
+      call.session = session;
       call.ephemeral = null; // forward secrecy: the private half is dropped
-      this.#set({ phase: CALL_PHASE.CONNECTING, ringing: false, sas: sasEmoji(call.session.sasBytes) });
+      this.#set({ phase: CALL_PHASE.CONNECTING, ringing: false, sas: sasEmoji(session.sasBytes) });
       this.#armConnectWatchdog(call);
 
       this.#buildPeerConnection(call);
-      await this.#negotiate(call, { iceRestart: false });
+      // The first offer also reveals the key committed to in the invite.
+      await this.#negotiate(call, { iceRestart: false, reveal: revealEph });
     } catch (error) {
       this.#failActive(call, error);
     }
@@ -244,7 +288,20 @@ export class CallManager {
 
   // ── incoming ─────────────────────────────────────────────────────────────
   async #onInvite(event) {
-    if (this.#call) return; // the server already answers "busy" for us
+    const existing = this.#call;
+    if (existing) {
+      if (this.#state.phase === CALL_PHASE.ENDED) {
+        // The previous call only lingers on screen; the line is free.
+        this.#silentReset(existing);
+      } else if (existing.direction === "outgoing" && !existing.posted) {
+        // We are placing a call too and the server has not decided yet whose
+        // call stands. Remember this one: if ours loses, we ring for it.
+        existing.deferredInvite = event;
+        return;
+      } else {
+        return; // really busy: the server already answers "busy" for us
+      }
+    }
     const { callId, kind, chatId, from, invite } = event;
     if (!callId || !from?.userId || !invite) return;
 
@@ -258,8 +315,11 @@ export class CallManager {
     call.invite = invite;
     // Hidden until verified so a forged invitation never even rings.
     try {
+      if (!(Math.abs(Date.now() - Number(invite.ts)) <= INVITE_MAX_AGE_MS)) {
+        throw new HandshakeError("The invitation is too old or this device's clock is wrong.", "clock_skew");
+      }
       const identity = await this.#opts.getIdentity();
-      const callerKeys = await this.#opts.directory.getUserDevices(from.userId, { force: true });
+      const callerKeys = await this.#opts.directory.getUserDevices(from.userId, { force: true, chatId });
       const callerDevice = callerKeys.devices.find((d) => d.id === invite.deviceId) || null;
       const ok = await verifyInvite({
         invite,
@@ -271,6 +331,10 @@ export class CallManager {
       });
       if (!ok) throw new HandshakeError("The call invitation could not be verified.");
       if (this.#isStale(call)) return;
+      // A brand-new device claiming to be somebody you verified: refuse.
+      if (callerDevice.pending && callerKeys.assessment.verified) {
+        throw new KeyMismatchError(from.userId, [callerDevice.id]);
+      }
       call.identity = identity;
       this.#set({
         phase: CALL_PHASE.INCOMING,
@@ -291,38 +355,40 @@ export class CallManager {
     this.#set({ phase: CALL_PHASE.CONNECTING, ringing: false });
 
     try {
-      const [localStream, iceConfig] = await Promise.all([
-        this.#acquireMedia(call.kind),
+      const [, iceConfig] = await Promise.all([
+        this.#acquireForCall(call),
         this.#api.fetchIceConfig(),
       ]);
-      if (this.#isStale(call)) {
-        this.#stopStream(localStream);
-        return;
-      }
+      if (this.#isStale(call)) return;
       call.iceConfig = iceConfig;
-      this.#attachLocalStream(call, localStream);
 
       const { ephemeral, accept } = await createAccept({
         callId: call.id,
-        ephCaller: call.invite.eph,
+        invite: call.invite,
+        callerUserId: call.peer.userId,
+        calleeUserId: this.#opts.selfUser.id,
+        kind: call.kind,
         identity: call.identity,
       });
-      call.session = await deriveCallSession({
-        ephemeralPrivateKey: ephemeral.privateKey,
-        peerEph: call.invite.eph,
-        callId: call.id,
-        ephCaller: call.invite.eph,
-        ephCallee: accept.eph,
-        role: "callee",
-      });
-      this.#set({ sas: sasEmoji(call.session.sasBytes) });
+      if (this.#isStale(call)) return;
+      // The session keys are derived once the caller reveals the key it
+      // committed to (with its first offer); until then only this is kept.
+      call.ephemeral = ephemeral;
       // The peer connection must exist before the accept is posted: the
       // caller's offer can arrive immediately afterwards.
       this.#buildPeerConnection(call);
       this.#armConnectWatchdog(call);
+      call.acceptPosted = true;
       await this.#api.acceptCall(call.id, accept);
       this.#opts.broadcast?.postMessage({ type: "handled", callId: call.id });
     } catch (error) {
+      if (!this.#isStale(call) && (error?.code === "not_ringing" || error?.status === 409)) {
+        // Another device or tab answered first (or the caller gave up). That
+        // call is not ours to end: telling the server "failed" would tear down
+        // the call the winner just connected.
+        this.#silentReset(call);
+        return;
+      }
       this.#failActive(call, error);
     }
   }
@@ -345,8 +411,17 @@ export class CallManager {
   hangupOnUnload(beacon) {
     const call = this.#call;
     if (!call || this.#state.phase === CALL_PHASE.IDLE || this.#state.phase === CALL_PHASE.ENDED) return;
-    beacon?.(call.id);
-    this.#finish(call, "local_hangup", { notifyServer: false });
+    // Only a call this tab is committed to is ended for everybody. A call that
+    // is merely ringing here (reload, closing the tab, tapping a notification)
+    // must keep ringing on the person's other devices and be picked up again
+    // by the next page load, so it is dropped locally without telling the server.
+    const committed = call.direction === "outgoing" || call.acceptPosted;
+    if (committed) {
+      beacon?.(call.id);
+      this.#finish(call, "local_hangup", { notifyServer: false });
+    } else {
+      this.#silentReset(call);
+    }
   }
 
   // ── realtime events ──────────────────────────────────────────────────────
@@ -376,7 +451,13 @@ export class CallManager {
 
   #onAcceptedElsewhere(event) {
     const call = this.#call;
-    if (call?.id === event.callId && this.#state.phase === CALL_PHASE.INCOMING) {
+    if (!call || call.id !== event.callId || call.direction !== "incoming") return;
+    // That was this very device answering.
+    if (event.deviceId && event.deviceId === call.identity?.deviceId) return;
+    const phase = this.#state.phase;
+    // Also while still waiting for the microphone permission prompt after
+    // pressing Accept: the other device won, we have not asked the server yet.
+    if (phase === CALL_PHASE.INCOMING || (phase === CALL_PHASE.CONNECTING && !call.acceptPosted)) {
       this.#silentReset(call);
     }
   }
@@ -403,8 +484,66 @@ export class CallManager {
   }
 
   async #onSignal(call, event) {
-    if (this.#isStale(call) || !call.session) return;
+    if (this.#isStale(call)) return;
     if (event.toDeviceId && event.toDeviceId !== call.identity.deviceId) return;
+    const { kind } = event;
+
+    if (!call.session) {
+      // The callee derives its keys when the caller reveals the key it
+      // committed to, which comes with the first offer. Nothing before that
+      // can be decrypted yet, so hold it back (bounded) until then.
+      if (call.direction !== "incoming" || !call.ephemeral) return;
+      if (kind !== "offer" || !event.eph) {
+        if (call.deferredSignals.length < 32) call.deferredSignals.push(event);
+        return;
+      }
+      const genuine = await verifyReveal({
+        callId: call.id,
+        commit: call.invite.commit,
+        eph: event.eph,
+      });
+      if (this.#isStale(call)) return;
+      if (!genuine) {
+        this.#failActive(call, new HandshakeError("The caller's key does not match what it committed to."));
+        return;
+      }
+      let session;
+      try {
+        session = await deriveCallSession({
+          ephemeralPrivateKey: call.ephemeral.privateKey,
+          peerEph: event.eph,
+          callId: call.id,
+          callerUserId: call.peer.userId,
+          callerDeviceId: call.invite.deviceId,
+          calleeUserId: this.#opts.selfUser.id,
+          calleeDeviceId: call.identity.deviceId,
+          kind: call.kind,
+          commit: call.invite.commit,
+          ephCaller: event.eph,
+          ephCallee: call.ephemeral.pub,
+          role: "callee",
+        });
+      } catch (error) {
+        this.#failActive(call, new HandshakeError(String(error?.message || "Key agreement failed.")));
+        return;
+      }
+      if (this.#isStale(call)) return;
+      call.session = session;
+      call.ephemeral = null; // forward secrecy: the private half is dropped
+      this.#set({ sas: sasEmoji(session.sasBytes) });
+      const waiting = call.deferredSignals.splice(0);
+      await this.#handleSignal(call, event);
+      for (const held of waiting) {
+        if (this.#isStale(call)) return;
+        await this.#handleSignal(call, held);
+      }
+      return;
+    }
+    await this.#handleSignal(call, event);
+  }
+
+  async #handleSignal(call, event) {
+    if (this.#isStale(call) || !call.session) return;
     const { kind, seq } = event;
     if (!(seq > (call.recvSeq[kind] ?? -1))) return; // replayed or reordered
 
@@ -452,10 +591,10 @@ export class CallManager {
     }
   }
 
-  async #sendSignal(call, kind, payload) {
+  async #sendSignal(call, kind, payload, extra = {}) {
     const seq = (call.sendSeq[kind] = (call.sendSeq[kind] ?? 0) + 1);
     const blob = await sealSignal(call.session, { kind, seq, payload });
-    await this.#api.sendCallSignal(call.id, { kind, blob, seq });
+    await this.#api.sendCallSignal(call.id, { kind, blob, seq, ...extra });
   }
 
   // ── peer connection ──────────────────────────────────────────────────────
@@ -532,17 +671,24 @@ export class CallManager {
     }
   }
 
-  async #negotiate(call, { iceRestart }) {
+  async #negotiate(call, { iceRestart, reveal = null }) {
     const offer = await call.pc.createOffer(iceRestart ? { iceRestart: true } : undefined);
+    if (this.#isStale(call)) return;
     const sdp = tuneOpusSdp(offer.sdp);
     await call.pc.setLocalDescription({ type: "offer", sdp });
-    await this.#sendSignal(call, "offer", { type: "offer", sdp });
+    await this.#sendSignal(call, "offer", { type: "offer", sdp }, reveal ? { eph: reveal } : {});
+    if (this.#isStale(call)) return;
+    // Candidates are held back until the offer (which carries the key reveal
+    // the callee needs before it can read anything else) has been delivered.
+    call.offerPosted = true;
+    this.#flushIce(call);
   }
 
   async #flushIce(call) {
     clearTimeout(call.iceTimer);
     call.iceTimer = null;
     if (!call.iceBatch.length || this.#isStale(call) || !call.session) return;
+    if (call.direction === "outgoing" && !call.offerPosted) return;
     const candidates = call.iceBatch.splice(0);
     try {
       await this.#sendSignal(call, "ice", { candidates });
@@ -621,14 +767,35 @@ export class CallManager {
     }
   }
 
+  /**
+   * Asks for the microphone/camera and hands the stream to `call` the moment it
+   * arrives. The permission prompt can stay open while something else (ICE
+   * config, device registration) fails and ends the call; attaching on arrival
+   * means the call's teardown stops the stream, and a stream that arrives after
+   * the call is gone is stopped here, so nothing keeps recording.
+   */
+  #acquireForCall(call) {
+    return this.#acquireMedia(call.kind).then((stream) => {
+      if (this.#isStale(call)) {
+        this.#stopStream(stream);
+        return null;
+      }
+      this.#attachLocalStream(call, stream);
+      return stream;
+    });
+  }
+
   #attachLocalStream(call, stream) {
     call.localStream = stream;
-    call.videoSuppressed = { user: false, hidden: false, network: false };
+    // A video call that rings while the page is hidden must not turn the
+    // camera on for the person who is not even looking.
+    call.videoSuppressed = { user: false, hidden: Boolean(call.pageHidden), network: false };
     this.#set({
       localStream: stream,
       cameraOn: stream.getVideoTracks().length > 0,
       muted: false,
     });
+    if (call.kind === "video" && call.pageHidden) this.#reconcileCamera(call);
   }
 
   #stopStream(stream) {
@@ -667,21 +834,34 @@ export class CallManager {
     return this.#reconcileCamera(call);
   }
 
-  async #reconcileCamera(call) {
-    if (this.#isStale(call) || call.kind !== "video") return;
+  // Camera changes run one at a time, and each one re-reads what is wanted
+  // after every await: hiding the page, toggling the camera or ending the call
+  // while a camera is still starting must win over the request that started it.
+  #reconcileCamera(call) {
+    call.cameraChain = (call.cameraChain || Promise.resolve())
+      .then(() => this.#reconcileCameraNow(call))
+      .catch(() => {});
+    return call.cameraChain;
+  }
+
+  async #reconcileCameraNow(call) {
+    if (this.#isStale(call) || call.kind !== "video" || !call.localStream) return;
     const s = call.videoSuppressed;
-    const wanted = !s.user && !s.hidden && !s.network;
+    const wanted = () => !s.user && !s.hidden && !s.network;
     const stream = call.localStream;
     const current = stream.getVideoTracks()[0] || null;
     try {
-      if (wanted && !current) {
+      if (wanted() && !current) {
         const fresh = await this.#opts.getUserMedia({ audio: false, video: CAPTURE_CONSTRAINTS.video });
-        if (this.#isStale(call)) return this.#stopStream(fresh);
-        const track = fresh.getVideoTracks()[0];
-        stream.addTrack(track);
-        if (call.videoSender) await call.videoSender.replaceTrack(track);
-        await this.#applyVideoTier(call);
-      } else if (!wanted && current) {
+        if (this.#isStale(call) || !wanted()) {
+          this.#stopStream(fresh);
+        } else {
+          const track = fresh.getVideoTracks()[0];
+          stream.addTrack(track);
+          if (call.videoSender) await call.videoSender.replaceTrack(track);
+          await this.#applyVideoTier(call);
+        }
+      } else if (!wanted() && current) {
         stream.removeTrack(current);
         if (call.videoSender) await call.videoSender.replaceTrack(null);
         current.stop(); // releases the camera: LED off, no capture power draw
@@ -689,6 +869,7 @@ export class CallManager {
     } catch (_) {
       // Leave the camera as it is if it cannot be (re)started.
     }
+    if (this.#isStale(call)) return;
     this.#set({
       cameraOn: stream.getVideoTracks().length > 0,
       networkPaused: s.network,
@@ -758,18 +939,31 @@ export class CallManager {
     }, STATS_INTERVAL_MS);
   }
 
+  #wakeLockNeeded(call) {
+    return call.kind === "video" && this.#state.phase === CALL_PHASE.CONNECTED && !call.pageHidden && !this.#isStale(call);
+  }
+
   async #syncWakeLock(call) {
-    const needed = call.kind === "video" && this.#state.phase === CALL_PHASE.CONNECTED && !call.pageHidden;
-    if (!needed) {
+    if (!this.#wakeLockNeeded(call)) {
       call.wakeLock?.release?.().catch?.(() => {});
       call.wakeLock = null;
       return;
     }
-    if (call.wakeLock) return;
+    if (call.wakeLock || call.wakeLockPending) return;
+    call.wakeLockPending = true;
     try {
-      call.wakeLock = await this.#opts.requestWakeLock();
+      const lock = await this.#opts.requestWakeLock();
+      if (this.#wakeLockNeeded(call)) {
+        call.wakeLock = lock;
+      } else {
+        // Hung up (or hidden) while the request was pending: do not keep the
+        // screen awake for a call that no longer exists.
+        lock?.release?.().catch?.(() => {});
+      }
     } catch (_) {
       call.wakeLock = null;
+    } finally {
+      call.wakeLockPending = false;
     }
   }
 
@@ -801,6 +995,13 @@ export class CallManager {
       authFailures: 0,
       pendingRemoteIce: [],
       iceBatch: [],
+      deferredSignals: [],
+      deferredInvite: null,
+      cameraChain: null,
+      posted: false,
+      acceptPosted: false,
+      offerPosted: false,
+      wakeLockPending: false,
       restarts: 0,
       pageHidden: false,
       done: false,
@@ -889,8 +1090,10 @@ export class CallManager {
     let reason = "failed";
     if (error instanceof MediaError) reason = error.code;
     else if (error instanceof KeyMismatchError) reason = "key_mismatch";
-    else if (error instanceof HandshakeError) reason = "handshake_failed";
-    else if (error?.code === "busy" || error?.code === "busy_self") reason = "busy";
+    else if (error instanceof HandshakeError) reason = error.reason;
+    else if (error?.code === "busy") reason = "busy";
+    else if (error?.code === "busy_self") reason = "busy_self";
+    else if (error?.code === "relay_unavailable") reason = "relay_unavailable";
     else if (error?.name === "E2eeUnavailableError") reason = "e2ee_unavailable";
     else if (error?.status === 403 || error?.status === 404) reason = "failed";
     this.#finish(call, reason, { notifyServer });
@@ -924,8 +1127,9 @@ class MediaError extends Error {
 }
 
 class HandshakeError extends Error {
-  constructor(message) {
+  constructor(message, reason = "handshake_failed") {
     super(message);
     this.name = "HandshakeError";
+    this.reason = reason;
   }
 }

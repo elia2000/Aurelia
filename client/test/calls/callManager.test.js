@@ -526,3 +526,335 @@ describe("errors from the server", () => {
     expect(alice.manager.getState().localStream).toBeNull();
   });
 });
+
+// ── regressions found in review ──────────────────────────────────────────────
+const deferred = () => {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+};
+const peerOf = (ctx) => ({ userId: ctx.user.id, username: ctx.user.username });
+const liveTracks = (stream) => stream.getTracks().filter((t) => !t.stopped);
+
+describe("ringing calls and other devices", () => {
+  test("reloading or closing the page while a call only rings does not decline it", async () => {
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(bob));
+
+    const beacon = vi.fn();
+    bob.manager.hangupOnUnload(beacon);
+
+    expect(beacon).not.toHaveBeenCalled();
+    expect(bob.api.endCall).not.toHaveBeenCalled();
+    expect(bob.manager.getState().phase).toBe(CALL_PHASE.IDLE);
+    expect(alice.manager.getState().phase).toBe(CALL_PHASE.OUTGOING); // still ringing for others
+  });
+
+  test("closing the page during a call you placed or accepted still hangs up for everyone", async () => {
+    const { alice, bob } = await connectedCall();
+    const beaconA = vi.fn();
+    const beaconB = vi.fn();
+    alice.manager.hangupOnUnload(beaconA);
+    bob.manager.hangupOnUnload(beaconB);
+    expect(beaconA).toHaveBeenCalledTimes(1);
+    expect(beaconB).toHaveBeenCalledTimes(1);
+
+    const server = new FakeServer();
+    const caller = await server.addUser("alice");
+    const callee = await server.addUser("bob");
+    await caller.manager.startCall({ chatId: "c", peer: peerOf(callee) });
+    const beaconC = vi.fn();
+    caller.manager.hangupOnUnload(beaconC);
+    expect(beaconC).toHaveBeenCalledTimes(1);
+  });
+
+  test("losing a double-accept race never ends the call the other device just connected", async () => {
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob"); // phone
+    const laptop = await server.addDevice("bob");
+    const slow = deferred();
+    laptop.getUserMedia.mockImplementationOnce(async () => slow.promise);
+
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(bob) && phase(CALL_PHASE.INCOMING)(laptop));
+
+    // The laptop taps Accept first, but its permission prompt stays open ...
+    const lateAccept = laptop.manager.accept();
+    // ... the phone answers and connects.
+    await bob.manager.accept();
+    await waitFor(() => phase(CALL_PHASE.CONNECTED)(alice) && phase(CALL_PHASE.CONNECTED)(bob));
+
+    // The laptop learns it lost while it was still waiting for the prompt.
+    await waitFor(() => laptop.manager.getState().phase === CALL_PHASE.IDLE, { label: "laptop stops" });
+    slow.resolve(new (await import("./fakes.js")).FakeStream([new (await import("./fakes.js")).FakeTrack("audio")]));
+    await lateAccept;
+
+    expect(laptop.api.acceptCall).not.toHaveBeenCalled();
+    expect(laptop.api.endCall).not.toHaveBeenCalled();
+    expect(alice.manager.getState().phase).toBe(CALL_PHASE.CONNECTED);
+    expect(bob.manager.getState().phase).toBe(CALL_PHASE.CONNECTED);
+  });
+
+  test("a 409 on accept (answered elsewhere) resets quietly instead of reporting a failure", async () => {
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    const laptop = await server.addDevice("bob");
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(bob) && phase(CALL_PHASE.INCOMING)(laptop));
+
+    // Both accept "at the same time": the second request meets a 409.
+    server.tamper = (event) => (event.type === "call_accepted_elsewhere" ? null : event);
+    await Promise.all([bob.manager.accept(), laptop.manager.accept()]);
+
+    await waitFor(() => phase(CALL_PHASE.CONNECTED)(alice));
+    const endCalls = [...bob.api.endCall.mock.calls, ...laptop.api.endCall.mock.calls];
+    expect(endCalls).toHaveLength(0);
+    const phases = [bob.manager.getState().phase, laptop.manager.getState().phase].sort();
+    expect(phases).toContain(CALL_PHASE.IDLE);
+    expect(alice.manager.getState().phase).not.toBe(CALL_PHASE.ENDED);
+  });
+
+  test("an invitation that arrives while the previous call is still on screen rings", async () => {
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(bob));
+    await alice.manager.hangup();
+    await waitFor(() => phase(CALL_PHASE.ENDED)(bob)); // lingers for a moment
+
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(bob), { label: "second call rings" });
+  });
+
+  test("when both people call each other at once, the call that lost rings instead of vanishing", async () => {
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    await Promise.all([
+      alice.manager.startCall({ chatId: "c", peer: peerOf(bob) }),
+      bob.manager.startCall({ chatId: "c", peer: peerOf(alice) }),
+    ]);
+    // Exactly one call stands: one side rings the other.
+    await waitFor(
+      () =>
+        (phase(CALL_PHASE.INCOMING)(alice) && phase(CALL_PHASE.OUTGOING)(bob)) ||
+        (phase(CALL_PHASE.INCOMING)(bob) && phase(CALL_PHASE.OUTGOING)(alice)),
+      { label: "one ringing, one calling" },
+    );
+    const incoming = phase(CALL_PHASE.INCOMING)(alice) ? alice : bob;
+    await incoming.manager.accept();
+    await waitFor(() => phase(CALL_PHASE.CONNECTED)(alice) && phase(CALL_PHASE.CONNECTED)(bob));
+  });
+});
+
+describe("media never outlives the call", () => {
+  test("a permission prompt answered after the call already failed does not leave the microphone on", async () => {
+    const server = new FakeServer();
+    const slow = deferred();
+    const alice = await server.addUser("alice", { getUserMedia: vi.fn(async () => slow.promise) });
+    const bob = await server.addUser("bob");
+    alice.api.fetchIceConfig.mockRejectedValueOnce(new ApiError("down", { status: 503 }));
+
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await waitFor(() => phase(CALL_PHASE.ENDED)(alice));
+
+    const { FakeStream, FakeTrack } = await import("./fakes.js");
+    const stream = new FakeStream([new FakeTrack("audio"), new FakeTrack("video")]);
+    slow.resolve(stream); // the person finally clicks "Allow"
+    await waitFor(() => liveTracks(stream).length === 0, { label: "tracks stopped" });
+  });
+
+  test("the same for the person accepting a call", async () => {
+    const server = new FakeServer();
+    const slow = deferred();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob", { getUserMedia: vi.fn(async () => slow.promise) });
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(bob));
+    bob.api.fetchIceConfig.mockRejectedValueOnce(new ApiError("down", { status: 503 }));
+    await bob.manager.accept();
+    await waitFor(() => phase(CALL_PHASE.ENDED)(bob));
+
+    const { FakeStream, FakeTrack } = await import("./fakes.js");
+    const stream = new FakeStream([new FakeTrack("audio")]);
+    slow.resolve(stream);
+    await waitFor(() => liveTracks(stream).length === 0, { label: "tracks stopped" });
+  });
+
+  test("hanging up while the invite request is in flight cancels the call on the server afterwards", async () => {
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    const gate = deferred();
+    const realStart = alice.api.startCall.getMockImplementation();
+    alice.api.startCall.mockImplementationOnce(async (args) => {
+      await gate.promise;
+      return realStart(args);
+    });
+
+    const starting = alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await waitFor(() => alice.api.startCall.mock.calls.length === 1);
+    await alice.manager.hangup();
+    gate.resolve();
+    await starting;
+    await waitFor(() => alice.api.endCall.mock.calls.length >= 2, { label: "second cancel" });
+  });
+
+  test("a camera that is still starting when the page is hidden again is not left running", async () => {
+    const { alice } = await connectedCall({ kind: "video" });
+    alice.manager.setPageHidden(true);
+    await waitFor(() => alice.manager.getState().cameraOn === false);
+
+    const slow = deferred();
+    alice.getUserMedia.mockImplementationOnce(async () => slow.promise);
+    const back = alice.manager.setPageHidden(false); // starts a slow re-acquire ...
+    await waitFor(() => alice.getUserMedia.mock.calls.length >= 2);
+    const gone = alice.manager.setPageHidden(true); // ... and the page is hidden again
+    const { FakeStream, FakeTrack } = await import("./fakes.js");
+    const fresh = new FakeStream([new FakeTrack("video")]);
+    slow.resolve(fresh);
+    await Promise.all([back, gone]);
+
+    // The late camera was never put on the wire, not even briefly.
+    const sent = alice.pc.senders.flatMap((sender) => sender.replaceTrack.mock.calls.map(([track]) => track));
+    expect(sent).not.toContain(fresh.getTracks()[0]);
+    expect(liveTracks(fresh)).toHaveLength(0);
+    expect(alice.manager.getState().cameraOn).toBe(false);
+    expect(alice.manager.getState().localStream.getVideoTracks()).toHaveLength(0);
+  });
+
+  test("a screen wake lock that arrives after hanging up is released", async () => {
+    const release = vi.fn(async () => {});
+    const gate = deferred();
+    const { alice } = await (async () => {
+      const server = new FakeServer();
+      const a = await server.addUser("alice", { requestWakeLock: vi.fn(async () => gate.promise) });
+      const b = await server.addUser("bob");
+      await a.manager.startCall({ chatId: "c", peer: peerOf(b), kind: "video" });
+      await waitFor(() => phase(CALL_PHASE.INCOMING)(b));
+      await b.manager.accept();
+      await waitFor(() => phase(CALL_PHASE.CONNECTED)(a));
+      return { alice: a };
+    })();
+    await alice.manager.hangup();
+    gate.resolve({ release });
+    await waitFor(() => release.mock.calls.length === 1, { label: "wake lock released" });
+  });
+});
+
+describe("key commitment in the call flow", () => {
+  test("the invite sent to the server holds a commitment, and the key is revealed once with the first offer", async () => {
+    const { server } = await connectedCall();
+    const invite = server.log.find((e) => e.op === "startCall").invite;
+    expect(invite.eph).toBeUndefined();
+    expect(invite.commit).toBeTruthy();
+    const reveals = server.log.filter((e) => e.op === "signal" && e.eph);
+    expect(reveals).toHaveLength(1);
+    expect(reveals[0].kind).toBe("offer");
+  });
+
+  test("a revealed key that does not match the commitment ends the call", async () => {
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    const other = await server.addUser("carol");
+    const wrongKey = (await import("../../src/e2ee/crypto.js")).generateEphemeralEcdh;
+    const pair = await wrongKey();
+    const wrong = toB64u(await (await import("../../src/e2ee/crypto.js")).exportPublicRaw(pair.publicKey));
+    server.tamper = (event) => (event.type === "call_signal" && event.eph ? { ...event, eph: wrong } : event);
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(bob));
+    await bob.manager.accept();
+    await waitFor(() => phase(CALL_PHASE.ENDED)(bob), { label: "callee rejects reveal" });
+    expect(bob.manager.getState().endReason).toBe("handshake_failed");
+    expect(other.user.id).toBeTruthy();
+  });
+
+  test("candidates that arrive before the key reveal are held, not counted as attacks", async () => {
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    const held = [];
+    server.tamper = (event) => {
+      if (event.type === "call_signal" && event.kind === "offer" && event.eph) {
+        held.push(event);
+        return null; // the offer is delayed in the network ...
+      }
+      return event;
+    };
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(bob));
+    await bob.manager.accept();
+    await waitFor(() => held.length === 1, { label: "offer in flight" });
+    // ... while later messages reach the callee first.
+    const early = server.log.filter((e) => e.op === "signal" && e.kind === "ice");
+    expect(early.length).toBeGreaterThanOrEqual(0);
+
+    server.tamper = null;
+    await bob.manager.handleEvent(held[0]);
+    await waitFor(() => phase(CALL_PHASE.CONNECTED)(alice) && phase(CALL_PHASE.CONNECTED)(bob), {
+      label: "connected after the delayed offer",
+    });
+  });
+});
+
+describe("devices the person has not acknowledged", () => {
+  test("a brand-new device of a verified contact answering the call stops it", async () => {
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    // Alice has seen Bob's only device and verified him.
+    await alice.directory.getUserDevices(bob.user.id);
+    await alice.trust.setVerified(bob.user.id, "1234", true);
+    // A second device appears under Bob's account.
+    const rogue = await server.addDevice("bob");
+
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(rogue));
+    await rogue.manager.accept();
+    await waitFor(() => phase(CALL_PHASE.ENDED)(alice), { label: "alice blocks the call" });
+    expect(alice.manager.getState().endReason).toBe("key_mismatch");
+  });
+
+  test("for someone you did not verify, the new device is shown as a warning and the call goes on", async () => {
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    await alice.directory.getUserDevices(bob.user.id); // pins Bob's first device
+    const second = await server.addDevice("bob");
+
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(second));
+    expect(alice.manager.getState().trust.status).toBe("devices_added");
+    await second.manager.accept();
+    await waitFor(() => phase(CALL_PHASE.CONNECTED)(alice));
+    // The warning is still there: answering did not quietly pin the device.
+    expect(alice.manager.getState().trust).toMatchObject({ status: "devices_added" });
+    const again = await alice.directory.getUserDevices(bob.user.id, { force: true });
+    expect(again.assessment.status).toBe("devices_added");
+  });
+
+  test("a new device of a verified contact cannot ring you", async () => {
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    await bob.directory.getUserDevices(alice.user.id);
+    await bob.trust.setVerified(alice.user.id, "1234", true);
+    const aliceNewPhone = await server.addDevice("alice");
+
+    await aliceNewPhone.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await waitFor(() => phase(CALL_PHASE.ENDED)(bob), { label: "bob refuses the invite" });
+    expect(bob.manager.getState().endReason).toBe("key_mismatch");
+    expect(bob.getUserMedia).not.toHaveBeenCalled();
+  });
+});

@@ -9,7 +9,9 @@
 // message, when, to which chat, its size and its duration — never the video or
 // the poster frame. Metadata that matters for decryption (container type,
 // duration, sender device) is bound into the AES-GCM associated data and the
-// signature, so it cannot be altered without detection.
+// signature, so it cannot be altered without detection. So is the message
+// context (chat, client request id, sender account): a stored envelope cannot
+// be re-posted into another chat or as another message and still verify.
 
 import {
   aesGcmDecrypt,
@@ -26,26 +28,39 @@ import {
 } from "./crypto.js";
 import { encodeFields, fromB64u, randomBytes, toB64u, utf8 } from "./encoding.js";
 
-const V = "AURELLE-VN-V1";
-export const VIDEO_NOTE_VERSION = 1;
+const V = "AURELLE-VN-V2";
+export const VIDEO_NOTE_VERSION = 2;
 export const VIDEO_NOTE_KIND = "video_note";
 
 export class E2eeDecryptError extends Error {
   constructor(code, message) {
     super(message);
     this.name = "E2eeDecryptError";
-    this.code = code; // "no_key" | "bad_signature" | "corrupt" | "unknown_sender"
+    this.code = code; // "no_key" | "bad_signature" | "corrupt" | "unknown_sender" | "sender_changed" | "unsupported"
   }
 }
 
-const mediaAad = (env) =>
-  encodeFields(`${V}/media`, [env.senderDeviceId, env.mime, String(env.durationMs)]);
-const posterAad = (env) =>
-  encodeFields(`${V}/poster`, [env.senderDeviceId, env.mime, String(env.durationMs)]);
+/**
+ * What the envelope is bound to besides its own content. The sender knows all
+ * three before encrypting; a recipient takes them from the message it received.
+ * @typedef {{chatId: string, clientRequestId: string, senderUserId: string}} VideoNoteContext
+ */
+const contextFields = (context) => {
+  const { chatId, clientRequestId, senderUserId } = context || {};
+  if (!chatId || !clientRequestId || !senderUserId) {
+    throw new E2eeDecryptError("corrupt", "The message is missing its context.");
+  }
+  return [String(chatId), String(clientRequestId), String(senderUserId)];
+};
+
+const mediaAad = (env, context) =>
+  encodeFields(`${V}/media`, [env.senderDeviceId, env.mime, String(env.durationMs), ...contextFields(context)]);
+const posterAad = (env, context) =>
+  encodeFields(`${V}/poster`, [env.senderDeviceId, env.mime, String(env.durationMs), ...contextFields(context)]);
 const wrapAad = (deviceId, mediaIv) => encodeFields(`${V}/wrap`, [deviceId, mediaIv]);
 const wrapSalt = (deviceId) => sha256(utf8(deviceId));
 
-function signatureInput(env, ciphertextHash) {
+function signatureInput(env, ciphertextHash, context) {
   const poster = env.poster ? `${env.poster.iv}.${env.poster.ct}` : "";
   const keyFields = env.keys.flatMap((k) => [k.deviceId, k.epk, k.iv, k.ct]);
   return encodeFields(`${V}/signature`, [
@@ -54,6 +69,7 @@ function signatureInput(env, ciphertextHash) {
     env.senderDeviceId,
     env.mime,
     String(env.durationMs),
+    ...contextFields(context),
     env.iv,
     toB64u(ciphertextHash),
     poster,
@@ -69,9 +85,10 @@ function signatureInput(env, ciphertextHash) {
  * @param {Uint8Array|null} args.poster    small JPEG, encrypted alongside
  * @param {object} args.identity           this device ({deviceId, keys})
  * @param {Array<{id: string, ecdhPublic: string}>} args.recipients  every device that may read it (including this one)
+ * @param {VideoNoteContext} args.context   chat, request id and sender account this message is bound to
  * @returns {Promise<{ciphertext: Uint8Array, envelope: object}>}
  */
-export async function encryptVideoNote({ media, mime, durationMs, poster = null, identity, recipients }) {
+export async function encryptVideoNote({ media, mime, durationMs, poster = null, identity, recipients, context }) {
   if (!recipients?.some((r) => r.id === identity.deviceId)) {
     throw new Error("The sending device must be among the recipients.");
   }
@@ -90,10 +107,10 @@ export async function encryptVideoNote({ media, mime, durationMs, poster = null,
   const contentKey = await importAesKey(contentKeyRaw);
   const mediaIv = randomBytes(12);
   envelope.iv = toB64u(mediaIv);
-  const { ct: ciphertext } = await aesGcmEncrypt(contentKey, media, mediaAad(envelope), mediaIv);
+  const { ct: ciphertext } = await aesGcmEncrypt(contentKey, media, mediaAad(envelope, context), mediaIv);
 
   if (poster?.length) {
-    const sealed = await aesGcmEncrypt(contentKey, poster, posterAad(envelope));
+    const sealed = await aesGcmEncrypt(contentKey, poster, posterAad(envelope, context));
     envelope.poster = { iv: toB64u(sealed.iv), ct: toB64u(sealed.ct) };
   }
 
@@ -118,7 +135,7 @@ export async function encryptVideoNote({ media, mime, durationMs, poster = null,
 
   const signature = await signBytes(
     identity.keys.ecdsa.privateKey,
-    signatureInput(envelope, await sha256(ciphertext)),
+    signatureInput(envelope, await sha256(ciphertext), context),
   );
   envelope.sig = toB64u(signature);
   return { ciphertext, envelope };
@@ -147,7 +164,7 @@ async function unwrapContentKey(envelope, entry, identity) {
  * the full ciphertext, which happens when the video is opened.
  * @returns {Promise<Uint8Array|null>} null when there is no poster
  */
-export async function decryptVideoNotePoster({ envelope, identity }) {
+export async function decryptVideoNotePoster({ envelope, identity, context }) {
   if (!envelope?.poster) return null;
   const entry = envelope.keys?.find((k) => k.deviceId === identity.deviceId);
   if (!entry) {
@@ -159,7 +176,7 @@ export async function decryptVideoNotePoster({ envelope, identity }) {
       contentKey,
       fromB64u(envelope.poster.iv),
       fromB64u(envelope.poster.ct),
-      posterAad(envelope),
+      posterAad(envelope, context),
     );
   } catch {
     return null;
@@ -172,8 +189,12 @@ export async function decryptVideoNotePoster({ envelope, identity }) {
  * @param {Uint8Array} args.ciphertext
  * @param {object} args.identity       this device
  * @param {{ecdsaPublic: string}|null} args.senderDevice  sender's device record from the directory
+ * @param {VideoNoteContext} args.context   taken from the received message, never from the envelope
  */
-export async function decryptVideoNote({ envelope, ciphertext, identity, senderDevice }) {
+export async function decryptVideoNote({ envelope, ciphertext, identity, senderDevice, context }) {
+  if (envelope?.v !== VIDEO_NOTE_VERSION) {
+    throw new E2eeDecryptError("unsupported", "This message uses an older, unsupported format.");
+  }
   if (!senderDevice) {
     throw new E2eeDecryptError("unknown_sender", "The sender's device is unknown.");
   }
@@ -190,7 +211,7 @@ export async function decryptVideoNote({ envelope, ciphertext, identity, senderD
     signatureOk = await verifyBytes(
       await importEcdsaPublic(fromB64u(senderDevice.ecdsaPublic)),
       fromB64u(envelope.sig),
-      signatureInput(envelope, await sha256(ciphertext)),
+      signatureInput(envelope, await sha256(ciphertext), context),
     );
   } catch {
     signatureOk = false;
@@ -201,7 +222,7 @@ export async function decryptVideoNote({ envelope, ciphertext, identity, senderD
 
   try {
     const contentKey = await unwrapContentKey(envelope, entry, identity);
-    const media = await aesGcmDecrypt(contentKey, fromB64u(envelope.iv), ciphertext, mediaAad(envelope));
+    const media = await aesGcmDecrypt(contentKey, fromB64u(envelope.iv), ciphertext, mediaAad(envelope, context));
 
     let poster = null;
     if (envelope.poster) {
@@ -210,7 +231,7 @@ export async function decryptVideoNote({ envelope, ciphertext, identity, senderD
           contentKey,
           fromB64u(envelope.poster.iv),
           fromB64u(envelope.poster.ct),
-          posterAad(envelope),
+          posterAad(envelope, context),
         );
       } catch {
         poster = null; // a broken poster must not block playback

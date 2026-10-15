@@ -102,6 +102,36 @@ self.addEventListener("fetch", (event) => {
   );
 });
 
+// The call is over (the caller gave up, it timed out, or another device
+// answered). Take the sticky "Incoming call" notification down; for a call that
+// was never answered, leave a plain "missed call" behind instead.
+async function handleCallEnded(payload, data) {
+  const tag = `call-${data.callId}`;
+  const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  const appFocused = clients.some((client) => ("focused" in client ? Boolean(client.focused) : false));
+  const ringing = await self.registration.getNotifications({ tag });
+  const missed = data.reason === "missed";
+  if (appFocused && !ringing.length) return;
+
+  const options = {
+    body: missed ? payload.body || "Missed call" : "",
+    data: { ...data, type: "call_missed" },
+    tag,
+    renotify: false,
+    requireInteraction: false,
+    silent: missed ? false : true,
+    badge: "/icons/icon-192.png",
+    icon: "/icons/icon-192.png",
+  };
+  // Browsers expect every push to end in a visible notification, so the
+  // ringing one is replaced (same tag) rather than just closed.
+  await self.registration.showNotification(payload.title || "Aurelle", options);
+  if (!missed) {
+    const replaced = await self.registration.getNotifications({ tag });
+    replaced.forEach((notification) => notification.close());
+  }
+}
+
 self.addEventListener("push", (event) => {
   let payload = {};
   try {
@@ -114,6 +144,10 @@ self.addEventListener("push", (event) => {
   const data = payload.data || {};
   const badgeCount = Number(payload.badge || 0);
   const isCall = data.type === "call";
+  if (data.type === "call_end") {
+    event.waitUntil(handleCallEnded(payload, data));
+    return;
+  }
   const tag = isCall
     ? `call-${data.callId}`
     : data.chatId
@@ -167,9 +201,10 @@ self.addEventListener("notificationclick", (event) => {
           client.url.includes(self.location.origin),
         );
         if (existing) {
-          existing.focus();
-          existing.navigate(target);
-          return;
+          // Only bring the window forward. Navigating it would reload the app,
+          // and with it end a call in progress (a call lives in the page); all
+          // notification targets are "/" anyway.
+          return existing.focus();
         }
         self.clients.openWindow(target);
       }),

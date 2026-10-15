@@ -4,9 +4,11 @@
 
 import * as e2eeApi from "../api/e2eeApi.js";
 import { createDirectory } from "./directory.js";
-import { getIdentity } from "./identity.js";
+import { clearIdentityCache, getIdentity } from "./identity.js";
 import { getSharedKeyStore } from "./keyStore.js";
 import { createTrustTracker } from "./trust.js";
+
+export { isE2eeSupported } from "./support.js";
 
 let services = null;
 
@@ -24,6 +26,12 @@ export function getE2eeServices() {
     };
   }
   return services;
+}
+
+/** Forgets everything held in memory for the signed-in person (logout, account switch). */
+export function clearE2eeSession() {
+  clearIdentityCache();
+  services?.directory.clear();
 }
 
 /** True when the browser can do secure calling (HTTPS, WebRTC, media, crypto). */

@@ -181,17 +181,21 @@ export function linkDataChannels(a, b) {
 export class FakeServer {
   constructor() {
     this.devices = new Map(); // userId -> [record]
-    this.managers = new Map(); // userId -> CallManager
+    this.managers = new Map(); // userId -> CallManager[] (one per signed-in device)
     this.users = new Map();
     this.log = []; // everything the "server" saw
     this.calls = new Map();
     this.tamper = null; // optional (event) => event
   }
 
+  callerDeviceOf(call) {
+    return call.callerDeviceId;
+  }
+
   deliver(userId, event) {
     const out = this.tamper ? this.tamper(event) : event;
     if (!out) return;
-    setImmediate(() => this.managers.get(userId)?.handleEvent(out));
+    setImmediate(() => (this.managers.get(userId) || []).forEach((m) => m.handleEvent(out)));
   }
 
   apiFor(user) {
@@ -203,7 +207,19 @@ export class FakeServer {
         server.log.push({ op: "startCall", callId, kind, invite });
         if (server.busy) throw new ApiError("User is busy.", { status: 409, code: "busy" });
         const callee = [...server.users.values()].find((u) => u.id !== user.id);
-        server.calls.set(callId, { caller: user.id, callee: callee.id, calleeDeviceId: null });
+        if (server.busyOnce) {
+          server.busyOnce = false;
+          throw new ApiError("You are already in a call.", { status: 409, code: "busy_self" });
+        }
+        // Like the real registry: one live call per person.
+        const live = [...server.calls.values()];
+        if (live.some((c) => c.caller === user.id || c.callee === user.id)) {
+          throw new ApiError("You are already in a call.", { status: 409, code: "busy_self" });
+        }
+        if (live.some((c) => c.caller === callee.id || c.callee === callee.id)) {
+          throw new ApiError("User is busy.", { status: 409, code: "busy" });
+        }
+        server.calls.set(callId, { caller: user.id, callee: callee.id, calleeDeviceId: null, callerDeviceId: invite.deviceId });
         server.deliver(callee.id, {
           type: "call_invite",
           callId,
@@ -216,11 +232,15 @@ export class FakeServer {
       acceptCall: vi.fn(async (callId, accept) => {
         server.log.push({ op: "acceptCall", callId, accept });
         const call = server.calls.get(callId);
+        if (!call || call.calleeDeviceId) {
+          throw new ApiError("Call already answered.", { status: 409, code: "not_ringing" });
+        }
         call.calleeDeviceId = accept.deviceId;
         server.deliver(call.caller, { type: "call_accept", callId, accept });
+        server.deliver(call.callee, { type: "call_accepted_elsewhere", callId, deviceId: accept.deviceId });
       }),
-      sendCallSignal: vi.fn(async (callId, { kind, blob, seq }) => {
-        server.log.push({ op: "signal", callId, kind, blob, seq });
+      sendCallSignal: vi.fn(async (callId, { kind, blob, seq, eph }) => {
+        server.log.push({ op: "signal", callId, kind, blob, seq, eph });
         const call = server.calls.get(callId);
         if (!call) throw new ApiError("Call is not in progress.", { status: 409 });
         const to = peerOf(call);
@@ -230,7 +250,8 @@ export class FakeServer {
           kind,
           blob,
           seq,
-          toDeviceId: to === call.callee ? call.calleeDeviceId : server.devices.get(call.caller)?.[0]?.id,
+          ...(eph ? { eph } : {}),
+          toDeviceId: to === call.callee ? call.calleeDeviceId : server.callerDeviceOf(call),
         });
       }),
       markCallConnected: vi.fn(async () => {}),
@@ -248,11 +269,16 @@ export class FakeServer {
     };
   }
 
-  async addUser(username, managerOptions = {}) {
+  /** Signs a second device in for an existing user (a phone and a laptop). */
+  async addDevice(username, managerOptions = {}) {
+    return this.addUser(username, { ...managerOptions, additionalDevice: true });
+  }
+
+  async addUser(username, { additionalDevice = false, ...managerOptions } = {}) {
     const { identity, record } = await makeIdentity(`user-${username}`);
     const user = { id: `user-${username}`, username };
     this.users.set(user.id, user);
-    this.devices.set(user.id, [record]);
+    this.devices.set(user.id, [...(additionalDevice ? this.devices.get(user.id) || [] : []), record]);
 
     const store = createKeyStore(createMemoryAdapter());
     const trust = createTrustTracker(store);
@@ -266,7 +292,7 @@ export class FakeServer {
     });
     const api = this.apiFor(user);
     const getUserMedia = managerOptions.getUserMedia || makeGetUserMedia();
-    const ctx = { user, identity, record, api, directory, getUserMedia, pc: null };
+    const ctx = { user, identity, record, api, directory, trust, store, getUserMedia, pc: null };
     const manager = new CallManager({
       selfUser: user,
       api,
@@ -282,7 +308,7 @@ export class FakeServer {
       requestWakeLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
       ...managerOptions,
     });
-    this.managers.set(user.id, manager);
+    this.managers.set(user.id, [...(additionalDevice ? this.managers.get(user.id) || [] : []), manager]);
     ctx.manager = manager;
     return ctx;
   }

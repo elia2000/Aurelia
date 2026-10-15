@@ -19,14 +19,49 @@ describe("trust-on-first-use", () => {
     expect((await trust.assess("bob", [bob.record])).status).toBe(TRUST.OK);
   });
 
-  test("a new device is reported once and then accepted", async () => {
+  test("a new device is reported on EVERY lookup until the person acknowledges it", async () => {
     const bob1 = await makeIdentity("bob");
     const bob2 = await makeIdentity("bob");
     await trust.assess("bob", [bob1.record]);
-    const result = await trust.assess("bob", [bob1.record, bob2.record]);
-    expect(result.status).toBe(TRUST.DEVICES_ADDED);
-    expect(result.added).toEqual([bob2.record.id]);
+    for (let i = 0; i < 3; i += 1) {
+      const result = await trust.assess("bob", [bob1.record, bob2.record]);
+      expect(result.status).toBe(TRUST.DEVICES_ADDED);
+      expect(result.added).toEqual([bob2.record.id]);
+    }
+    // Looking at it never pins it.
+    expect(Object.keys((await store.getPeer("bob")).devices)).toEqual([bob1.record.id]);
+
+    await trust.acknowledge("bob", [bob1.record, bob2.record]);
     expect((await trust.assess("bob", [bob1.record, bob2.record])).status).toBe(TRUST.OK);
+  });
+
+  test("the assessment says whether the person had been verified", async () => {
+    const bob1 = await makeIdentity("bob");
+    const bob2 = await makeIdentity("bob");
+    await trust.assess("bob", [bob1.record]);
+    await trust.setVerified("bob", "123456", true, [bob1.record]);
+    const result = await trust.assess("bob", [bob1.record, bob2.record]);
+    expect(result).toMatchObject({ status: TRUST.DEVICES_ADDED, verified: true });
+    expect(await trust.wasVerified("bob")).toBe(true);
+  });
+
+  test("acknowledging a new device ends the old verification: the number it covered is gone", async () => {
+    const bob1 = await makeIdentity("bob");
+    const bob2 = await makeIdentity("bob");
+    await trust.assess("bob", [bob1.record]);
+    await trust.setVerified("bob", "111", true, [bob1.record]);
+    await trust.acknowledge("bob", [bob1.record, bob2.record]);
+    expect(await trust.wasVerified("bob")).toBe(false);
+    expect(await trust.isVerified("bob", "111")).toBe(false);
+  });
+
+  test("verifying the new number accepts the devices it was computed from", async () => {
+    const bob1 = await makeIdentity("bob");
+    const bob2 = await makeIdentity("bob");
+    await trust.assess("bob", [bob1.record]);
+    await trust.setVerified("bob", "222", true, [bob1.record, bob2.record]);
+    const result = await trust.assess("bob", [bob1.record, bob2.record]);
+    expect(result).toMatchObject({ status: TRUST.OK, verified: true });
   });
 
   test("a known device id presenting different keys is a hard mismatch and is not re-pinned", async () => {
@@ -97,6 +132,75 @@ describe("directory", () => {
     expect(api.fetchUserDevices).toHaveBeenCalledTimes(2);
   });
 
+  test("devices of someone with unacknowledged devices are flagged pending, and acknowledging clears it", async () => {
+    const trust = createTrustTracker(createKeyStore(createMemoryAdapter()));
+    const bob1 = await makeIdentity("bob");
+    const bob2 = await makeIdentity("bob");
+    let list = [bob1.record];
+    const api = { fetchUserDevices: vi.fn(async () => ({ devices: list })) };
+    const dir = createDirectory({ api, trust, ttlMs: 60_000 });
+    await dir.getUserDevices("bob");
+    list = [bob1.record, bob2.record];
+
+    const found = await dir.findDevice("bob", bob2.record.id);
+    expect(found.pending).toBe(true);
+    expect((await dir.findDevice("bob", bob1.record.id)).pending).toBe(false);
+    // The signal is still there on the next lookup.
+    expect((await dir.getUserDevices("bob", { force: true })).assessment.status).toBe(TRUST.DEVICES_ADDED);
+
+    await dir.acknowledge("bob", list);
+    const after = await dir.getUserDevices("bob", { force: true });
+    expect(after.assessment.status).toBe(TRUST.OK);
+    expect(after.devices.every((d) => !d.pending)).toBe(true);
+  });
+
+  test("chat device lists report who has new devices, including whether they were verified", async () => {
+    const store = createKeyStore(createMemoryAdapter());
+    const trust = createTrustTracker(store);
+    const alice = await makeIdentity("alice");
+    const bob1 = await makeIdentity("bob");
+    const bob2 = await makeIdentity("bob");
+    let devices = [
+      { ...alice.record, username: "alice" },
+      { ...bob1.record, username: "bob" },
+    ];
+    const api = { fetchChatDevices: vi.fn(async () => ({ devices, membersWithoutDevice: [] })) };
+    const dir = createDirectory({ api, trust });
+
+    const first = await dir.getChatDevices("chat");
+    expect(first.changes).toEqual([]);
+
+    await trust.setVerified("bob", "999", true, [bob1.record]);
+    devices = [...devices, { ...bob2.record, username: "bob" }];
+    for (let i = 0; i < 2; i += 1) {
+      // Reported every time, not only on the first fetch.
+      const next = await dir.getChatDevices("chat");
+      expect(next.changes).toEqual([
+        { userId: "bob", username: "bob", added: [bob2.record.id], verified: true },
+      ]);
+      expect(next.devices.find((d) => d.id === bob2.record.id).pending).toBe(true);
+      expect(next.devices.find((d) => d.id === bob1.record.id).pending).toBe(false);
+    }
+  });
+
+  test("a revoked device is found only when asked for, and is never pinned or listed", async () => {
+    const trust = createTrustTracker(createKeyStore(createMemoryAdapter()));
+    const bob = await makeIdentity("bob");
+    const old = await makeIdentity("bob");
+    const api = {
+      fetchUserDevices: vi.fn(async (_userId, { deviceId } = {}) => ({
+        devices: [bob.record, ...(deviceId === old.record.id ? [{ ...old.record, revokedAt: "2024-01-01" }] : [])],
+      })),
+    };
+    const dir = createDirectory({ api, trust });
+    expect(await dir.findDevice("bob", old.record.id)).toBeNull();
+    const found = await dir.findDevice("bob", old.record.id, { allowRevoked: true, chatId: "c" });
+    expect(found.id).toBe(old.record.id);
+    expect(found.pending).toBe(false);
+    expect(api.fetchUserDevices).toHaveBeenLastCalledWith("bob", { chatId: "c", deviceId: old.record.id });
+    expect((await dir.getUserDevices("bob", { force: true })).devices.map((d) => d.id)).toEqual([bob.record.id]);
+  });
+
   test("findDevice re-fetches once when the device is new", async () => {
     const trust = createTrustTracker(createKeyStore(createMemoryAdapter()));
     const bob1 = await makeIdentity("bob");
@@ -134,6 +238,20 @@ describe("loadOrCreateIdentity", () => {
     expect(id.keys.ecdh.privateKey.extractable).toBe(false);
     expect(id.keys.ecdsa.privateKey.extractable).toBe(false);
     await expect(crypto.subtle.exportKey("pkcs8", id.keys.ecdsa.privateKey)).rejects.toThrow();
+  });
+
+  test("an already registered device keeps working when only the 'last seen' refresh fails", async () => {
+    const store = createKeyStore(createMemoryAdapter());
+    const api = {
+      registerDevice: vi
+        .fn()
+        .mockResolvedValueOnce({ device: { id: "00000000-0000-4000-8000-000000000001" } })
+        .mockRejectedValueOnce(new Error("429")),
+    };
+    const first = await loadOrCreateIdentity({ userId: "alice", api, store });
+    const again = await loadOrCreateIdentity({ userId: "alice", api, store });
+    expect(again.deviceId).toBe(first.deviceId);
+    expect(again.keys.ecdsa.privateKey).toBe(first.keys.ecdsa.privateKey);
   });
 
   test("keeps the keys when registration fails, and registers the same keys next time", async () => {

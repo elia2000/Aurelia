@@ -1,7 +1,7 @@
 {
   "name": "Aurelle",
   "short_name": "Aurelle",
-  "description": "Private messaging, calls and video messages, encrypted end to end",
+  "description": "Private self-hosted messaging with end-to-end encrypted calls and video messages",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

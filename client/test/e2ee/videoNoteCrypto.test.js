@@ -15,6 +15,7 @@ describe("video note encryption", () => {
   let media;
   let poster;
   let sealed;
+  const context = { chatId: "chat-1", clientRequestId: "req-1", senderUserId: "alice" };
 
   const recipients = () => [alice, bob, bobTablet].map((p) => ({
     id: p.record.id,
@@ -35,6 +36,7 @@ describe("video note encryption", () => {
       poster,
       identity: alice.identity,
       recipients: recipients(),
+      context,
     });
   });
 
@@ -44,6 +46,7 @@ describe("video note encryption", () => {
       ciphertext: sealed.ciphertext,
       identity: who.identity,
       senderDevice: alice.record,
+      context,
       ...patch,
     });
 
@@ -98,6 +101,28 @@ describe("video note encryption", () => {
     await expect(open({ envelope: mutate(sealed.envelope) })).rejects.toBeInstanceOf(E2eeDecryptError);
   });
 
+  test.each([
+    ["another chat", { chatId: "chat-2" }],
+    ["another message", { clientRequestId: "req-2" }],
+    ["another sender account", { senderUserId: "mallory" }],
+  ])("the message is bound to its conversation: replaying it into %s fails", async (_name, patch) => {
+    // A hostile server (or any member) re-posts the stored envelope and file as
+    // a new message elsewhere. The signature and the AES-GCM data both cover
+    // the context, so it neither verifies nor decrypts.
+    await expect(open({ context: { ...context, ...patch } })).rejects.toBeInstanceOf(E2eeDecryptError);
+  });
+
+  test("a message without its context cannot be opened or sealed", async () => {
+    await expect(open({ context: undefined })).rejects.toBeInstanceOf(E2eeDecryptError);
+    await expect(
+      encryptVideoNote({ media, mime: "video/mp4", durationMs: 1, identity: alice.identity, recipients: recipients() }),
+    ).rejects.toThrow();
+  });
+
+  test("an envelope of the previous format is refused with a clear reason", async () => {
+    await expect(open({ envelope: { ...sealed.envelope, v: 1 } })).rejects.toMatchObject({ code: "unsupported" });
+  });
+
   test("a forged sender is detected: signature must verify under the claimed sender's key", async () => {
     await expect(open({ senderDevice: eve.record })).rejects.toMatchObject({ code: "bad_signature" });
   });
@@ -120,11 +145,11 @@ describe("video note encryption", () => {
 
   test("works without a poster, and a corrupt poster does not block playback", async () => {
     const noPoster = await encryptVideoNote({
-      media, mime: "video/webm", durationMs: 1000, identity: alice.identity, recipients: recipients(),
+      media, mime: "video/webm", durationMs: 1000, identity: alice.identity, recipients: recipients(), context,
     });
     expect(noPoster.envelope.poster).toBeUndefined();
     const out = await decryptVideoNote({
-      envelope: noPoster.envelope, ciphertext: noPoster.ciphertext, identity: bob.identity, senderDevice: alice.record,
+      envelope: noPoster.envelope, ciphertext: noPoster.ciphertext, identity: bob.identity, senderDevice: alice.record, context,
     });
     expect(out.poster).toBeNull();
     expect(bytesEqual(out.media, media)).toBe(true);
@@ -132,7 +157,7 @@ describe("video note encryption", () => {
 
   test("two encryptions of the same media never share a key, IV or ciphertext", async () => {
     const again = await encryptVideoNote({
-      media, mime: "video/mp4", durationMs: 12_345, poster, identity: alice.identity, recipients: recipients(),
+      media, mime: "video/mp4", durationMs: 12_345, poster, identity: alice.identity, recipients: recipients(), context,
     });
     expect(again.envelope.iv).not.toBe(sealed.envelope.iv);
     expect(again.envelope.keys[0].ct).not.toBe(sealed.envelope.keys[0].ct);
@@ -144,6 +169,7 @@ describe("video note encryption", () => {
       encryptVideoNote({
         media, mime: "video/mp4", durationMs: 1, identity: alice.identity,
         recipients: [{ id: bob.record.id, ecdhPublic: bob.record.ecdhPublic }],
+        context,
       }),
     ).rejects.toThrow();
   });

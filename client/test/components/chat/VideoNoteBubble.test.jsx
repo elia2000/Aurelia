@@ -30,21 +30,34 @@ async function setup({ tamper = false } = {}) {
     poster: POSTER,
     identity: alice.identity,
     recipients: [alice, bob].map((p) => ({ id: p.record.id, ecdhPublic: p.record.ecdhPublic })),
+    context: { chatId: "chat-1", clientRequestId: "req-1", senderUserId: "alice" },
   });
   const cipher = new Uint8Array(sealed.ciphertext);
   if (tamper) cipher[5] ^= 1;
   mocks.fetchCiphertext.mockReset().mockResolvedValue(cipher);
   mocks.services = {
     getIdentity: async () => bob.identity,
+    trust: { wasVerified: async () => false },
     directory: { findDevice: async (userId, deviceId) => (userId === "alice" && deviceId === alice.record.id ? alice.record : null) },
   };
   return {
-    msg: { id: "m1", clientRequestId: `c-${Math.random()}`, user_id: "alice", e2ee: sealed.envelope, files: [{ url: "/api/uploads/messages/x.bin" }] },
+    msg: { id: "m1", chat_id: "chat-1", client_request_id: "req-1", user_id: "alice", e2ee: sealed.envelope, files: [{ url: "/api/uploads/messages/x.bin" }] },
     user: { id: "bob", username: "bob" },
   };
 }
 
 beforeEach(() => {
+  // The test media is random bytes: keep the element from really trying to load
+  // it (a real load error is reported as "can't play", which has its own test).
+  Object.defineProperty(HTMLMediaElement.prototype, "src", {
+    configurable: true,
+    get() {
+      return this.getAttribute("data-test-src") || "";
+    },
+    set(value) {
+      this.setAttribute("data-test-src", value);
+    },
+  });
   HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue();
   HTMLMediaElement.prototype.pause = vi.fn();
 });
@@ -115,5 +128,49 @@ describe("VideoNoteBubble", () => {
     render(<VideoNoteBubble msg={{ ...msg, files: [] }} user={user} />);
     await page.getByRole("button", { name: /Play video message/ }).click();
     await expect.element(page.getByText("The video is no longer available.")).toBeInTheDocument();
+  });
+
+  test("when the browser blocks the first play (the tap was used up decrypting), one more tap plays and a hint says so", async () => {
+    const { msg, user } = await setup();
+    HTMLMediaElement.prototype.play = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("gesture"), { name: "NotAllowedError" }))
+      .mockResolvedValue();
+    render(<VideoNoteBubble msg={msg} user={user} />);
+    await page.getByRole("button", { name: /Play video message/ }).click();
+    await expect.element(page.getByText("Ready. Tap again to play.")).toBeInTheDocument();
+    expect(mocks.fetchCiphertext).toHaveBeenCalledTimes(1);
+    await page.getByRole("button", { name: /video message/ }).click();
+    await expect.element(page.getByRole("button", { name: /Pause video message/ })).toBeInTheDocument();
+    expect(mocks.fetchCiphertext).toHaveBeenCalledTimes(1);
+  });
+
+  test("a video this device cannot play is reported instead of silently doing nothing", async () => {
+    const { msg, user } = await setup();
+    HTMLMediaElement.prototype.play = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("format"), { name: "NotSupportedError" }));
+    render(<VideoNoteBubble msg={msg} user={user} />);
+    await page.getByRole("button", { name: /Play video message/ }).click();
+    await expect.element(page.getByText("This device can't play this video.")).toBeInTheDocument();
+  });
+
+  test("a message sent from a new device of the sender plays but points out the new device", async () => {
+    const { msg, user } = await setup();
+    mocks.services.directory.findDevice = async () => ({ ...alice.record, pending: true });
+    render(<VideoNoteBubble msg={msg} user={user} />);
+    await page.getByRole("button", { name: /Play video message/ }).click();
+    await expect.element(page.getByText("Sent from a new device.")).toBeInTheDocument();
+    await expect.element(page.getByRole("button", { name: "Check" })).toBeInTheDocument();
+  });
+
+  test("a new device of a sender you verified blocks playback and explains how to continue", async () => {
+    const { msg, user } = await setup();
+    mocks.services.directory.findDevice = async () => ({ ...alice.record, pending: true });
+    mocks.services.trust.wasVerified = async () => true;
+    render(<VideoNoteBubble msg={msg} user={user} />);
+    await page.getByRole("button", { name: /Play video message/ }).click();
+    await expect.element(page.getByText(/security keys changed since you verified them/)).toBeInTheDocument();
+    expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
   });
 });
