@@ -210,10 +210,19 @@ railway domain --service songbird-server
 
 ## ۲. استقرار روی CaaS و Kubernetes
 
-میتوانید Songbird را در محیط های کانتینری با استفاده از ایمیج های رسمی و از پیش ساخته شده از Docker Hub اجرا کنید:
+میتوانید Aurelle را در محیط های کانتینری اجرا کنید، اما ایمیج آماده ای منتشر نشده است (ایمیج های Songbird در Docker Hub شامل تماس ها، پیام های ویدیویی و برندینگ Aurelle نیستند). ایمیج ها را از روی سورس بسازید و در یک رجیستری کانتینر که خودتان مدیریت میکنید push کنید، سپس پلتفرم خود را به آن ها اشاره دهید:
 
-- **برنامه اصلی (فرانت اند + بک اند):** `bllackbull/songbird:latest`
-- **ورکر مدیا مجزا (تبدیل ویدیو و FFmpeg):** `bllackbull/songbird-worker:latest`
+```bash
+git clone https://github.com/elia2000/Aurelle.git
+cd Aurelle
+docker build -t ghcr.io/<your-account>/aurelle:latest .
+docker build -t ghcr.io/<your-account>/aurelle-worker:latest worker/
+docker push ghcr.io/<your-account>/aurelle:latest
+docker push ghcr.io/<your-account>/aurelle-worker:latest
+```
+
+- **برنامه اصلی (فرانت اند + بک اند):** ساخته شده از `Dockerfile` ریشه، برای مثال `ghcr.io/<your-account>/aurelle:latest`
+- **ورکر مدیا مجزا (تبدیل ویدیو و FFmpeg):** ساخته شده از `worker/Dockerfile`، برای مثال `ghcr.io/<your-account>/aurelle-worker:latest`
 
 ### پیکربندی کانتینر
 

@@ -13,7 +13,7 @@
 این دستور تک‌خطی را روی سرور خود اجرا کنید:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bllackbull/Songbird/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelle/main/scripts/install.sh | bash
 ```
 
 این دستور اسکریپت را دانلود می‌کند، منو را باز می‌کند و یک دستور سراسری `songbird-deploy` را نصب می‌کند. از آن پس، هر زمان که خواستید آن را با این دستور اجرا کنید:

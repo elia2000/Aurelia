@@ -32,7 +32,7 @@ Everything here works in the browser and in the installed PWA. The protocol is d
 1. Open a **direct chat** and press the phone (voice) or camera (video) button in the header.
 2. The other person gets an incoming-call screen (and a push notification if the app is closed).
 3. Once connected, both screens show the same **four emoji**. Ask each other to read them out: if they match, nobody is intercepting the call.
-4. Tap the lock badge to open the **safety number**. If the numbers match on both phones, press *Mark as verified*. That contact is then remembered as verified on this device until their devices change.
+4. Tap the lock badge to open the **safety number**. If the numbers match on both phones, press *Mark as verified*. That contact is then remembered as verified on this device until their devices change. You do not need a call for this: the shield button in the header of a direct chat opens the same screen.
 
 Calls are one-to-one and happen in direct chats. You can minimise the call screen and keep browsing.
 
@@ -42,13 +42,26 @@ Calls are one-to-one and happen in direct chats. You can minimise the call scree
 2. Press the red button to record (up to **60 seconds**), press stop, preview, then **Send** or **Retake**.
 3. Recipients see a round bubble with a blurred preview. The video is downloaded and decrypted only when they press play.
 
-Video messages are not available in broadcast channels. They cannot be forwarded, because the key is wrapped only for the devices that were in the chat when it was sent.
+Your recording stays in the dialog until the server has accepted it. If sending does not work (you are offline, a contact has a new device, an earlier upload is still running) the reason is shown in the dialog and you can simply press *Send* again.
+
+Video messages are not available in broadcast channels. They cannot be forwarded or saved as a file, because the key is wrapped only for the devices that were in the chat when it was sent and the stored file is ciphertext. In groups, members do not need a direct chat with each other to watch each other's messages.
 
 :::warning
 
 A video message can only be opened by devices that existed when it was sent. A person who adds a new device later will not be able to watch older video messages on it.
 
 :::
+
+### When a contact gets a new device
+
+A safety number covers **all** of a person's devices, so a new device changes it. Aurelle never accepts a new device silently:
+
+- **Sending a video message** to someone who has a device you have not seen asks first and names who it is. For a contact you have *not* verified you can choose *Send anyway* (that accepts the device). For a contact you **have** verified there is no shortcut: open *Review*, compare the new safety number with them and mark it verified again.
+- **Calls** from, or answered by, a new device of a verified contact are stopped. For everybody else the call screen shows a warning with a *Review* button.
+- **Messages** that were signed by a new device show *Sent from a new device*. For a verified contact they stay locked until the number is checked again.
+- This applies to **your own account** too: a browser you signed in on later is mentioned once, the first time you send from another device.
+
+Someone who clears their browser data or uses private windows registers new devices. Old ones are retired automatically once a person has 20, so nobody gets locked out.
 
 ## Setting up the relay
 
@@ -91,7 +104,7 @@ Run coturn with `use-auth-secret` and `static-auth-secret=<secret>`, then set `C
 
 ### Hide IP addresses (high-security mode)
 
-Set `CALLS_FORCE_RELAY=true` to send **all** call media through your relay. Then the two people never learn each other's IP address. It uses a little more server bandwidth and adds a few milliseconds of latency. It requires a working relay.
+Set `CALLS_FORCE_RELAY=true` to send **all** call media through your relay. Then the two people never learn each other's IP address. It uses a little more server bandwidth and adds a few milliseconds of latency. It requires a working relay, and it **fails closed**: if the relay is missing or misconfigured, calls are refused with a clear message (and a warning is logged at start-up) instead of quietly connecting directly and exposing both addresses.
 
 ### Checking your setup
 
@@ -122,9 +135,11 @@ All call settings are environment variables. See [Environment Variables](./Envir
 
 - Calls are **one-to-one** and start from a direct chat. Group calls need a media-forwarding server and are not included.
 - Call signaling state lives in the memory of one app process. If you run several app instances behind a load balancer, use sticky routing for `/api/calls`.
-- A device that is offline when a call starts gets a push notification (if enabled). The ring lasts about 45 seconds.
+- Every device of the person you call gets a push notification (if enabled), also when another of their devices has the app open: a phone with the app closed still rings. A chat the callee muted does not ring by push. The ring lasts about 45 seconds. When it ends (answered elsewhere, cancelled, unanswered) the notification is removed, or replaced by a *missed call* one.
+- Calls are limited per person (12 invitations a minute, 5 per two minutes per conversation) so that nobody can ring someone repeatedly.
+- Keep your device clock roughly right: an invitation whose time is more than ten minutes off from the receiving device is refused, and the call screen then says to check the clock.
 - **Trust in the web app:** like any browser-based end-to-end encryption, the code that does the encryption is delivered by your server. Comparing the emoji code or the safety number detects a tampered *connection or directory*, but a server operator who modifies the web app itself could in principle read future calls. Use verified safety numbers and, for the strongest guarantee, a native client built from audited source. See [End-to-End Encryption Protocol](./E2EE-Protocol.md#threat-model).
 
 ## Admin
 
-Set `CALLS_ENABLED=false` to turn off calling for everyone; the call buttons disappear. Video messages are controlled by the existing file-upload setting (`FILE_UPLOAD`) and retention applies to them like any other file.
+Set `CALLS_ENABLED=false` to turn off calling for everyone; the call buttons disappear, but devices still register and encrypted video messages keep working. Video messages are controlled by the existing file-upload setting (`FILE_UPLOAD`) and retention applies to them like any other file.

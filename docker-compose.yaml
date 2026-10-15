@@ -110,7 +110,10 @@ volumes:
 
 # Optional Standalone Media Worker container service (uncomment to run worker in a separate container):
 #  media-worker:
-#    image: ${SONGBIRD_WORKER_IMAGE:-bllackbull/songbird-worker:latest}
+#    # Aurelle publishes no prebuilt worker image: it is built from ./worker.
+#    build:
+#      context: ./worker
+#    image: ${SONGBIRD_WORKER_IMAGE:-aurelle-worker:latest}
 #    container_name: songbird-media-worker
 #    restart: unless-stopped
 #    environment:

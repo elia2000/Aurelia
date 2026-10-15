@@ -13,7 +13,7 @@ The script targets Ubuntu (22.04+) and needs root privileges (it uses `sudo` aut
 Run the one-liner on your server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bllackbull/Songbird/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelle/main/scripts/install.sh | bash
 ```
 
 This downloads the script, opens the menu, and installs a global `songbird-deploy` command. From then on, launch it anytime with:

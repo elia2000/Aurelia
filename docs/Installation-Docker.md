@@ -59,7 +59,7 @@ docker run hello-world
 ```bash
 sudo mkdir -p /opt/songbird
 cd /opt/songbird
-git clone https://github.com/bllackbull/Songbird.git .
+git clone https://github.com/elia2000/Aurelle.git .
 ```
 
 ## 3. Configure environment
@@ -76,7 +76,7 @@ Songbird defaults to SQLite (`DB_CLIENT=sqlite3`). To use PostgreSQL instead, ed
 :::
 
 :::info Media Worker Container
-Songbird automatically spawns and manages a local Media Worker child process inside the all-in-one container (`bllackbull/songbird:latest`) by default. For distributed or high-load setups, you can offload media processing to the dedicated standalone image (`bllackbull/songbird-worker:latest`) or uncomment the optional `media-worker` service in `docker-compose.yaml`. See [Media Worker](./Media-Worker.md) for details.
+Aurelle automatically spawns and manages a local Media Worker child process inside the all-in-one container (the image built from the root `Dockerfile`) by default. For distributed or high-load setups, you can offload media processing to a standalone worker image that you build from the `worker/` directory (`docker build -t aurelle-worker:latest worker/`), then uncomment the optional `media-worker` service in `docker-compose.yaml` and set `SONGBIRD_WORKER_IMAGE=aurelle-worker:latest` in `.env`. See [Media Worker](./Media-Worker.md) for details.
 :::
 
 ## 4. Set up TLS certificates
@@ -90,14 +90,14 @@ See [SSL Certificates](./SSL-Certificates.md) for the available options.
 
 ## 5. Build and start
 
-Pull the pre-built image and start the containers:
+Aurelle is built from source: `docker-compose.yaml` has a `build:` block, and no prebuilt image is published (the upstream Songbird image on Docker Hub does not include calls, video messages or the Aurelle branding). Build the image and start the containers:
 
 ```bash
 cd /opt/songbird
-docker compose up -d
+docker compose up -d --build
 ```
 
-The image is pulled automatically from Docker Hub on first run. If you prefer to build from source instead, edit `docker-compose.yaml` and swap the `image:` line for the `build:` block (instructions are in the comments).
+The first build compiles the client and installs the server dependencies, so it can take a few minutes. The resulting image is tagged `aurelle:latest` (override the name with `SONGBIRD_IMAGE` in `.env`). If you would rather use an image that you built and pushed to your own registry, remove the `build:` block in `docker-compose.yaml` and set `SONGBIRD_IMAGE` to that image name.
 
 The nginx container waits for the app to pass its health check before it starts accepting traffic. This prevents 502 errors during the brief startup window while migrations run.
 
@@ -162,12 +162,12 @@ If you do not need service control from the admin panel, you can remove the sock
 
 ## Updating
 
-Pull the latest image and restart:
+Pull the latest source, rebuild the image and restart:
 
 ```bash
 cd /opt/songbird
-docker compose pull
-docker compose up -d
+git pull
+docker compose up -d --build
 ```
 
 See the [Updating](./Updating.md) page for the full update procedure.

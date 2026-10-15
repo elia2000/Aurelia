@@ -1,6 +1,6 @@
-# Contributing to Songbird
+# Contributing to Aurelle
 
-Thanks for your interest in contributing!
+Thanks for your interest in contributing to Aurelle, a fork of [Songbird](https://github.com/bllackbull/Songbird)!
 
 ## 🚀 What you can contribute
 

@@ -261,8 +261,10 @@ Calls are peer-to-peer. When the two devices cannot reach each other directly (m
 - The call rings but stays on *Connecting…* between different networks: set up the relay. See [Calls & Video Messages](./Calls-and-Video-Messages.md#setting-up-the-relay).
 - Open `/api/calls/ice-config` while signed in. If `iceServers` is empty, `CALLS_TURN_URLS` or `CALLS_TURN_SECRET` is not set (and the server was not restarted).
 - Check that `3478` (UDP and TCP) and the relay port range `49160-49260` (UDP) are open in the firewall, and that `CALLS_TURN_EXTERNAL_IP` is the server's public address. Check the relay log with `docker compose logs coturn`.
-- Relay authentication fails: `CALLS_TURN_SECRET` must be identical in `.env` for the app and for coturn's `static-auth-secret`. Server and client clocks must be roughly in sync, because the credentials expire.
-- *Security check failed* or *keys changed*: the other person's device keys do not match what this device remembers. Verify the safety number with them before trusting the chat.
+- Relay authentication fails: `CALLS_TURN_SECRET` must be identical in `.env` for the app and for coturn's `static-auth-secret`. The clocks of the app server and the coturn host must be in sync (use NTP), because the credentials embed an expiry time that coturn checks against its own clock.
+- *Security check failed* or *keys changed*: the other person's device keys do not match what this device remembers, or a new device of a contact you verified tried to call. Verify the safety number with them before trusting the chat. See [When a contact gets a new device](./Calls-and-Video-Messages.md#when-a-contact-gets-a-new-device).
+- *This server only allows relayed calls, but no relay is set up*: `CALLS_FORCE_RELAY=true` while `CALLS_TURN_URLS` / `CALLS_TURN_SECRET` are missing or wrong. Calls are refused on purpose (they never fall back to a direct connection that would expose both IP addresses) and the server log says so at start-up. Fix the relay settings or turn the option off.
+- *This device's clock looks wrong*: the invitation's time differs from the receiving device's clock by more than ten minutes. Turn on automatic date and time on that device.
 - Calls work in tests but not behind a load balancer: call state is kept in one app process, so use sticky routing for `/api/calls`.
 - No sound: check the browser's microphone permission and the system output device. The call screen shows *is muted* when the other person muted.
 
@@ -350,4 +352,4 @@ If you encounter any of the issues mentioned below, reinstalling the app via the
 
 ## Still stuck?
 
-If none of the above resolves the issue, gather the relevant log output and open an issue at the [project repository](https://github.com/bllackbull/Songbird/issues).
+If none of the above resolves the issue, gather the relevant log output and open an issue at the [project repository](https://github.com/elia2000/Aurelle/issues).

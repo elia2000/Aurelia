@@ -207,10 +207,19 @@ Remote Channel continuous polling prevents the app from sleeping and burns the m
 
 ## 2. Deploying on CaaS & Kubernetes
 
-You can run Songbird in containerized environments using the official pre-built Docker images from Docker Hub:
+You can run Aurelle in containerized environments, but no prebuilt Docker images are published (the upstream Songbird images on Docker Hub do not include calls, video messages or the Aurelle branding). Build the images from source and push them to a container registry that you control, then point your platform at them:
 
-- **Main Application (Frontend + Backend):** `bllackbull/songbird:latest`
-- **Standalone Media Worker (FFmpeg Transcoder):** `bllackbull/songbird-worker:latest`
+```bash
+git clone https://github.com/elia2000/Aurelle.git
+cd Aurelle
+docker build -t ghcr.io/<your-account>/aurelle:latest .
+docker build -t ghcr.io/<your-account>/aurelle-worker:latest worker/
+docker push ghcr.io/<your-account>/aurelle:latest
+docker push ghcr.io/<your-account>/aurelle-worker:latest
+```
+
+- **Main Application (Frontend + Backend):** built from the root `Dockerfile`, for example `ghcr.io/<your-account>/aurelle:latest`
+- **Standalone Media Worker (FFmpeg Transcoder):** built from `worker/Dockerfile`, for example `ghcr.io/<your-account>/aurelle-worker:latest`
 
 ### Container Configuration
 

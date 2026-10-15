@@ -108,11 +108,15 @@ To disable video transcoding or save CPU and memory resources on low-spec server
 
 ### 2. Standalone Docker Container & Docker Compose
 
-Songbird provides an official, lightweight standalone Media Worker container image on Docker Hub:
+Aurelle includes a lightweight standalone Media Worker image definition in `worker/Dockerfile`. No prebuilt image is published, so build it yourself from a clone of the repository:
 
-```txt
-bllackbull/songbird-worker:latest
+```bash
+git clone https://github.com/elia2000/Aurelle.git
+cd Aurelle
+docker build -t aurelle-worker:latest worker/
 ```
+
+If the worker runs on a different machine than the one you build on, push the image to a registry you control and use that image name below.
 
 This dedicated Alpine Linux-based image (~120 MB) comes pre-configured with Node.js 24 and FFmpeg, running under a non-root user with an active healthcheck.
 
@@ -133,7 +137,7 @@ docker run -d \
   -e STORAGE_ACCESS_KEY_ID=your-access-key \
   -e STORAGE_SECRET_ACCESS_KEY=your-secret-key \
   -e STORAGE_FORCE_PATH_STYLE=true \
-  bllackbull/songbird-worker:latest
+  aurelle-worker:latest
 ```
 
 #### Running with Docker Compose
@@ -164,10 +168,10 @@ STORAGE_FORCE_PATH_STYLE=true
 **3. Start with Docker Compose:**
 
 ```bash
-docker compose -f docker-compose.yaml up -d
+docker compose -f docker-compose.yaml up -d --build
 ```
 
-The pre-built `bllackbull/songbird-worker:latest` image will be pulled automatically. (If you prefer to build from source locally, uncomment the `build:` section in `worker/docker-compose.yaml`).
+The image is built from `worker/Dockerfile` and tagged `aurelle-worker:latest`. (To use an image from your own registry instead, remove the `build:` block in `worker/docker-compose.yaml` and set `SONGBIRD_WORKER_IMAGE` in the worker `.env`.)
 
 ### 3. Deploying on Cloud Platforms (Render, Railway, Fly.io, Koyeb)
 

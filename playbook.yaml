@@ -1,14 +1,16 @@
 ---
-# Songbird for the Doprax App Market (installMethod: repo_playbook).
+# Aurelle (a Songbird fork) for the Doprax App Market (installMethod: repo_playbook).
 #
 # What it does on the target VM (Ubuntu, hosts: all, become: yes):
 #   1. Installs Docker Engine + compose plugin, git and openssl.
-#   2. Clones bllackbull/Songbird into /root/songbird at the latest GitHub
-#      release (falls back to a pinned tag if the API is unreachable).
+#   2. Clones elia2000/Aurelle into /root/songbird at the latest GitHub
+#      release (falls back to the main branch when no release is published
+#      or the API is unreachable).
 #   3. Generates a self-signed TLS cert (certs/) if none exists, so the
 #      bundled nginx (443 -> songbird:5174) comes up without manual steps.
 #      Replace certs/cert.pem + certs/key.pem with real certs for production.
-#   4. Writes a minimal .env (only if missing) and starts the stack.
+#   4. Writes a minimal .env (only if missing), builds the image from source
+#      and starts the stack.
 #   5. Waits for 443 and verifies https://127.0.0.1/api/health.
 #
 # Doprax injects configurationVariables as extra vars. This playbook uses:
@@ -22,12 +24,13 @@
   hosts: all
   become: true
   vars:
-    songbird_repo: "https://github.com/bllackbull/Songbird.git"
+    songbird_repo: "https://github.com/elia2000/Aurelle.git"
     # "latest" resolves to the newest GitHub release tag at install time.
-    # Set to an explicit tag (e.g. "v0.12.1") to pin a version instead.
+    # Set to an explicit tag or branch (e.g. "v0.12.1" or "main") to pin instead.
     songbird_version: "latest"
-    # Used only when "latest" is requested but the GitHub API is unreachable.
-    songbird_version_fallback: "v0.12.4"
+    # Used when "latest" is requested but no release exists yet (Aurelle may not
+    # have published any) or the GitHub API is unreachable.
+    songbird_version_fallback: "main"
     songbird_src: "/root/songbird"
     songbird_domain: "{{ external_domain | default('') }}"
     songbird_http_port: 80
@@ -73,7 +76,7 @@
 
     - name: Resolve latest Songbird release
       ansible.builtin.uri:
-        url: https://api.github.com/repos/bllackbull/Songbird/releases/latest
+        url: https://api.github.com/repos/elia2000/Aurelle/releases/latest
         return_content: yes
       register: songbird_release
       failed_when: false
@@ -124,9 +127,9 @@
           DB_CLIENT=sqlite3
           APP_PUBLIC_URL={{ 'https://' + songbird_domain if (songbird_domain | length > 0) else '' }}
 
-    - name: Pull images and start the stack
+    - name: Build the image and start the stack
       ansible.builtin.shell:
-        cmd: docker compose up -d
+        cmd: docker compose up -d --build
         chdir: "{{ songbird_src }}"
       register: songbird_compose
       changed_when: "'Started' in songbird_compose.stdout or 'Creating' in songbird_compose.stdout"

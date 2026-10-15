@@ -47,8 +47,11 @@ Aurelle از روی سورس ساخته می‌شود. با Docker:
 git clone https://github.com/elia2000/Aurelle.git
 cd Aurelle
 cp .env.example .env
+bash scripts/gen-certs.sh    # گواهی TLS خودامضا برای آزمایش -> certs/cert.pem و certs/key.pem
 docker compose up -d --build
 ```
+
+nginx همراه پروژه پیش از اجرا به فایل‌های `certs/cert.pem` و `certs/key.pem` نیاز دارد (اگر وجود نداشته باشند، Docker به‌جای آن‌ها پوشه‌های خالی با همین نام می‌سازد و nginx مدام از کار می‌افتد و دوباره راه‌اندازی می‌شود). دستور `scripts/gen-certs.sh` یک جفت گواهی و کلید خودامضا برای آزمایش می‌سازد؛ برای اینکه دامنه یا IP شما را هم پوشش دهد، آن را به‌عنوان آرگومان بدهید (`bash scripts/gen-certs.sh example.com`). مرورگرها هشدار امنیتی نشان می‌دهند و push notification با این گواهی کار نمی‌کند؛ پس برای استفاده‌ی واقعی یک گواهی معتبر نصب کنید؛ راهنمای [گواهی‌نامه‌های SSL](docs/fa/SSL-Certificates.md) را ببینید.
 
 یا روی یک سرور Ubuntu (نسخه 22.04+) با دسترسی `sudo` از اسکریپت نصب استفاده کنید:
 

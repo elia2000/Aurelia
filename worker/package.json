@@ -3,12 +3,12 @@
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/bllackbull/songbird.git"
+    "url": "git+https://github.com/elia2000/Aurelle.git"
   },
   "bugs": {
-    "url": "https://github.com/bllackbull/songbird/issues"
+    "url": "https://github.com/elia2000/Aurelle/issues"
   },
-  "homepage": "https://github.com/bllackbull/songbird#readme",
+  "homepage": "https://github.com/elia2000/Aurelle#readme",
   "type": "module",
   "scripts": {
     "dev": "node --watch --watch-path=. --watch-path=../.env index.js",
