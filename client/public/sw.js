@@ -113,7 +113,12 @@ self.addEventListener("push", (event) => {
   const body = payload.body || "New message";
   const data = payload.data || {};
   const badgeCount = Number(payload.badge || 0);
-  const tag = data.chatId ? `chat-${data.chatId}` : "songbird";
+  const isCall = data.type === "call";
+  const tag = isCall
+    ? `call-${data.callId}`
+    : data.chatId
+      ? `chat-${data.chatId}`
+      : "songbird";
   const options = {
     body,
     data,
@@ -121,6 +126,8 @@ self.addEventListener("push", (event) => {
     renotify: true,
     badge: "/icons/icon-192.png",
     icon: "/icons/icon-192.png",
+    // An incoming call must stay on screen until it is answered or expires.
+    ...(isCall ? { requireInteraction: true, vibrate: [300, 200, 300, 200, 300] } : {}),
   };
   event.waitUntil(
     (async () => {

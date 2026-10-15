@@ -6,6 +6,14 @@ import {
 } from "../../utils/messageOwnership.js";
 import { normalizeUuid } from "../../utils/uuidUtils.js";
 
+const CALL_EVENT_TYPES = new Set([
+  "call_invite",
+  "call_accept",
+  "call_signal",
+  "call_end",
+  "call_accepted_elsewhere",
+]);
+
 const patchChatAndMoveToFront = (chats, chatId, updateChat) => {
   const targetChatId = normalizeUuid(chatId) || null;
   if (!targetChatId) return { nextChats: chats, found: false };
@@ -197,8 +205,16 @@ export function useChatEvents({
           payload.type !== "profile_updated" &&
           payload.type !== "chat_typing" &&
           payload.type !== "session_revoked" &&
-          payload.type !== "remote_channel_queue"
+          payload.type !== "remote_channel_queue" &&
+          !CALL_EVENT_TYPES.has(payload.type)
         ) {
+          return;
+        }
+        if (CALL_EVENT_TYPES.has(payload.type)) {
+          // Call signaling is handled by CallProvider, not the chat state.
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent("aurelle:call-event", { detail: payload }));
+          }
           return;
         }
         if (typeof window !== "undefined") {

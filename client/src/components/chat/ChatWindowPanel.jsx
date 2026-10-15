@@ -20,6 +20,7 @@ import Avatar from "../common/Avatar.jsx";
 import UserRoleBadge from "../common/UserRoleBadge.jsx";
 import VerifiedBadge from "../common/VerifiedBadge.jsx";
 import Tooltip from "../common/Tooltip.jsx";
+import CallButtons from "../calls/CallButtons.jsx";
 import {
   FocusedMediaModal,
   MessageComposer,
@@ -135,6 +136,10 @@ export default function ChatWindowPanel({
       ? window.matchMedia("(max-width: 767px) and (pointer: coarse)").matches
       : false,
   );
+  const showCallButtons =
+    activeChat?.type === "dm" &&
+    Boolean(activeHeaderPeer?.id) &&
+    !activeHeaderPeer?.isDeleted;
   const activePeerColor =
     activeHeaderPeer?.color ||
     headerAvatarColor ||
@@ -1143,6 +1148,10 @@ export default function ChatWindowPanel({
             >
               <ArrowLeft size={18} />
             </button>
+            {showCallButtons ? (
+              // Mirrors the call buttons on the right so the title stays centred on desktop.
+              <span aria-hidden="true" className="hidden shrink-0 md:block" style={{ width: 70 }} />
+            ) : null}
             <ContextMenuSurface
               as="div"
               className="flex min-w-0 flex-1 flex-col items-center justify-center gap-1"
@@ -1262,6 +1271,9 @@ export default function ChatWindowPanel({
                 ) : null}
               </>
             </ContextMenuSurface>
+            {showCallButtons ? (
+              <CallButtons chatId={activeChatId} peer={activeHeaderPeer} />
+            ) : null}
             {headerAvatarIcon ? (
               <ContextMenuSurface
                 as="div"

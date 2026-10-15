@@ -22,11 +22,17 @@ const PWA_PERMISSIONS_PROMPT_KEY = 'songbird-pwa-permissions-prompt'
 const ROUTE_CHUNK_TELEMETRY_KEY = 'songbird-route-chunk-telemetry-v1'
 const CHUNK_RECOVERY_ATTEMPT_KEY = 'songbird-chunk-recovery-attempted'
 const loadAuthPage = () => import('./pages/AuthPage.jsx')
-const loadChatPage = () => import('./pages/ChatPage.jsx')
+const loadCallLayer = () => import('./calls/CallLayer.jsx')
+// The call layer wraps the chat page, so fetch both chunks in parallel.
+const loadChatPage = () => {
+  loadCallLayer().catch(() => null)
+  return import('./pages/ChatPage.jsx')
+}
 const loadInvitePage = () => import('./pages/InvitePage.jsx')
 const loadAdminPage = () => import('./pages/AdminPage.jsx')
 const AuthPage = lazy(loadAuthPage)
 const ChatPage = lazy(loadChatPage)
+const CallLayer = lazy(loadCallLayer)
 const InvitePage = lazy(loadInvitePage)
 const AdminPage = lazy(loadAdminPage)
 
@@ -1047,16 +1053,18 @@ export default function App() {
               {user && (route === 'chat' || route === 'admin') ? (
                 // Keep ChatPage mounted while visiting /admin so health, SSE,
                 // and in-memory caches survive. Hide it instead of unmounting.
-                <div
-                  className={
-                    route === 'admin'
-                      ? 'hidden'
-                      : 'flex min-h-0 h-full w-full flex-1'
-                  }
-                  aria-hidden={route === 'admin' ? true : undefined}
-                >
-                  <ChatPage user={user} setUser={setUser} isDark={isDark} setIsDark={setIsDark} toggleTheme={toggleTheme} adminPanelEnabled={adminPanelEnabled} />
-                </div>
+                <CallLayer user={user}>
+                  <div
+                    className={
+                      route === 'admin'
+                        ? 'hidden'
+                        : 'flex min-h-0 h-full w-full flex-1'
+                    }
+                    aria-hidden={route === 'admin' ? true : undefined}
+                  >
+                    <ChatPage user={user} setUser={setUser} isDark={isDark} setIsDark={setIsDark} toggleTheme={toggleTheme} adminPanelEnabled={adminPanelEnabled} />
+                  </div>
+                </CallLayer>
               ) : null}
               {route === 'admin' && user && adminPanelEnabled ? (
                 <AdminPage user={user} setUser={setUser} isDark={isDark} onToggleTheme={toggleTheme} onBack={() => navigate('/chat', true)} />

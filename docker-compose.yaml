@@ -58,6 +58,48 @@ services:
       songbird:
         condition: service_healthy
 
+  # TURN/STUN relay for voice and video calls (optional, enable with
+  #   docker compose --profile calls up -d
+  # and set CALLS_TURN_SECRET / CALLS_TURN_URLS / CALLS_TURN_EXTERNAL_IP in .env).
+  # Calls are end-to-end encrypted and peer-to-peer; the relay is only used when
+  # a direct path is impossible (strict NAT / carrier networks) and only ever
+  # forwards ciphertext. Host networking is used so the UDP relay range works
+  # without publishing hundreds of ports.
+  coturn:
+    profiles: ["calls"]
+    image: coturn/coturn:4.6-alpine
+    container_name: aurelle-coturn
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - "-n"
+      - "--log-file=stdout"
+      - "--realm=${CALLS_TURN_REALM:-aurelle}"
+      - "--listening-port=${CALLS_TURN_PORT:-3478}"
+      - "--use-auth-secret"
+      - "--static-auth-secret=${CALLS_TURN_SECRET:-}"
+      - "--external-ip=${CALLS_TURN_EXTERNAL_IP:-}"
+      - "--min-port=${CALLS_TURN_MIN_PORT:-49160}"
+      - "--max-port=${CALLS_TURN_MAX_PORT:-49260}"
+      - "--fingerprint"
+      - "--no-cli"
+      - "--no-multicast-peers"
+      - "--no-software-attribute"
+      - "--no-tlsv1"
+      - "--no-tlsv1_1"
+      # Never let the relay reach private networks or the host itself.
+      - "--denied-peer-ip=0.0.0.0-0.255.255.255"
+      - "--denied-peer-ip=10.0.0.0-10.255.255.255"
+      - "--denied-peer-ip=100.64.0.0-100.127.255.255"
+      - "--denied-peer-ip=127.0.0.0-127.255.255.255"
+      - "--denied-peer-ip=169.254.0.0-169.254.255.255"
+      - "--denied-peer-ip=172.16.0.0-172.31.255.255"
+      - "--denied-peer-ip=192.168.0.0-192.168.255.255"
+      # Keep a single user from exhausting the relay.
+      - "--user-quota=${CALLS_TURN_USER_QUOTA:-6}"
+      - "--total-quota=${CALLS_TURN_TOTAL_QUOTA:-200}"
+      - "--max-bps=${CALLS_TURN_MAX_BPS:-262144}"
+
 volumes:
   songbird-data:
   # Optional volume for PostgreSQL database:
