@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import crypto from "node:crypto";
-import { readCallsConfig, buildIceServers } from "../../lib/callsConfig.js";
+import { readCallsConfig, buildIceServers, callsConfigWarnings } from "../../lib/callsConfig.js";
 
 describe("readCallsConfig", () => {
   test("defaults: enabled, no servers, 6h credentials", () => {
@@ -52,17 +52,33 @@ describe("buildIceServers", () => {
     expect(out.ttlSeconds).toBe(3600);
   });
 
-  test("force-relay is only advertised when a relay exists", () => {
+  test("force-relay is honoured with a relay and FAILS CLOSED without one", () => {
     const withRelay = readCallsConfig({
       CALLS_TURN_URLS: "turn:t.example.com:3478",
       CALLS_TURN_SECRET: "s",
       CALLS_FORCE_RELAY: "true",
     });
-    expect(buildIceServers(withRelay, "u").forceRelay).toBe(true);
-    const noRelay = readCallsConfig({ CALLS_FORCE_RELAY: "true" });
+    const ok = buildIceServers(withRelay, "u");
+    expect(ok.forceRelay).toBe(true);
+    expect(ok.relayUnavailable).toBe(false);
+
+    // A typo in the secret must never silently expose both IP addresses.
+    const noRelay = buildIceServers(readCallsConfig({ CALLS_FORCE_RELAY: "true" }), "u");
     expect(noRelay.forceRelay).toBe(true);
-    expect(buildIceServers(noRelay, "u").forceRelay).toBe(false);
-    expect(buildIceServers(readCallsConfig({}), "u").forceRelay).toBe(false);
+    expect(noRelay.relayUnavailable).toBe(true);
+    expect(noRelay.iceServers).toEqual([]);
+
+    const plain = buildIceServers(readCallsConfig({}), "u");
+    expect(plain.forceRelay).toBe(false);
+    expect(plain.relayUnavailable).toBe(false);
+  });
+
+  test("start-up warnings explain relay misconfiguration", () => {
+    expect(callsConfigWarnings(readCallsConfig({}))).toEqual([]);
+    expect(callsConfigWarnings(readCallsConfig({ CALLS_ENABLED: "false", CALLS_FORCE_RELAY: "true" }))).toEqual([]);
+    expect(callsConfigWarnings(readCallsConfig({ CALLS_FORCE_RELAY: "true" })).join(" ")).toMatch(/refused/);
+    expect(callsConfigWarnings(readCallsConfig({ CALLS_TURN_URLS: "turn:a:3478" })).join(" ")).toMatch(/SECRET is empty/);
+    expect(callsConfigWarnings(readCallsConfig({ CALLS_TURN_SECRET: "x" })).join(" ")).toMatch(/URLS is empty/);
   });
 
   test("does not hand out TURN URLs without a secret", () => {

@@ -42,6 +42,16 @@ export function makeE2eeStore() {
       row.revoked_at = nowTs();
       return 1;
     },
+    revokeStalestE2eeDevice: (userId) => {
+      const active = [...devices.values()]
+        .filter((d) => d.user_id === userId && !d.revoked_at)
+        .sort((a, b) =>
+          `${a.last_seen_at}|${a.created_at}`.localeCompare(`${b.last_seen_at}|${b.created_at}`),
+        );
+      if (!active.length) return null;
+      active[0].revoked_at = nowTs();
+      return active[0].id;
+    },
     listE2eeDevicesByUserIds: (userIds = []) =>
       [...devices.values()].filter(
         (d) => userIds.includes(d.user_id) && !d.revoked_at,

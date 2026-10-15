@@ -25,7 +25,7 @@ const userRow = (id, username) => ({
 
 function makeEnvelope(senderDeviceId, recipientDeviceId) {
   return {
-    v: 1,
+    v: 2,
     kind: "video_note",
     senderDeviceId,
     iv: b64u(12),
@@ -33,8 +33,8 @@ function makeEnvelope(senderDeviceId, recipientDeviceId) {
     mime: "video/mp4",
     poster: { iv: b64u(12), ct: b64u(500) },
     keys: [
-      { deviceId: senderDeviceId, epk: b64u(65), iv: b64u(12), ct: b64u(48) },
-      { deviceId: recipientDeviceId, epk: b64u(65), iv: b64u(12), ct: b64u(48) },
+      { deviceId: senderDeviceId, epk: makeP256PublicKey(), iv: b64u(12), ct: b64u(48) },
+      { deviceId: recipientDeviceId, epk: makeP256PublicKey(), iv: b64u(12), ct: b64u(48) },
     ],
     sig: b64u(64),
   };
@@ -128,11 +128,11 @@ describe("POST /api/messages/upload with an E2EE video-note envelope", () => {
     });
   };
 
-  const upload = (envelope) =>
+  const upload = (envelope, extra = { clientRequestId: "req-0001" }) =>
     request(ctx.app)
       .post("/api/messages/upload")
       .set("Cookie", ["sid=tok-alice"])
-      .send({ e2eeEnvelope: JSON.stringify(envelope) });
+      .send({ e2eeEnvelope: JSON.stringify(envelope), ...extra });
 
   beforeEach(() => {
     tmpDir = realFs.mkdtempSync(realPath.join(os.tmpdir(), "sb-e2ee-vn-"));
@@ -163,6 +163,19 @@ describe("POST /api/messages/upload with an E2EE video-note envelope", () => {
     expect(event.summaryText).toBe("Sent a video message");
     expect(event.body).toBe("Sent a video message");
     expect(event.e2ee.durationMs).toBe(9000);
+  });
+
+  test("requires a request id: it is part of what the sender signs", async () => {
+    build();
+    const envelope = makeEnvelope(aliceDevice.id, bobDevice.id);
+    const missing = await upload(envelope, {});
+    expect(missing.status).toBe(400);
+    expect(missing.body.error).toMatch(/request id/i);
+    // A value the server would have to truncate cannot match what was signed.
+    const tooLong = await upload(envelope, { clientRequestId: "x".repeat(130) });
+    expect(tooLong.status).toBe(400);
+    expect(setMessageE2eeEnvelope).not.toHaveBeenCalled();
+    expect(removeUploadedFiles).toHaveBeenCalled();
   });
 
   test("rejects a malformed envelope and removes the uploaded file", async () => {
@@ -255,7 +268,11 @@ describe("E2EE envelopes in message lists and forwarding", () => {
   test("GET /api/messages returns the parsed envelope and never the raw column", async () => {
     const ctx = makeSession({
       getMessages: () => ({
-        messages: [baseRow({ e2ee_envelope: JSON.stringify(envelope) }), baseRow({ id: "e0e0e0e0-f1f1-4020-c151-282828282828" })],
+        // Like the real query, these rows carry no chat id.
+        messages: [
+          baseRow({ e2ee_envelope: JSON.stringify(envelope), chat_id: undefined }),
+          baseRow({ id: "e0e0e0e0-f1f1-4020-c151-282828282828", chat_id: undefined }),
+        ],
         hasMore: false,
       }),
     });
@@ -267,6 +284,11 @@ describe("E2EE envelopes in message lists and forwarding", () => {
     expect(res.body.messages[0].e2ee.kind).toBe("video_note");
     expect(res.body.messages[0].e2ee_envelope).toBeUndefined();
     expect(res.body.messages[1].e2ee).toBeNull();
+    // Recipients need the chat id the sender signed (message rows carry none),
+    // and the request id, author and chat must reach them unchanged.
+    expect(res.body.messages[0].chat_id).toBe(CHAT_ID);
+    expect(res.body.messages[1].chat_id).toBeUndefined();
+    expect(res.body.messages[0]).toHaveProperty("user_id");
   });
 
   test("encrypted messages cannot be forwarded", async () => {

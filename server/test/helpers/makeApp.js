@@ -462,6 +462,8 @@ export function makeApp(overrides = {}) {
     createE2eeDevice: e2eeStore.createE2eeDevice,
     touchE2eeDevice: e2eeStore.touchE2eeDevice,
     revokeE2eeDevice: e2eeStore.revokeE2eeDevice,
+    revokeStalestE2eeDevice: e2eeStore.revokeStalestE2eeDevice,
+    userHasMessageInChat: () => false,
     listE2eeDevicesByUserIds: e2eeStore.listE2eeDevicesByUserIds,
     setMessageE2eeEnvelope: () => {},
     callRegistry: createCallRegistry(),

@@ -3676,6 +3676,46 @@ export function revokeE2eeDevice(userId, deviceId) {
   );
 }
 
+/**
+ * Revokes the device of `userId` that has been idle the longest. Used to make
+ * room when someone registers more browsers than the per-user cap allows
+ * (private windows, cleared site data), instead of locking them out.
+ * Resolves to the revoked device id, or null.
+ */
+export function revokeStalestE2eeDevice(userId) {
+  if (!userId) return isPostgresMode() ? Promise.resolve(null) : null;
+  const rawRow = getRow(
+    dbKnex("e2ee_devices")
+      .select("id")
+      .where("user_id", userId)
+      .whereNull("revoked_at")
+      .orderBy("last_seen_at", "asc")
+      .orderBy("created_at", "asc")
+      .first(),
+  );
+  const finish = (row) => {
+    if (!row?.id) return null;
+    const res = revokeE2eeDevice(userId, row.id);
+    if (res && typeof res.then === "function") return res.then(() => row.id);
+    return row.id;
+  };
+  if (rawRow && typeof rawRow.then === "function") return rawRow.then(finish);
+  return finish(rawRow);
+}
+
+/** True when `userId` has authored at least one message in `chatId`. */
+export function userHasMessageInChat(chatId, userId) {
+  if (!chatId || !userId) return isPostgresMode() ? Promise.resolve(false) : false;
+  const row = getRow(
+    dbKnex("chat_messages")
+      .select("id")
+      .where({ chat_id: chatId, user_id: userId })
+      .first(),
+  );
+  if (row && typeof row.then === "function") return row.then((r) => Boolean(r));
+  return Boolean(row);
+}
+
 export function listE2eeDevicesByUserIds(userIds = []) {
   const ids = Array.from(
     new Set((Array.isArray(userIds) ? userIds : []).filter(Boolean)),

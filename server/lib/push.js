@@ -70,7 +70,7 @@ export function createPushService({
     await Promise.all(
       targets.map(async (sub) => {
         const badge = badgeByUserId[sub.user_id] ?? 1;
-        const isCall = payload?.data?.type === "call";
+        const isCall = ["call", "call_end"].includes(payload?.data?.type);
         // Call alerts are not message previews, so the preview opt-out does
         // not apply to them. They also expire fast: ringing is pointless
         // once the caller has given up.

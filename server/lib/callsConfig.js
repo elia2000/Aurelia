@@ -58,13 +58,35 @@ export function buildIceServers(config, userId, nowMs = Date.now()) {
       .digest("base64");
     servers.push({ urls: config.turnUrls, username, credential });
   }
+  const hasRelay = Boolean(expiresAt);
   return {
     iceServers: servers,
-    hasRelay: Boolean(expiresAt),
-    // Only meaningful (and only honoured) when a relay is actually available;
-    // forcing relay-only without one would make every call fail.
-    forceRelay: Boolean(config.forceRelay && expiresAt),
+    hasRelay,
+    // "Never reveal IP addresses" must fail CLOSED: when the operator asked
+    // for relay-only calls but no relay is usable, calls are refused instead
+    // of quietly falling back to a direct connection that exposes both IPs.
+    forceRelay: Boolean(config.forceRelay),
+    relayUnavailable: Boolean(config.forceRelay && !hasRelay),
     expiresAt,
-    ttlSeconds: expiresAt ? config.credentialTtlSeconds : null,
+    ttlSeconds: hasRelay ? config.credentialTtlSeconds : null,
   };
+}
+
+/** Misconfigurations worth logging once at start-up. */
+export function callsConfigWarnings(config) {
+  const warnings = [];
+  if (!config.enabled) return warnings;
+  const hasRelay = Boolean(config.turnUrls.length && config.turnSecret);
+  if (config.forceRelay && !hasRelay) {
+    warnings.push(
+      "CALLS_FORCE_RELAY is on but CALLS_TURN_URLS / CALLS_TURN_SECRET are not both set. Calls will be refused until a relay is configured (they will NOT fall back to direct connections).",
+    );
+  }
+  if (config.turnUrls.length && !config.turnSecret) {
+    warnings.push("CALLS_TURN_URLS is set but CALLS_TURN_SECRET is empty: the relay is unusable.");
+  }
+  if (!config.turnUrls.length && config.turnSecret) {
+    warnings.push("CALLS_TURN_SECRET is set but CALLS_TURN_URLS is empty: the relay is unusable.");
+  }
+  return warnings;
 }

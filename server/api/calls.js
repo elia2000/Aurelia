@@ -1,28 +1,57 @@
-import rateLimit from "express-rate-limit";
 import { validateUuidBody, validateUuidParams } from "../lib/uuidMiddleware.js";
-import { isBase64Url } from "../lib/e2eeKeys.js";
+import { isBase64Url, isValidP256PublicKey } from "../lib/e2eeKeys.js";
 import { CALL_KINDS, CallError } from "../lib/calls.js";
 import { buildIceServers } from "../lib/callsConfig.js";
+import { createThrottle } from "../lib/throttle.js";
 
 const MAX_SIGNAL_BLOB_CHARS = 32 * 1024;
 const SIGNAL_KINDS = new Set(["offer", "answer", "ice"]);
 const INVITE_CLOCK_SKEW_MS = 2 * 60 * 1000;
 const CALL_PUSH_TTL_SECONDS = 45;
+// A "the call is over" push only matters to a device that is still showing the
+// ringing notification, so it expires quickly too.
+const CALL_END_PUSH_TTL_SECONDS = 60;
 
 const maybe = async (value) =>
   value && typeof value.then === "function" ? await value : value;
 
 const isIntegerMs = (value) => Number.isFinite(value) && Math.abs(value) < 8.64e15;
 
-function validAuthBlock(block) {
-  return (
+const isStringId = (value) => typeof value === "string" && value.length > 0;
+
+// The invite does not carry the caller's ephemeral key yet, only a hash of it
+// (a commitment). The key itself is revealed later, inside the first encrypted
+// offer, so that neither side can pick its key after seeing the other's.
+function validInviteBlock(block) {
+  return Boolean(
     block &&
-    typeof block === "object" &&
-    typeof block.deviceId === "string" &&
-    isBase64Url(block.eph, { minBytes: 65, maxBytes: 65 }) &&
-    isBase64Url(block.sig, { minBytes: 64, maxBytes: 64 })
+      typeof block === "object" &&
+      isStringId(block.deviceId) &&
+      isBase64Url(block.commit, { minBytes: 32, maxBytes: 32 }) &&
+      isBase64Url(block.sig, { minBytes: 64, maxBytes: 64 }),
   );
 }
+
+function validAcceptBlock(block) {
+  return Boolean(
+    block &&
+      typeof block === "object" &&
+      isStringId(block.deviceId) &&
+      isValidP256PublicKey(block.eph) &&
+      isBase64Url(block.sig, { minBytes: 64, maxBytes: 64 }),
+  );
+}
+
+// validateUuidBody stringifies its input, so ["<uuid>"] would pass it; make
+// sure these really are strings before anything is used as a registry key.
+const requireStringFields = (...fields) => (req, res, next) => {
+  for (const field of fields) {
+    if (typeof req.body?.[field] !== "string") {
+      return res.status(400).json({ error: `Field '${field}' must be a string.` });
+    }
+  }
+  next();
+};
 
 /**
  * 1:1 call signaling.
@@ -47,6 +76,7 @@ function registerCallRoutes(app, deps) {
     emitToUser,
     sendPushNotificationToUsers,
     isUserConnected,
+    listMutedUserIdsForChat,
   } = deps;
 
   const emit = (username, payload) => {
@@ -60,23 +90,14 @@ function registerCallRoutes(app, deps) {
   const config = () =>
     typeof callsConfig === "function" ? callsConfig() : callsConfig || {};
 
-  const rateHandler = (_req, res) =>
+  // Limits are per signed-in person, not per IP address: behind a proxy that
+  // does not forward the client address everybody would share one bucket, and
+  // a limit per IP does nothing against someone using several addresses.
+  const inviteThrottle = createThrottle({ windowMs: 60 * 1000, max: 12 });
+  const invitePairThrottle = createThrottle({ windowMs: 2 * 60 * 1000, max: 5 });
+  const signalThrottle = createThrottle({ windowMs: 60 * 1000, max: 300 });
+  const tooMany = (res) =>
     res.status(429).json({ error: "Too many call requests. Please slow down." });
-
-  const inviteLimiter = rateLimit({
-    windowMs: 60 * 1000,
-    max: 12,
-    standardHeaders: true,
-    legacyHeaders: false,
-    handler: rateHandler,
-  });
-  const signalLimiter = rateLimit({
-    windowMs: 60 * 1000,
-    max: 300,
-    standardHeaders: true,
-    legacyHeaders: false,
-    handler: rateHandler,
-  });
 
   const resolveCaller = async (req, res) => {
     if (config().enabled === false) {
@@ -95,6 +116,14 @@ function registerCallRoutes(app, deps) {
     return user;
   };
 
+  // CALLS_FORCE_RELAY promises that nobody learns the other person's IP
+  // address. Without a usable relay the only honest answer is to refuse.
+  const relayUnavailable = (res) =>
+    res.status(503).json({
+      error: "This server requires relayed calls, but no relay is configured.",
+      code: "relay_unavailable",
+    });
+
   const sendCallError = (res, error) => {
     if (error instanceof CallError) {
       return res.status(error.status).json({ error: error.message, code: error.code });
@@ -111,10 +140,36 @@ function registerCallRoutes(app, deps) {
     color: user.color || null,
   });
 
+  // A phone that is not running the app is told about a call by web push. The
+  // same device must also be told when the call is over, otherwise the sticky
+  // "Incoming call" notification stays on screen after the caller gave up or
+  // another device answered.
+  const pushCallOver = (call, reason) => {
+    if (!call.pushed || typeof sendPushNotificationToUsers !== "function") return;
+    const unanswered = !call.answeredAt && ["cancelled", "missed", "timeout"].includes(reason);
+    void Promise.resolve(
+      sendPushNotificationToUsers([call.callee.id], {
+        title: call.pushTitle || "Aurelle",
+        body: call.kind === "video" ? "Missed video call" : "Missed voice call",
+        ttl: CALL_END_PUSH_TTL_SECONDS,
+        data: {
+          type: "call_end",
+          callId: call.id,
+          chatId: call.chatId,
+          reason: unanswered ? "missed" : reason,
+          url: "/",
+        },
+      }),
+    ).catch(() => {});
+  };
+
   const endAndNotify = (call, reason, byUserId = null) => {
     const payload = { type: "call_end", callId: call.id, reason, by: byUserId };
     emit(call.caller.username, payload);
     emit(call.callee.username, payload);
+    // A call that was answered already told the callee's devices at that
+    // moment (see the accept route); only one that rang out needs this.
+    if (!call.answeredAt) pushCallOver(call, reason);
   };
 
   // Periodic expiry: unanswered calls become "missed", dead calls are freed.
@@ -134,6 +189,7 @@ function registerCallRoutes(app, deps) {
     if (!user) return;
     const result = buildIceServers(config(), user.id);
     res.set("Cache-Control", "no-store");
+    if (result.relayUnavailable) return relayUnavailable(res);
     return res.json(result);
   });
 
@@ -160,7 +216,7 @@ function registerCallRoutes(app, deps) {
 
   app.post(
     "/api/calls",
-    inviteLimiter,
+    requireStringFields("callId", "chatId"),
     validateUuidBody([
       { field: "callId", required: true },
       { field: "chatId", required: true },
@@ -170,10 +226,16 @@ function registerCallRoutes(app, deps) {
       if (!caller) return;
       const { callId, chatId, kind, invite } = req.body || {};
 
+      if (!inviteThrottle.take(caller.id) || !invitePairThrottle.take(`${caller.id}:${chatId}`)) {
+        return tooMany(res);
+      }
+      if (buildIceServers(config(), caller.id).relayUnavailable) {
+        return relayUnavailable(res);
+      }
       if (!CALL_KINDS.includes(kind)) {
         return res.status(400).json({ error: "Invalid call type." });
       }
-      if (!validAuthBlock(invite) || !isIntegerMs(Number(invite.ts))) {
+      if (!validInviteBlock(invite) || !isIntegerMs(Number(invite.ts))) {
         return res.status(400).json({ error: "Invalid call invitation." });
       }
       if (Math.abs(Date.now() - Number(invite.ts)) > INVITE_CLOCK_SKEW_MS) {
@@ -209,7 +271,7 @@ function registerCallRoutes(app, deps) {
           callerDeviceId: invite.deviceId,
           invitePayload: {
             deviceId: invite.deviceId,
-            eph: invite.eph,
+            commit: invite.commit,
             ts: Number(invite.ts),
             sig: invite.sig,
           },
@@ -225,12 +287,21 @@ function registerCallRoutes(app, deps) {
           invite: call.invitePayload,
         });
 
-        const calleeOnline =
-          typeof isUserConnected === "function" && isUserConnected(calleeRow.username);
-        if (!calleeOnline && typeof sendPushNotificationToUsers === "function") {
+        // Always ring by push as well: "the user has a live connection" is
+        // per person, but a person can have a phone with the app closed and a
+        // forgotten desktop tab. The service worker stays quiet when a window
+        // of the app is focused, and the notification is replaced (same tag)
+        // if the page shows its own.
+        const mutedIds = await maybe(
+          typeof listMutedUserIdsForChat === "function" ? listMutedUserIdsForChat(chatId) : [],
+        );
+        const calleeMuted = Array.isArray(mutedIds) && mutedIds.includes(calleeRow.id);
+        if (!calleeMuted && typeof sendPushNotificationToUsers === "function") {
+          call.pushed = true;
+          call.pushTitle = caller.nickname || caller.username;
           void Promise.resolve(
             sendPushNotificationToUsers([calleeRow.id], {
-              title: caller.nickname || caller.username,
+              title: call.pushTitle,
               body: kind === "video" ? "Incoming video call" : "Incoming voice call",
               ttl: CALL_PUSH_TTL_SECONDS,
               data: { type: "call", callId, chatId, url: "/" },
@@ -256,7 +327,7 @@ function registerCallRoutes(app, deps) {
       const user = await resolveCaller(req, res);
       if (!user) return;
       const { accept } = req.body || {};
-      if (!validAuthBlock(accept)) {
+      if (!validAcceptBlock(accept)) {
         return res.status(400).json({ error: "Invalid call answer." });
       }
       const device = await maybe(findE2eeDevice(user.id, accept.deviceId));
@@ -276,6 +347,7 @@ function registerCallRoutes(app, deps) {
           callId: call.id,
           deviceId: accept.deviceId,
         });
+        pushCallOver(call, "answered");
         return res.json({ ok: true });
       } catch (error) {
         return sendCallError(res, error);
@@ -285,12 +357,12 @@ function registerCallRoutes(app, deps) {
 
   app.post(
     "/api/calls/:callId/signal",
-    signalLimiter,
     validateUuidParams("callId"),
     async (req, res) => {
       const user = await resolveCaller(req, res);
       if (!user) return;
-      const { kind, blob, seq } = req.body || {};
+      if (!signalThrottle.take(user.id)) return tooMany(res);
+      const { kind, blob, seq, eph } = req.body || {};
       if (!SIGNAL_KINDS.has(kind)) {
         return res.status(400).json({ error: "Invalid signal type." });
       }
@@ -307,6 +379,22 @@ function registerCallRoutes(app, deps) {
       if (!["connecting", "active"].includes(call.state)) {
         return res.status(409).json({ error: "Call is not in progress." });
       }
+      // The caller reveals its ephemeral key (the one it committed to in the
+      // invite) in the clear alongside its FIRST offer, once. Everything else
+      // in the offer is encrypted with keys derived from it.
+      let reveal = null;
+      if (eph !== undefined) {
+        if (
+          kind !== "offer" ||
+          role !== "caller" ||
+          call.ephRevealed ||
+          !isValidP256PublicKey(eph)
+        ) {
+          return res.status(400).json({ error: "Invalid key reveal." });
+        }
+        call.ephRevealed = true;
+        reveal = eph;
+      }
       const peer = role === "caller" ? call.callee : call.caller;
       emit(peer.username, {
         type: "call_signal",
@@ -314,6 +402,7 @@ function registerCallRoutes(app, deps) {
         kind,
         blob,
         seq: Number.isInteger(seq) ? seq : 0,
+        ...(reveal ? { eph: reveal } : {}),
         toDeviceId: role === "caller" ? call.calleeDeviceId : call.callerDeviceId,
       });
       return res.json({ ok: true });

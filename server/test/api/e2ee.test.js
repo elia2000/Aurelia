@@ -46,6 +46,7 @@ describe("E2EE device directory API", () => {
         isMember: (chatId, userId) =>
           (members[chatId] || []).some((m) => m.id === userId),
         listChatMembers: (chatId) => members[chatId] || [],
+        e2eeNewDevicesPerHour: 1000,
       },
     });
     ctx.sessionStore.createSession(ALICE_ID, "tok-alice");
@@ -105,12 +106,51 @@ describe("E2EE device directory API", () => {
     expect(original.ecdh_public).toBe(first.body.device.ecdhPublic);
   });
 
-  test("caps active devices per user", async () => {
+  test("at the device cap the least recently seen device is retired instead of locking the user out", async () => {
+    const ids = [];
     for (let i = 0; i < MAX_ACTIVE_DEVICES_PER_USER; i += 1) {
       const res = await register(alice);
       expect(res.status).toBe(201);
+      ids.push(res.body.device.id);
+      // Spread last-seen so "stalest" is well defined.
+      ctx.e2eeStore.devices.get(res.body.device.id).last_seen_at = `2024-01-01 00:00:${String(i).padStart(2, "0")}`;
     }
-    expect((await register(alice)).status).toBe(409);
+    const next = await register(alice);
+    expect(next.status).toBe(201);
+    expect(ctx.e2eeStore.devices.get(ids[0]).revoked_at).toBeTruthy();
+    expect(ctx.e2eeStore.devices.get(ids[1]).revoked_at).toBeFalsy();
+    const list = await alice(request(ctx.app).get("/api/e2ee/devices"));
+    expect(list.body.devices).toHaveLength(MAX_ACTIVE_DEVICES_PER_USER);
+  });
+
+  test("re-confirming an existing device never counts against the registration throttle", async () => {
+    const keys = { ecdhPublic: makeP256PublicKey(), ecdsaPublic: makeP256PublicKey() };
+    const first = await register(alice, keys);
+    for (let i = 0; i < 60; i += 1) {
+      const again = await register(alice, { ...keys, deviceId: first.body.device.id });
+      expect(again.status).toBe(200);
+    }
+    // ... and another account behind the same address is unaffected.
+    expect((await register(bob)).status).toBe(201);
+  });
+
+  test("creating many new devices is throttled per person, not per address", async () => {
+    const strict = makeApp({
+      userStore: makeUserStore([user(ALICE_ID, "alice"), user(BOB_ID, "bob")]),
+      deps: { e2eeNewDevicesPerHour: 3 },
+    });
+    strict.sessionStore.createSession(ALICE_ID, "t-a");
+    strict.sessionStore.createSession(BOB_ID, "t-b");
+    const post = (token) =>
+      request(strict.app)
+        .post("/api/e2ee/devices")
+        .set("Cookie", [`sid=${token}`])
+        .send({ ecdhPublic: makeP256PublicKey(), ecdsaPublic: makeP256PublicKey() });
+    const statuses = [];
+    for (let i = 0; i < 5; i += 1) statuses.push((await post("t-a")).status);
+    expect(statuses).toEqual([201, 201, 201, 429, 429]);
+    // Same address, different person: unaffected.
+    expect((await post("t-b")).status).toBe(201);
   });
 
   test("revokes only your own devices", async () => {
@@ -125,14 +165,72 @@ describe("E2EE device directory API", () => {
     expect(list.body.devices).toHaveLength(0);
   });
 
-  test("a peer's devices are visible only with a direct chat", async () => {
+  test("a peer's devices are visible with a direct chat or a named shared chat only", async () => {
     await register(bob);
     const ok = await alice(request(ctx.app).get(`/api/e2ee/users/${BOB_ID}/devices`));
     expect(ok.status).toBe(200);
     expect(ok.body.devices).toHaveLength(1);
 
+    // Carol shares only a group with Bob: no DM, so a bare lookup is refused ...
     const denied = await carol(request(ctx.app).get(`/api/e2ee/users/${BOB_ID}/devices`));
     expect(denied.status).toBe(403);
+    // ... but naming the shared group makes the keys available, so group
+    // members can verify each other's messages.
+    const viaGroup = await carol(
+      request(ctx.app).get(`/api/e2ee/users/${BOB_ID}/devices?chatId=${GROUP_CHAT}`),
+    );
+    expect(viaGroup.status).toBe(200);
+    expect(viaGroup.body.devices).toHaveLength(1);
+  });
+
+  test("a named chat does not open the directory to people outside it", async () => {
+    await register(alice);
+    // Carol is not in the DM chat.
+    const outsider = await carol(
+      request(ctx.app).get(`/api/e2ee/users/${ALICE_ID}/devices?chatId=${DM_CHAT}`),
+    );
+    expect(outsider.status).toBe(403);
+    const bad = await carol(request(ctx.app).get(`/api/e2ee/users/${ALICE_ID}/devices?chatId=nope`));
+    expect(bad.status).toBe(400);
+  });
+
+  test("a former member's keys stay available for messages they posted in the chat", async () => {
+    const dave = "d4d4d4d4-a1a1-4b2b-8c3c-d5d5d5d5d5d5";
+    const roster = [user(ALICE_ID, "alice"), user(CAROL_ID, "carol")];
+    const withHistory = makeApp({
+      userStore: makeUserStore([user(ALICE_ID, "alice"), user(CAROL_ID, "carol"), user(dave, "dave")]),
+      deps: {
+        findDmChat: () => null,
+        isMember: (chatId, userId) => roster.some((m) => m.id === userId),
+        listChatMembers: () => roster,
+        userHasMessageInChat: (_chatId, userId) => userId === dave,
+      },
+    });
+    withHistory.sessionStore.createSession(ALICE_ID, "tok-a");
+    await withHistory.e2eeStore.createE2eeDevice({
+      userId: dave,
+      ecdhPublic: makeP256PublicKey(),
+      ecdsaPublic: makeP256PublicKey(),
+    });
+    const res = await request(withHistory.app)
+      .get(`/api/e2ee/users/${dave}/devices?chatId=${GROUP_CHAT}`)
+      .set("Cookie", ["sid=tok-a"]);
+    expect(res.status).toBe(200);
+    expect(res.body.devices).toHaveLength(1);
+  });
+
+  test("a revoked device is returned only when asked for by id, flagged as revoked", async () => {
+    const device = (await register(bob)).body.device;
+    await bob(request(ctx.app).delete(`/api/e2ee/devices/${device.id}`));
+
+    const plain = await alice(request(ctx.app).get(`/api/e2ee/users/${BOB_ID}/devices`));
+    expect(plain.body.devices).toHaveLength(0);
+
+    const named = await alice(
+      request(ctx.app).get(`/api/e2ee/users/${BOB_ID}/devices?deviceId=${device.id}`),
+    );
+    expect(named.body.devices).toHaveLength(1);
+    expect(named.body.devices[0].revokedAt).toBeTruthy();
   });
 
   test("chat devices lists every member device and who has none", async () => {

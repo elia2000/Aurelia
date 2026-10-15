@@ -426,6 +426,9 @@ function registerMessageRoutes(app, deps) {
           readByMe.has(message.id),
         files: filesByMessageId[message.id] || [],
         e2ee: safeParseStoredEnvelope(message.e2ee_envelope),
+        // The sender of an encrypted message signed the chat it belongs to;
+        // the recipient must know it to verify (message rows carry no chat id).
+        ...(message.e2ee_envelope ? { chat_id: chatId } : {}),
         expiresAt: null,
       }))
       .map(({ e2ee_envelope: _envelope, ...message }) => message)
@@ -884,6 +887,15 @@ function registerMessageRoutes(app, deps) {
         if (e2eeEnvelope) {
           // Encrypted video messages: one opaque blob, no edits, never in
           // broadcast channels, and the sender device must be the caller's.
+          // The client request id is part of what the sender signs (it ties
+          // the envelope to this message), so it must be present and must
+          // reach the recipients unchanged.
+          if (!clientRequestId || clientRequestId !== clientRequestIdRaw) {
+            removeUploadedFiles(uploadedFiles);
+            return res.status(400).json({
+              error: "Encrypted video messages need a request id.",
+            });
+          }
           if (
             editMessageId ||
             totalFilesCount !== 1 ||

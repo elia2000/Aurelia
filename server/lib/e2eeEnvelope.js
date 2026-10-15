@@ -1,4 +1,4 @@
-import { isBase64Url } from "./e2eeKeys.js";
+import { isBase64Url, isValidP256PublicKey } from "./e2eeKeys.js";
 import { isValidUuid } from "./uuidUtils.js";
 
 // Structural validation for end-to-end encrypted message envelopes.
@@ -7,7 +7,7 @@ import { isValidUuid } from "./uuidUtils.js";
 // oversized envelopes so a client cannot use the field as free-form storage,
 // and it makes sure the sender is one of the caller's own active devices.
 
-export const E2EE_ENVELOPE_VERSION = 1;
+export const E2EE_ENVELOPE_VERSION = 2;
 export const E2EE_VIDEO_NOTE_KIND = "video_note";
 export const E2EE_ENVELOPE_MAX_BYTES = 48 * 1024;
 export const E2EE_ENVELOPE_MAX_RECIPIENT_KEYS = 128;
@@ -97,7 +97,9 @@ export function parseVideoNoteEnvelope(input) {
     if (seen.has(entry.deviceId)) return fail("Duplicate recipient device.");
     seen.add(entry.deviceId);
     if (
-      !isBase64Url(entry.epk, { minBytes: 65, maxBytes: 65 }) ||
+      // Reject off-curve points here as well: the recipient's static key is
+      // used with this value, so an invalid-curve point must never be relayed.
+      !isValidP256PublicKey(entry.epk) ||
       !isBase64Url(entry.iv, { minBytes: 12, maxBytes: 12 }) ||
       // 32-byte content key + 16-byte GCM tag
       !isBase64Url(entry.ct, { minBytes: 48, maxBytes: 48 })

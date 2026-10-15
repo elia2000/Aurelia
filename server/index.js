@@ -16,7 +16,7 @@ import { ensureValidVapidKeys } from "./lib/vapid.js";
 import { createSseHub } from "./lib/sse.js";
 import { createWebSocketGateway } from "./lib/websocketGateway.js";
 import { createCallRegistry } from "./lib/calls.js";
-import { readCallsConfig } from "./lib/callsConfig.js";
+import { callsConfigWarnings, readCallsConfig } from "./lib/callsConfig.js";
 import { createPresenceTracker } from "./lib/presenceTracker.js";
 import { createPushService } from "./lib/push.js";
 import { createUploadTools } from "./lib/uploads.js";
@@ -124,6 +124,8 @@ import {
   countActiveE2eeDevices,
   touchE2eeDevice,
   revokeE2eeDevice,
+  revokeStalestE2eeDevice,
+  userHasMessageInChat,
   listE2eeDevicesByUserIds,
   setMessageE2eeEnvelope,
   getTotalUnreadCount,
@@ -1177,6 +1179,8 @@ Object.assign(apiDeps, {
   countActiveE2eeDevices,
   touchE2eeDevice,
   revokeE2eeDevice,
+  revokeStalestE2eeDevice,
+  userHasMessageInChat,
   listE2eeDevicesByUserIds,
   setMessageE2eeEnvelope,
   findDmChat,
@@ -1187,6 +1191,7 @@ Object.assign(apiDeps, {
     wsPresenceBroadcaster?.(username, payload);
   },
 });
+callsConfigWarnings(readCallsConfig()).forEach((warning) => console.warn(`[calls] ${warning}`));
 mirrorManagerRef.current = remoteChannelManager;
 
 if (isProduction) {

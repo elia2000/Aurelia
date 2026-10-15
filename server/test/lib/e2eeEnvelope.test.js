@@ -4,13 +4,13 @@ import {
   safeParseStoredEnvelope,
   E2EE_ENVELOPE_MAX_RECIPIENT_KEYS,
 } from "../../lib/e2eeEnvelope.js";
-import { b64u } from "../helpers/p256.js";
+import { b64u, makeP256PublicKey } from "../helpers/p256.js";
 
 const DEVICE_A = "a0a0a0a0-b1b1-4c2c-8d3d-e4e4e4e4e4e4";
 const DEVICE_B = "b0b0b0b0-c1c1-4d2d-8e3e-f4f4f4f4f4f4";
 
 const makeEnvelope = (overrides = {}) => ({
-  v: 1,
+  v: 2,
   kind: "video_note",
   senderDeviceId: DEVICE_A,
   iv: b64u(12),
@@ -18,8 +18,8 @@ const makeEnvelope = (overrides = {}) => ({
   mime: "video/mp4",
   poster: { iv: b64u(12), ct: b64u(600) },
   keys: [
-    { deviceId: DEVICE_A, epk: b64u(65), iv: b64u(12), ct: b64u(48) },
-    { deviceId: DEVICE_B, epk: b64u(65), iv: b64u(12), ct: b64u(48) },
+    { deviceId: DEVICE_A, epk: makeP256PublicKey(), iv: b64u(12), ct: b64u(48) },
+    { deviceId: DEVICE_B, epk: makeP256PublicKey(), iv: b64u(12), ct: b64u(48) },
   ],
   sig: b64u(64),
   ...overrides,
@@ -43,7 +43,8 @@ describe("parseVideoNoteEnvelope", () => {
   });
 
   test.each([
-    ["wrong version", { v: 2 }],
+    ["previous version", { v: 1 }],
+    ["off-curve ephemeral key", { keys: [{ deviceId: DEVICE_A, epk: b64u(65), iv: b64u(12), ct: b64u(48) }] }],
     ["wrong kind", { kind: "text" }],
     ["bad sender id", { senderDeviceId: "nope" }],
     ["short iv", { iv: b64u(8) }],
@@ -52,7 +53,7 @@ describe("parseVideoNoteEnvelope", () => {
     ["unsupported container", { mime: "application/x-evil" }],
     ["short signature", { sig: b64u(10) }],
     ["no recipients", { keys: [] }],
-    ["wrapped key wrong size", { keys: [{ deviceId: DEVICE_A, epk: b64u(65), iv: b64u(12), ct: b64u(47) }] }],
+    ["wrapped key wrong size", { keys: [{ deviceId: DEVICE_A, epk: makeP256PublicKey(), iv: b64u(12), ct: b64u(47) }] }],
     ["duplicate recipient", { keys: [makeEnvelope().keys[0], makeEnvelope().keys[0]] }],
     ["oversized poster", { poster: { iv: b64u(12), ct: b64u(20 * 1024) } }],
   ])("rejects %s", (_name, patch) => {
@@ -62,7 +63,7 @@ describe("parseVideoNoteEnvelope", () => {
   test("rejects too many recipient devices", () => {
     const keys = Array.from({ length: E2EE_ENVELOPE_MAX_RECIPIENT_KEYS + 1 }, (_, i) => ({
       deviceId: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
-      epk: b64u(65),
+      epk: makeP256PublicKey(),
       iv: b64u(12),
       ct: b64u(48),
     }));
