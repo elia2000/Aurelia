@@ -72,6 +72,8 @@ export default defineConfig({
           include: [
             "test/utils/**/*.{test,spec}.{js,jsx}",
             "test/hooks/**/*.{test,spec}.{js,jsx}",
+            "test/e2ee/**/*.{test,spec}.{js,jsx}",
+            "test/calls/**/*.{test,spec}.{js,jsx}",
           ],
           environment: "node",
         },
