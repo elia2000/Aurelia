@@ -230,9 +230,13 @@ export class CallManager {
       // The call is placed, but nobody has been reached yet: "ringing" is only
       // shown once the other person's app reports that it is ringing (their
       // phone may be offline or the app closed, in which case it only gets a
-      // push notification).
-      this.#set({ ringing: false, waiting: true });
-      call.ringTimer = setTimeout(() => this.#finish(call, "no_answer", { notifyServer: true }), RING_TIMEOUT_MS);
+      // push notification). Their reports travel on the event stream, so the
+      // ringing report (or even the answer) can beat this reply: keep what the
+      // call already learned instead of starting over.
+      if (this.#state.phase === CALL_PHASE.OUTGOING && !call.answered) {
+        this.#set(call.ringingSeen ? { ringing: true, waiting: false } : { ringing: false, waiting: true });
+        call.ringTimer = setTimeout(() => this.#finish(call, "no_answer", { notifyServer: true }), RING_TIMEOUT_MS);
+      }
     } catch (error) {
       const deferred = call.deferredInvite;
       this.#failStart(call, error);
@@ -245,6 +249,7 @@ export class CallManager {
   #onRinging(event) {
     const call = this.#call;
     if (!call || call.id !== event.callId || call.direction !== "outgoing") return;
+    call.ringingSeen = true;
     if (this.#state.phase !== CALL_PHASE.OUTGOING) return;
     this.#set({ ringing: true, waiting: false });
   }
@@ -253,6 +258,7 @@ export class CallManager {
     const call = this.#call;
     if (!call || call.id !== event.callId || call.direction !== "outgoing") return;
     if (this.#state.phase !== CALL_PHASE.OUTGOING || call.session || !call.ephemeral) return;
+    call.answered = true; // (the reply to our own request may still be on its way: see startCall)
     clearTimeout(call.ringTimer);
 
     try {

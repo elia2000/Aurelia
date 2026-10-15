@@ -902,6 +902,77 @@ describe("waiting versus ringing", () => {
     expect(alice.manager.getState().waiting).toBe(false);
   });
 
+  // The callee's reports travel on the event stream, the caller's own request on
+  // another connection: either can be seen first.
+  async function slowPost() {
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const post = alice.api.startCall.getMockImplementation();
+    alice.api.startCall.mockImplementation(async (args) => {
+      await post(args);
+      await gate; // the server has the call and has told the callee; the reply is still on its way
+    });
+    return { alice, bob, release };
+  }
+
+  test("a ringing report that beats the reply to the call request is not lost", async () => {
+    const { alice, bob, release } = await slowPost();
+    const started = alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(bob), { label: "bob ringing" });
+    await waitFor(() => alice.manager.getState().ringing, { label: "ringing seen early" });
+    release();
+    await started;
+    expect(alice.manager.getState()).toMatchObject({ phase: CALL_PHASE.OUTGOING, ringing: true, waiting: false });
+  });
+
+  test("an answer that beats the reply to the call request is not followed by a ring timeout", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { alice, bob, release } = await slowPost();
+    const started = alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await vi.waitFor(() => expect(phase(CALL_PHASE.INCOMING)(bob)).toBe(true));
+    await bob.manager.accept();
+    await vi.waitFor(() => expect(alice.manager.getState().phase).not.toBe(CALL_PHASE.OUTGOING));
+    release();
+    await started;
+    expect(alice.manager.getState()).toMatchObject({ phase: CALL_PHASE.CONNECTED, waiting: false, ringing: false });
+    // A leaked ring timer would hang up a call that is already connected (and
+    // the call would then quietly fall back to idle, hiding the reason).
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(alice.manager.getState().phase).toBe(CALL_PHASE.CONNECTED);
+    expect(alice.manager.getState().endReason).toBeNull();
+  });
+
+  test("an answer still being verified when the reply arrives is not followed by a ring timeout either", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { alice, bob, release } = await slowPost();
+    let releaseVerify;
+    const verifyGate = new Promise((resolve) => {
+      releaseVerify = resolve;
+    });
+    const find = alice.directory.findDevice;
+    alice.directory.findDevice = async (...args) => {
+      await verifyGate;
+      return find(...args);
+    };
+    const started = alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await vi.waitFor(() => expect(phase(CALL_PHASE.INCOMING)(bob)).toBe(true));
+    await bob.manager.accept();
+    await vi.waitFor(() => expect(alice.api.startCall).toHaveBeenCalled());
+    await vi.waitFor(() => expect(bob.api.acceptCall).toHaveBeenCalled());
+    await vi.advanceTimersByTimeAsync(50); // the answer reaches alice and starts being verified
+    release();
+    await started;
+    releaseVerify();
+    await vi.waitFor(() => expect(alice.manager.getState().phase).toBe(CALL_PHASE.CONNECTED));
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(alice.manager.getState().phase).toBe(CALL_PHASE.CONNECTED);
+  });
+
   test("a ringing report that arrives after the call moved on changes nothing", async () => {
     const { alice } = await connectedCall();
     const callId = alice.manager.getState().callId;
