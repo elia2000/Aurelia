@@ -124,6 +124,48 @@ export async function encryptVideoNote({ media, mime, durationMs, poster = null,
   return { ciphertext, envelope };
 }
 
+async function unwrapContentKey(envelope, entry, identity) {
+  const wrapKey = await deriveAesKeyFromEcdh(
+    identity.keys.ecdh.privateKey,
+    await importEcdhPublic(fromB64u(entry.epk)),
+    await wrapSalt(identity.deviceId),
+    `${V}/wrap`,
+  );
+  const contentKeyRaw = await aesGcmDecrypt(
+    wrapKey,
+    fromB64u(entry.iv),
+    fromB64u(entry.ct),
+    wrapAad(identity.deviceId, envelope.iv),
+  );
+  return importAesKey(contentKeyRaw);
+}
+
+/**
+ * Decrypts only the small poster frame, so a bubble can show a preview before
+ * the (much larger) video is downloaded. The poster is authenticated by the
+ * content key, but the sender's signature can only be checked together with
+ * the full ciphertext, which happens when the video is opened.
+ * @returns {Promise<Uint8Array|null>} null when there is no poster
+ */
+export async function decryptVideoNotePoster({ envelope, identity }) {
+  if (!envelope?.poster) return null;
+  const entry = envelope.keys?.find((k) => k.deviceId === identity.deviceId);
+  if (!entry) {
+    throw new E2eeDecryptError("no_key", "This message was not encrypted for this device.");
+  }
+  try {
+    const contentKey = await unwrapContentKey(envelope, entry, identity);
+    return await aesGcmDecrypt(
+      contentKey,
+      fromB64u(envelope.poster.iv),
+      fromB64u(envelope.poster.ct),
+      posterAad(envelope),
+    );
+  } catch {
+    return null;
+  }
+}
+
 /**
  * @param {object} args
  * @param {object} args.envelope
@@ -158,19 +200,7 @@ export async function decryptVideoNote({ envelope, ciphertext, identity, senderD
   }
 
   try {
-    const wrapKey = await deriveAesKeyFromEcdh(
-      identity.keys.ecdh.privateKey,
-      await importEcdhPublic(fromB64u(entry.epk)),
-      await wrapSalt(identity.deviceId),
-      `${V}/wrap`,
-    );
-    const contentKeyRaw = await aesGcmDecrypt(
-      wrapKey,
-      fromB64u(entry.iv),
-      fromB64u(entry.ct),
-      wrapAad(identity.deviceId, envelope.iv),
-    );
-    const contentKey = await importAesKey(contentKeyRaw);
+    const contentKey = await unwrapContentKey(envelope, entry, identity);
     const media = await aesGcmDecrypt(contentKey, fromB64u(envelope.iv), ciphertext, mediaAad(envelope));
 
     let poster = null;

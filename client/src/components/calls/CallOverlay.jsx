@@ -100,9 +100,16 @@ export default function CallOverlay({ user }) {
   const connected = phase === CALL_PHASE.CONNECTED;
   const elapsed = useElapsed(state.connectedAt, connected);
 
+  // The picture elements only exist while they are shown, so the stream is
+  // handed over at the same moment they mount (a stream that never changes
+  // would otherwise never be attached to an element that appears later).
+  const showRemoteVideo =
+    kind === "video" && remoteCameraOn && connected && !minimized;
+  const showLocalVideo =
+    kind === "video" && cameraOn && phase !== CALL_PHASE.ENDED && !minimized;
   useStream(remoteAudioRef, active ? state.remoteStream : null);
-  useStream(remoteVideoRef, active && !minimized ? state.remoteStream : null);
-  useStream(localVideoRef, active && !minimized ? state.localStream : null);
+  useStream(remoteVideoRef, showRemoteVideo ? state.remoteStream : null);
+  useStream(localVideoRef, showLocalVideo ? state.localStream : null);
 
   useEffect(() => {
     if (!active) setSafetyOpen(false);
@@ -112,7 +119,6 @@ export default function CallOverlay({ user }) {
 
   const peerName = peer?.nickname || peer?.username || "Unknown";
   const fa = hasPersian(peerName) ? "font-fa" : "";
-  const showRemoteVideo = kind === "video" && remoteCameraOn && connected;
   const incoming = phase === CALL_PHASE.INCOMING;
   const ended = phase === CALL_PHASE.ENDED;
 
@@ -127,7 +133,7 @@ export default function CallOverlay({ user }) {
     trust?.status === TRUST.DEVICES_ADDED
       ? "A new device was added for this contact. Verify before sharing anything sensitive."
       : trust?.status === TRUST.NEW
-        ? "First secure call with this contact. Compare the code below to be sure."
+        ? "First secure call with this contact. Once connected, compare the emoji code at the top with theirs."
         : "";
 
   const sink = (
@@ -200,11 +206,11 @@ export default function CallOverlay({ user }) {
             type="button"
             onClick={() => setSafetyOpen(true)}
             disabled={!sas}
-            className="inline-flex max-w-[78%] items-center gap-2 rounded-full border border-emerald-400/40 bg-slate-900/70 px-3 py-1.5 text-xs font-semibold text-emerald-200 backdrop-blur transition hover:border-emerald-300 disabled:cursor-default"
+            className="inline-flex max-w-[78%] items-center gap-2 whitespace-nowrap rounded-full border border-emerald-400/40 bg-slate-900/70 px-3 py-1.5 text-xs font-semibold text-emerald-200 backdrop-blur transition hover:border-emerald-300 disabled:cursor-default"
             aria-label="End-to-end encrypted. Verify security."
           >
             <Lock size={13} aria-hidden="true" />
-            <span>End-to-end encrypted</span>
+            <span>{sas ? "Encrypted" : "End-to-end encrypted"}</span>
             {sas ? <span className="text-base leading-none tracking-wide">{sas.join("")}</span> : null}
           </button>
           <button
@@ -253,7 +259,7 @@ export default function CallOverlay({ user }) {
           ) : null}
         </div>
 
-        {kind === "video" && cameraOn && !ended ? (
+        {showLocalVideo ? (
           <video
             ref={localVideoRef}
             autoPlay

@@ -80,6 +80,15 @@ export function CallProvider({ user, children }) {
     if (channel) channel.onmessage = (e) => next.handleBroadcast(e.data);
     setManager(next);
 
+    // Register this device's public keys as soon as the app is idle, so other
+    // people can already send us encrypted video messages before we have ever
+    // made or answered a call.
+    const registerDevice = () => services.getIdentity(userId).catch(() => {});
+    const idleHandle =
+      typeof requestIdleCallback === "function"
+        ? requestIdleCallback(registerDevice, { timeout: 4000 })
+        : setTimeout(registerDevice, 1500);
+
     const onEvent = (event) => next.handleEvent(event.detail);
     window.addEventListener(CALL_EVENT, onEvent);
 
@@ -103,6 +112,11 @@ export function CallProvider({ user, children }) {
     window.addEventListener("pagehide", onPageHide);
 
     return () => {
+      if (typeof cancelIdleCallback === "function" && typeof requestIdleCallback === "function") {
+        cancelIdleCallback(idleHandle);
+      } else {
+        clearTimeout(idleHandle);
+      }
       window.removeEventListener(CALL_EVENT, onEvent);
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("pagehide", onPageHide);

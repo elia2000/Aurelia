@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Check,
@@ -20,6 +20,9 @@ import { getAvatarInitials } from "../../../utils/avatarInitials.js";
 import { formatCompactCount, formatDayLabel } from "../../../utils/chatFormat.js";
 import ContextMenuSurface from "../../context-menu/ContextMenuSurface.jsx";
 import { MessageFiles } from "../media/MessageFiles.jsx";
+
+// Encrypted round video messages pull in the decryption code, so they load on demand.
+const VideoNoteBubble = lazy(() => import("../videoNote/VideoNoteBubble.jsx"));
 import {
   renderMarkdownBlock,
   renderMarkdownInlinePlain,
@@ -137,6 +140,7 @@ const getMessageRenderSignature = (msg) => {
     getSystemEventSignature(msg?._systemEvent),
     getFileSignature(msg?.files),
     getFileSignature(msg?._files),
+    msg?.e2ee?.sig ?? "",
   ].join("~~");
 };
 
@@ -269,6 +273,7 @@ export const MessageItem = memo(function MessageItem({
       : Boolean(forwardedFromLabel);
   const messageFiles = Array.isArray(msg.files) ? msg.files : [];
   const hasFiles = messageFiles.length > 0;
+  const isVideoNote = msg?.e2ee?.kind === "video_note";
   const generatedSummaryText = hasFiles
     ? summarizeFiles(messageFiles, String(msg?._uploadType || "").toLowerCase())
     : "";
@@ -1194,11 +1199,17 @@ export const MessageItem = memo(function MessageItem({
                     </span>
                   </button>
                 ) : null}
-                <MessageFiles
-                  files={messageFiles}
-                  docFullWidth={isGroupChat && !isOwn && !isDesktop}
-                  {...messageFilesProps}
-                />
+                {isVideoNote ? (
+                  <Suspense fallback={<div className="h-56 w-56 max-w-[62vw] animate-pulse rounded-full bg-slate-200/60 dark:bg-slate-700/40" />}>
+                    <VideoNoteBubble msg={msg} user={user} />
+                  </Suspense>
+                ) : (
+                  <MessageFiles
+                    files={messageFiles}
+                    docFullWidth={isGroupChat && !isOwn && !isDesktop}
+                    {...messageFilesProps}
+                  />
+                )}
                 {!shouldHideGeneratedFileBody ? (
                   <div
                     ref={messageBodyRef}
@@ -1341,11 +1352,17 @@ export const MessageItem = memo(function MessageItem({
                   </span>
                 </button>
               ) : null}
-              <MessageFiles
-                files={messageFiles}
-                docFullWidth={isGroupChat && !isOwn && !isDesktop}
-                {...messageFilesProps}
-              />
+              {isVideoNote ? (
+                <Suspense fallback={<div className="h-56 w-56 max-w-[62vw] animate-pulse rounded-full bg-slate-200/60 dark:bg-slate-700/40" />}>
+                  <VideoNoteBubble msg={msg} user={user} />
+                </Suspense>
+              ) : (
+                <MessageFiles
+                  files={messageFiles}
+                  docFullWidth={isGroupChat && !isOwn && !isDesktop}
+                  {...messageFilesProps}
+                />
+              )}
               {!shouldHideGeneratedFileBody ? (
                 <div
                   ref={messageBodyRef}

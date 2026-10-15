@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import {
+  Camera,
   Check,
   Pencil,
   File,
@@ -80,6 +81,7 @@ export function MessageComposer({
   composerInputRef,
   microphonePermissionStatus = "unknown",
   onRequestMicrophonePermission,
+  onRequestVideoNote = null,
 }) {
   const composerRef = useRef(null);
   const fallbackInputRef = useRef(null);
@@ -1146,6 +1148,22 @@ export function MessageComposer({
             <span className="w-12" />
           </div>
         )}
+        {micMode && typeof onRequestVideoNote === "function" && !isRecording ? (
+          <button
+            type="button"
+            disabled={uploadBusy}
+            onPointerDown={(event) => {
+              captureComposerFocus();
+              if (!isDesktop) event.preventDefault();
+            }}
+            onClick={() => onRequestVideoNote()}
+            aria-label="Record video message"
+            title="Record video message"
+            className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-transparent bg-transparent text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-100 hover:shadow-[0_0_16px_rgba(16,185,129,0.22)] disabled:cursor-not-allowed disabled:opacity-60 dark:text-emerald-200 dark:hover:border-emerald-500/30 dark:hover:bg-emerald-500/10"
+          >
+            <Camera size={18} className="icon-anim-sway" />
+          </button>
+        ) : null}
         <button
           type={micMode || isRecording ? "button" : "submit"}
           onPointerDown={(event) => {

@@ -38,6 +38,9 @@ import { Bookmark } from "../icons/lucide.js";
 import { CLIPBOARD_COPY_EVENT } from "../utils/clipboard.js";
 import { CACHE_STORES } from "../utils/cacheDb.js";
 import { downloadMessageFiles } from "../utils/fileDownload.js";
+import { getE2eeServices, isVideoNoteSupported } from "../e2ee/services.js";
+import { prepareVideoNoteUpload, friendlyVideoNoteError } from "../videoNote/send.js";
+import { rememberVideoNote } from "../videoNote/localCache.js";
 import {
   CHAT_CACHE_VERSION,
   buildChatListCacheKey,
@@ -155,6 +158,9 @@ const NewGroupModal = lazy(loadNewGroupModal);
 const DesktopSettingsModal = lazy(loadDesktopSettingsModal);
 const NotificationsSettingsModal = lazy(loadNotificationsSettingsModal);
 const WhatsNewModal = lazy(loadWhatsNewModal);
+const VideoNoteRecorder = lazy(
+  () => import("../components/chat/videoNote/VideoNoteRecorder.jsx"),
+);
 
 const preloadChatPageCriticalChunks = () =>
   Promise.allSettled([
@@ -360,6 +366,8 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   const [uploadError, setUploadError] = useState("");
   const [activeUploadProgress, setActiveUploadProgress] = useState(null);
   const [replyTarget, setReplyTarget] = useState(null);
+  const [videoNoteOpen, setVideoNoteOpen] = useState(false);
+  const [videoNoteBusy, setVideoNoteBusy] = useState(false);
   const [editTarget, setEditTarget] = useState(null);
   const [messageDeleteScopeOpen, setMessageDeleteScopeOpen] = useState(false);
   const [pendingDeleteMessage, setPendingDeleteMessage] = useState(null);
@@ -3850,6 +3858,9 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         if (pendingMessage._editMessageId) {
           form.append("editMessageId", String(pendingMessage._editMessageId));
         }
+        if (pendingMessage._e2eeEnvelope) {
+          form.append("e2eeEnvelope", JSON.stringify(pendingMessage._e2eeEnvelope));
+        }
 
         const fileItems = (pendingMessage._files || []).filter(
           (item) => item?.file instanceof Blob,
@@ -4091,6 +4102,9 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
                       keepPendingUntilServerEcho || Boolean(msg?._processingPending),
                     _awaitingServerEcho: awaitingServerEcho,
                     _uploadProgress: keepPendingUntilServerEcho ? 100 : null,
+                    ...(pendingMessage._e2eeEnvelope || data?.e2ee
+                      ? { e2ee: data?.e2ee || pendingMessage._e2eeEnvelope }
+                      : {}),
                     expiresAt: calculatedExpiresAt || msg.expiresAt || null,
                     files: responseFiles
                       ? responseFiles
@@ -4159,6 +4173,9 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
               _serverId: serverId,
               expiresAt: calculatedExpiresAt || null,
               replyTo: pendingMessage.replyTo || null,
+              ...(pendingMessage._e2eeEnvelope || data?.e2ee
+                ? { e2ee: data?.e2ee || pendingMessage._e2eeEnvelope }
+                : {}),
               files: messageFiles,
             },
           ];
@@ -5108,6 +5125,109 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       TYPING_SIGNAL_THROTTLE_MS,
     ],
   );
+
+  const canRecordVideoNote =
+    CHAT_PAGE_CONFIG.fileUploadEnabled &&
+    canSendInActiveChat &&
+    !editTarget &&
+    ["dm", "group", "saved"].includes(String(activeChat?.type || "")) &&
+    isVideoNoteSupported();
+
+  // Encrypts a finished recording on this device and sends it through the
+  // regular upload pipeline (progress, retry, dedupe) as an opaque file.
+  // Returns false when nothing was sent so the recorder keeps the clip.
+  async function handleVideoNoteSend(note) {
+    if (!activeChatId || videoNoteBusy) return false;
+    if (fileUploadInProgress || activeUploadProgress !== null) {
+      setUploadError("Please wait for the current upload to finish.");
+      return false;
+    }
+    setVideoNoteBusy(true);
+    setUploadError("");
+    const chatId = activeChatId;
+    try {
+      const prepared = await prepareVideoNoteUpload({
+        chatId,
+        user,
+        note,
+        services: getE2eeServices(),
+        isSavedChat: isActiveSavedChat,
+      });
+      const tempId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const createdAt = new Date().toISOString();
+      const pendingDate = parseServerDate(createdAt);
+      const replyPayload = replyTarget
+        ? {
+            id: replyTarget.id,
+            username: replyTarget.username,
+            nickname: replyTarget.nickname,
+            body: replyTarget.body,
+            icon: replyTarget.icon || null,
+            displayName: replyTarget.displayName,
+            color: replyTarget.color || null,
+          }
+        : null;
+      const summary = "Sent a video message";
+      const file = {
+        id: `vn-${tempId}`,
+        _localId: `vn-${tempId}`,
+        kind: "document",
+        name: "video-message.bin",
+        mimeType: "application/octet-stream",
+        sizeBytes: prepared.ciphertext.size,
+        width: null,
+        height: null,
+        durationSeconds: Math.round(note.durationMs / 1000),
+        url: null,
+        _localUrl: null,
+        file: prepared.ciphertext,
+      };
+      // This device already has the plaintext: keep it so playing our own
+      // message never downloads and decrypts it again.
+      rememberVideoNote(tempId, {
+        url: note.previewUrl,
+        posterUrl: note.posterBlob ? URL.createObjectURL(note.posterBlob) : null,
+        durationMs: note.durationMs,
+        mime: note.mime,
+      });
+
+      userScrolledUpRef.current = false;
+      setUserScrolledUp(false);
+      isAtBottomRef.current = true;
+      setIsAtBottom(true);
+      shouldAutoMarkReadRef.current = true;
+      pendingScrollToBottomRef.current = true;
+      setVideoNoteOpen(false);
+
+      const pendingMessage = {
+        _clientId: tempId,
+        client_request_id: tempId,
+        _chatId: chatId,
+        _queuedAt: Date.now(),
+        _delivery: "sending",
+        _editMessageId: null,
+        _uploadType: "document",
+        _files: [file],
+        _e2eeEnvelope: prepared.envelope,
+        _createdAt: createdAt,
+        _dayKey: `${pendingDate.getFullYear()}-${pendingDate.getMonth()}-${pendingDate.getDate()}`,
+        body: summary,
+        replyTo: replyPayload,
+        read_at: isActiveSavedChat ? createdAt : null,
+        read_by_user_id: isActiveSavedChat ? user?.id || null : null,
+      };
+      updateOwnLatestChatPreview({ chatId, body: summary, files: [file], createdAt });
+      if (prepared.warnings.length) setUploadError(prepared.warnings[0]);
+      setReplyTarget(null);
+      await sendPendingMessage(pendingMessage);
+      return true;
+    } catch (error) {
+      setUploadError(friendlyVideoNoteError(error));
+      return false;
+    } finally {
+      setVideoNoteBusy(false);
+    }
+  }
 
   async function handleSend(event) {
     event.preventDefault();
@@ -6767,6 +6887,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         copyToastVisible={copyToastVisible}
         microphonePermissionStatus={microphonePermission}
         onRequestMicrophonePermission={requestMicrophonePermission}
+        onRequestVideoNote={canRecordVideoNote ? () => setVideoNoteOpen(true) : null}
         registerMessageRef={registerMessageRef}
         showFloatingLabel={showFloatingLabel}
       />
@@ -6784,6 +6905,17 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         }}
         onSettings={() => setMobileTab("settings")}
       />
+
+      {videoNoteOpen ? (
+        <Suspense fallback={null}>
+          <VideoNoteRecorder
+            open={videoNoteOpen}
+            busy={videoNoteBusy}
+            onClose={() => setVideoNoteOpen(false)}
+            onSend={handleVideoNoteSend}
+          />
+        </Suspense>
+      ) : null}
 
       {newChatOpen ? (
         <Suspense fallback={null}>

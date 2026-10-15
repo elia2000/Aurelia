@@ -119,6 +119,7 @@ export default function ChatWindowPanel({
   headerAvatarColor = null,
   microphonePermissionStatus = "unknown",
   onRequestMicrophonePermission = null,
+  onRequestVideoNote = null,
   copyToastVisible = false,
   registerMessageRef = null,
   showFloatingLabel = false,
@@ -1498,6 +1499,7 @@ export default function ChatWindowPanel({
             composerInputRef={composerInputRef}
             microphonePermissionStatus={microphonePermissionStatus}
             onRequestMicrophonePermission={onRequestMicrophonePermission}
+            onRequestVideoNote={onRequestVideoNote}
           />
       ) : null}
 
