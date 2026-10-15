@@ -1,4 +1,5 @@
 import { Close } from "../../icons/lucide.js";
+import { BRAND } from "../../brand.js";
 
 export default function InstallGuideModal({
   open,
@@ -13,7 +14,7 @@ export default function InstallGuideModal({
       <div className="w-full max-w-md rounded-2xl border border-emerald-200 bg-white p-6 shadow-2xl dark:border-emerald-500/30 dark:bg-slate-950">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-semibold text-emerald-700 dark:text-emerald-200">
-            Install Songbird
+            Install {BRAND.name}
           </h3>
           <button
             type="button"
@@ -77,7 +78,7 @@ export default function InstallGuideModal({
                 className="h-full w-full scale-110 object-cover"
               />
             </span>
-            <span>Open Songbird from your home screen.</span>
+            <span>Open {BRAND.name} from your home screen.</span>
           </div>
         </div>
         <div className="mt-6 flex justify-end">

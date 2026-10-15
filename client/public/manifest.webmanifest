@@ -1,7 +1,7 @@
 {
-  "name": "Songbird",
-  "short_name": "Songbird",
-  "description": "Songbird chat",
+  "name": "Aurelle",
+  "short_name": "Aurelle",
+  "description": "Private messaging, calls and video messages, encrypted end to end",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

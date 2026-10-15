@@ -9,6 +9,7 @@ import {
   TelegramIcon,
 } from "../../../icons/BrandIcons.jsx";
 import { ABOUT_CONTENT } from "../../../settings/aboutContent.js";
+import { BRAND } from "../../../brand.js";
 import { copyTextToClipboard } from "../../../utils/clipboard.js";
 import Tooltip from "../../common/Tooltip.jsx";
 
@@ -92,7 +93,10 @@ export function AboutSettingsPanel({
   const versionLabel =
     String(appInfo?.version || "Unknown").trim() || "Unknown";
   const ownerHref = ABOUT_CONTENT.copyright?.ownerHref || "";
-  const ownerLabel = ABOUT_CONTENT.copyright?.ownerLabel || "bllackbull";
+  const ownerLabel = ABOUT_CONTENT.copyright?.ownerLabel || BRAND.name;
+  const hasSupportContent = Boolean(
+    ABOUT_CONTENT.donationLink?.href || ABOUT_CONTENT.wallets?.length,
+  );
   const year = new Date().getFullYear();
   const rowBase =
     "flex w-full items-center justify-between gap-3 rounded-2xl border border-emerald-200/70 bg-white/90 px-4 py-3 text-left text-sm font-semibold text-emerald-700 dark:border-emerald-500/30 dark:bg-slate-900/50 dark:text-emerald-200";
@@ -113,6 +117,7 @@ export function AboutSettingsPanel({
           </span>
         </div>
 
+        {hasSupportContent ? (
         <div className="rounded-2xl border border-emerald-200/70 bg-white/90 p-4 dark:border-emerald-500/30 dark:bg-slate-900/50">
           <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-200">
             Support the project
@@ -131,6 +136,7 @@ export function AboutSettingsPanel({
             ))}
           </div>
         </div>
+        ) : null}
 
         <div className="border-t border-emerald-100/80 pt-4 dark:border-emerald-500/20">
           <div className="flex flex-wrap items-center justify-center gap-1.5">
@@ -166,12 +172,23 @@ export function AboutSettingsPanel({
             </a>
           </p>
           <p className="mt-1 text-center text-[11px] text-slate-500 dark:text-slate-400">
-            All rights reserved. Songbird is a free and open-source project,
-            licensed under the MIT License.
+            {BRAND.name} is free and open-source software, licensed under the
+            MIT License.
           </p>
-          <p className="mt-1 text-center text-[11px] text-slate-500 dark:text-slate-400">
-            For Freedom ❤️
-          </p>
+          {ABOUT_CONTENT.upstream ? (
+            <p className="mt-1 text-center text-[11px] text-slate-500 dark:text-slate-400">
+              Built on{" "}
+              <a
+                href={ABOUT_CONTENT.upstream.href}
+                target="_blank"
+                rel="noreferrer"
+                className="font-semibold underline-offset-4 transition hover:text-emerald-700 hover:underline dark:hover:text-emerald-200"
+              >
+                {ABOUT_CONTENT.upstream.label}
+              </a>
+              .
+            </p>
+          ) : null}
         </div>
       </div>
 

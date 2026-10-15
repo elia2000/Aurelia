@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { NOTIFICATIONS_ENABLED_KEY, NOTIFICATION_MESSAGE_PREVIEW_KEY } from "../../utils/chatPageConstants.js";
+import { BRAND } from "../../brand.js";
 
 const PUSH_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const PUSH_RESUBSCRIBE_DEBOUNCE_MS = 2 * 60 * 1000;
@@ -386,7 +387,7 @@ export function useChatNotifications({
         const reg =
           pushRegistrationRef.current || (await navigator.serviceWorker.ready);
         if (reg?.showNotification) {
-          await reg.showNotification("Songbird", {
+          await reg.showNotification(BRAND.name, {
             body: "Test notification",
             badge: "/icons/icon-192.png",
             icon: "/icons/icon-192.png",

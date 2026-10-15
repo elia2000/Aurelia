@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Eye, EyeOff, LoaderCircle } from "../../icons/lucide.js";
 import { hasPersian } from "../../utils/fontUtils.js";
 import { USERNAME_INPUT_PATTERN, useNameLimits } from "../../utils/nameLimits.js";
+import { BRAND } from "../../brand.js";
 
 export default function AuthFormFields({
   isLogin,
@@ -41,7 +42,7 @@ export default function AuthFormFields({
               name="nickname"
               type="text"
               required
-              placeholder="Songbird Sage"
+              placeholder={`${BRAND.name} Sage`}
               maxLength={NICKNAME_MAX}
               onInput={(event) => {
                 const value = String(event.currentTarget.value || "");

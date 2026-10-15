@@ -10,6 +10,7 @@ import { startRingtone } from "./ringtone.js";
 import { endCallBeacon } from "../api/e2eeApi.js";
 import { getE2eeServices, isCallingSupported } from "../e2ee/services.js";
 import { CALL_EVENT, CallContext, IDLE_CALL_SNAPSHOT } from "./callContext.js";
+import { CHAT_PAGE_CONFIG } from "../settings/chatPageConfig.js";
 
 const BROADCAST_NAME = "aurelle-calls";
 
@@ -54,7 +55,7 @@ async function closeCallNotifications(callId) {
  * realtime events in, ringer/notifications/battery hooks out.
  */
 export function CallProvider({ user, children }) {
-  const supported = useMemo(() => isCallingSupported(), []);
+  const supported = useMemo(() => isCallingSupported() && CHAT_PAGE_CONFIG.callsEnabled !== false, []);
   const [manager, setManager] = useState(null);
   const [minimized, setMinimized] = useState(false);
   const state = useManagerState(manager);

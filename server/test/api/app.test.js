@@ -157,3 +157,12 @@ describe("GET /api/app/info", () => {
     expect(res.body.remoteChannels.mediaStreamEnabled).toBe(false);
   });
 });
+
+describe("GET /api/app/info calls flag", () => {
+  test("callsEnabled follows CALLS_ENABLED so the client can hide call buttons", async () => {
+    const on = makeApp({ deps: { callsConfig: () => ({ enabled: true }) } });
+    expect((await request(on.app).get("/api/app/info")).body.callsEnabled).toBe(true);
+    const off = makeApp({ deps: { callsConfig: () => ({ enabled: false }), callSweepIntervalMs: 0 } });
+    expect((await request(off.app).get("/api/app/info")).body.callsEnabled).toBe(false);
+  });
+});

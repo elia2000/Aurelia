@@ -120,6 +120,7 @@ export const CHAT_PAGE_CONFIG = {
     60 *
     1000,
   fileUploadEnabled: readEnvBool("FILE_UPLOAD", true),
+  callsEnabled: readEnvBool("CALLS_ENABLED", true),
 };
 
 // ─── Live override for admin-panel-configurable client settings ─────────────
@@ -131,6 +132,7 @@ export function setChatPageConfig({
   messagePageSize,
   cacheTtlHours,
   fileUploadEnabled,
+  callsEnabled,
   fileUploadMaxFiles,
   fileUploadMaxSizeMb,
   fileUploadMaxTotalSizeMb,
@@ -154,6 +156,9 @@ export function setChatPageConfig({
   }
   if (typeof fileUploadEnabled === "boolean") {
     CHAT_PAGE_CONFIG.fileUploadEnabled = fileUploadEnabled;
+  }
+  if (typeof callsEnabled === "boolean") {
+    CHAT_PAGE_CONFIG.callsEnabled = callsEnabled;
   }
   if (Number.isFinite(fileUploadMaxFiles) && fileUploadMaxFiles > 0) {
     CHAT_PAGE_CONFIG.maxFilesPerMessage = Math.trunc(fileUploadMaxFiles);

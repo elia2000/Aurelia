@@ -1,10 +1,11 @@
 import { Phone, Video } from "../../icons/lucide.js";
 import { useCalls } from "../../calls/callContext.js";
+import { CHAT_PAGE_CONFIG } from "../../settings/chatPageConfig.js";
 
 /** Voice / video call buttons for the header of a direct chat. */
 export default function CallButtons({ chatId, peer }) {
   const { supported, inCall, startCall } = useCalls();
-  if (!supported || !peer?.id || peer.isDeleted) return null;
+  if (!supported || CHAT_PAGE_CONFIG.callsEnabled === false || !peer?.id || peer.isDeleted) return null;
 
   const start = (kind) =>
     startCall({

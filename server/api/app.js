@@ -1,7 +1,7 @@
 import { readAppMeta } from "../lib/appMeta.js";
 
 function registerAppRoutes(app, deps) {
-  const { REMOTE_CHANNELS, getSetting, fs, path, projectRootDir } = deps;
+  const { REMOTE_CHANNELS, getSetting, fs, path, projectRootDir, callsConfig } = deps;
 
   app.get("/api/app/info", (_req, res) => {
     const appMeta = readAppMeta({ fs, path, projectRootDir });
@@ -24,6 +24,9 @@ function registerAppRoutes(app, deps) {
       usernameMaxChars: Number(getSetting("USERNAME_MAX_CHARS")) || 16,
       nicknameMaxChars: Number(getSetting("NICKNAME_MAX_CHARS")) || 24,
       fileUploadEnabled: Boolean(getSetting("FILE_UPLOAD")),
+      // Voice/video calls are switched with CALLS_ENABLED; the client hides the
+      // call buttons when this is false.
+      callsEnabled: (typeof callsConfig === "function" ? callsConfig() : callsConfig)?.enabled !== false,
       fileUploadMaxFiles: Number(getSetting("FILE_UPLOAD_MAX_FILES")) || 10,
       fileUploadMaxSizeMb: Number(getSetting("FILE_UPLOAD_MAX_SIZE_MB")) || 25,
       fileUploadMaxTotalSizeMb: Number(getSetting("FILE_UPLOAD_MAX_TOTAL_SIZE_MB")) || 75,

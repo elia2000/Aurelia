@@ -4,6 +4,7 @@ import { ArrowLeft, ArrowRight, Close } from "../../icons/lucide.js";
 import { copyTextToClipboard } from "../../utils/clipboard.js";
 import { renderMarkdownBlock } from "../../utils/markdown.js";
 import { useFocusTrap } from "../../hooks/useFocusTrap.js";
+import { BRAND } from "../../brand.js";
 
 function normalizeVersionLabel(value) {
   return String(value || "")
@@ -244,7 +245,7 @@ export default function WhatsNewModal({
               What's New
             </p>
             <h3 id="whats-new-modal-title" className="mt-2 text-2xl font-bold text-emerald-700 dark:text-emerald-200">
-              Songbird {activeSection?.heading || version || ""}
+              {BRAND.name} {activeSection?.heading || version || ""}
             </h3>
           </div>
           <button

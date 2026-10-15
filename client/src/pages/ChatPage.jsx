@@ -126,6 +126,7 @@ import {
   OPEN_CHAT_ID_KEY,
   UPLOAD_PROGRESS_HIDE_DELAY_MS,
 } from "../utils/chatPageConstants.js";
+import { BRAND } from "../brand.js";
 
 const loadChatProfileModal = () => import("../components/modals/ChatProfileModal.jsx");
 const loadDeleteChatsModal = () => import("../components/modals/DeleteChatsModal.jsx");
@@ -1622,8 +1623,8 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
 
     document.title =
       totalUnreadCount > 0
-        ? `Songbird | ${totalUnread} new message${totalUnreadCount === 1 ? "" : "s"}`
-        : "Songbird";
+        ? `${BRAND.name} | ${totalUnread} new message${totalUnreadCount === 1 ? "" : "s"}`
+        : BRAND.name;
     if (navigator?.setAppBadge) {
       if (totalUnreadCount > 0) {
         navigator.setAppBadge(totalUnreadCount).catch(() => null);

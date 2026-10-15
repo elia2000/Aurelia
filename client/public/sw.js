@@ -107,9 +107,9 @@ self.addEventListener("push", (event) => {
   try {
     payload = event.data ? event.data.json() : {};
   } catch {
-    payload = { title: "Songbird", body: event.data?.text?.() || "" };
+    payload = { title: "Aurelle", body: event.data?.text?.() || "" };
   }
-  const title = payload.title || "Songbird";
+  const title = payload.title || "Aurelle";
   const body = payload.body || "New message";
   const data = payload.data || {};
   const badgeCount = Number(payload.badge || 0);
@@ -141,7 +141,7 @@ self.addEventListener("push", (event) => {
           : false,
       );
       if (appFocused) {
-        // A focused Songbird window handles unread state in-app.
+        // A focused Aurelle window handles unread state in-app.
         return;
       }
       try {

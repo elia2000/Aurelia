@@ -17,6 +17,7 @@ import {
 import { api } from "./adminShared.js";
 import { TypedConfirmModal, SectionHeading } from "./AdminCommon.jsx";
 import ConfirmModal from "../modals/ConfirmModal.jsx";
+import { BRAND } from "../../brand.js";
 
 // ─── Status badge — shown on the right side of an action row ────────────────
 
@@ -360,7 +361,7 @@ const ActionsTab = forwardRef(function ActionsTab({ serviceStatus }, ref) {
             icon={HardDriveUpload}
             iconAnim="icon-anim-lift"
             label="Restore database"
-            description={maintenanceInfo.offlineRestoreRequired ? "PostgreSQL restores require Songbird to be stopped; use the db:restore CLI command." : "Replace the current database by uploading a backup file."}
+            description={maintenanceInfo.offlineRestoreRequired ? `PostgreSQL restores require ${BRAND.name} to be stopped; use the db:restore CLI command.` : "Replace the current database by uploading a backup file."}
             onClick={() => fileRef.current?.click()}
             status={rowStatus.restore}
             disabled={maintenanceInfo.offlineRestoreRequired}
@@ -431,12 +432,12 @@ const ActionsTab = forwardRef(function ActionsTab({ serviceStatus }, ref) {
               icon={Trash}
               iconAnim="icon-anim-slide"
               label="Delete PostgreSQL database"
-              description={maintenanceInfo.offlineDeleteRequired ? "Requires Songbird to be stopped; use the db:delete CLI command." : "Drop the entire PostgreSQL database. Songbird will stop working until it is recreated."}
+              description={maintenanceInfo.offlineDeleteRequired ? `Requires ${BRAND.name} to be stopped; use the db:delete CLI command.` : `Drop the entire PostgreSQL database. ${BRAND.name} will stop working until it is recreated.`}
               onClick={() =>
                 setDanger({
                   key: "deleteDb",
                   title: "Delete PostgreSQL database",
-                  message: "This permanently drops the PostgreSQL database. All Songbird data will be unavailable until a new database is created and migrated.",
+                  message: `This permanently drops the PostgreSQL database. All ${BRAND.name} data will be unavailable until a new database is created and migrated.`,
                   phrase: "delete postgres database",
                   endpoint: "/api/admin/maintenance/delete",
                   busyLabel: "Deleting…",
@@ -484,8 +485,8 @@ const ActionsTab = forwardRef(function ActionsTab({ serviceStatus }, ref) {
         title={serviceAction === "stop" ? "Stop service" : "Restart service"}
         message={
           serviceAction === "stop"
-            ? "Stop the Songbird service? The app will go offline until it is started again from the server."
-            : "Restart the Songbird service? The app will be briefly unavailable while it restarts."
+            ? `Stop the ${BRAND.name} service? The app will go offline until it is started again from the server.`
+            : `Restart the ${BRAND.name} service? The app will be briefly unavailable while it restarts.`
         }
         confirmLabel={
           rowStatus[serviceAction]?.type === "busy"

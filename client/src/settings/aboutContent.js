@@ -1,54 +1,25 @@
+import { BRAND } from "../brand.js";
+
+// About screen content. Aurelle is a fork of Songbird (MIT), so the original
+// authorship stays credited here and in LICENSE.
 export const ABOUT_CONTENT = {
   copyright: {
-    ownerLabel: "@bllackbull",
-    ownerHref: "https://github.com/bllackbull",
+    ownerLabel: BRAND.name,
+    ownerHref: BRAND.repository,
   },
   socials: [
     {
-      icon: "docker",
-      href: "https://hub.docker.com/r/bllackbull/songbird",
-    },
-    {
-      icon: "railway",
-      href: "https://railway.app/template/songbird",
-    },
-    {
       icon: "github",
-      href: "https://github.com/bllackbull/Songbird",
-    },
-    {
-      icon: "telegram",
-      href: "https://t.me/songbirdapp",
-    },
-    {
-      icon: "songbird",
-      href: "https://chat.songbird.website/invite/songbird",
-    },
-    {
-      icon: "linkedin",
-      href: "https://www.linkedin.com/in/pouyakhalilii/",
+      href: BRAND.repository,
     },
   ],
-  supportIntro:
-    "If Songbird is useful to you, you can support ongoing development with these wallets:",
-  donationLink: {
-    href: "https://nowpayments.io/donation/blackbull",
-    title: "NOWPAYMENTS",
-    description: "Donate with any currency",
-    buttonLabel: "Support",
+  upstream: {
+    label: `${BRAND.upstream.name} by @bllackbull`,
+    href: BRAND.upstream.repository,
   },
-  wallets: [
-    {
-      label: "TRX",
-      address: "TPf1bEhipKpGkjo5N2Scj9nufNNh5TNrwX",
-    },
-    {
-      label: "BTC",
-      address: "bc1q9hupvcc39juhf0k7rgzn6phn8s8jez365kzmuj",
-    },
-    {
-      label: "TON",
-      address: "UQDzQ3xbWzKQvw8X8sWU82dksBeYqTHrT9sLzhBOyaESPjVy",
-    },
-  ],
+  // No donation wallets: the ones that shipped with the original project
+  // belong to its author, not to this fork. Add your own here if wanted.
+  supportIntro: "",
+  donationLink: null,
+  wallets: [],
 };

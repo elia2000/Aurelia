@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Aurelle">
+  <defs>
+    <linearGradient id="aurelle-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#047857"/>
+      <stop offset="1" stop-color="#022c22"/>
+    </linearGradient>
+    <linearGradient id="aurelle-gold" gradientUnits="userSpaceOnUse" x1="0" y1="96" x2="0" y2="416">
+      <stop offset="0" stop-color="#fde9ad"/>
+      <stop offset="0.5" stop-color="#e3b64d"/>
+      <stop offset="1" stop-color="#b5801c"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#aurelle-bg)"/>
+  <circle cx="256" cy="256" r="196" fill="none" stroke="url(#aurelle-gold)" stroke-opacity="0.35" stroke-width="3"/>
+  <path d="M148 400 L256 112 L364 400" fill="none" stroke="url(#aurelle-gold)" stroke-width="46" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M200 322 H312" fill="none" stroke="url(#aurelle-gold)" stroke-width="28" stroke-linecap="round"/>
+</svg>
