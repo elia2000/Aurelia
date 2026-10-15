@@ -44,8 +44,8 @@ Aurelle یک فورک از [Songbird](https://github.com/bllackbull/Songbird) (�
 Aurelle از روی سورس ساخته می‌شود. با Docker:
 
 ```bash
-git clone https://github.com/elia2000/aurelia.git
-cd aurelia
+git clone https://github.com/elia2000/Aurelle.git
+cd Aurelle
 cp .env.example .env
 docker compose up -d --build
 ```
@@ -53,7 +53,7 @@ docker compose up -d --build
 یا روی یک سرور Ubuntu (نسخه 22.04+) با دسترسی `sudo` از اسکریپت نصب استفاده کنید:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/elia2000/aurelia/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelle/main/scripts/install.sh | bash
 ```
 
 > [!TIP]

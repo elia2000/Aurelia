@@ -44,8 +44,8 @@ The server can still see metadata (who talks to whom, when, sizes). Read the [th
 Aurelle is built from source. With Docker:
 
 ```bash
-git clone https://github.com/elia2000/aurelia.git
-cd aurelia
+git clone https://github.com/elia2000/Aurelle.git
+cd Aurelle
 cp .env.example .env
 docker compose up -d --build
 ```
@@ -53,7 +53,7 @@ docker compose up -d --build
 Or on an Ubuntu server (22.04+) with `sudo`, use the deployment script:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/elia2000/aurelia/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelle/main/scripts/install.sh | bash
 ```
 
 > [!TIP]

@@ -14,7 +14,7 @@ hero:
       link: /fa/Deployment-Script
     - theme: alt
       text: مشاهده در GitHub
-      link: https://github.com/elia2000/aurelia
+      link: https://github.com/elia2000/Aurelle
 
 features:
   - icon: 🔐

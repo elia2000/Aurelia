@@ -113,7 +113,7 @@ export default defineConfig({
     logo: '/aurelle-logo.svg',
 
     socialLinks: [
-      {icon: 'github', link: 'https://github.com/elia2000/aurelia'},
+      {icon: 'github', link: 'https://github.com/elia2000/Aurelle'},
     ],
 
     search: {
@@ -129,11 +129,11 @@ export default defineConfig({
         nav: [
           {text: 'Home', link: '/'},
           {text: 'Guide', link: '/Deployment-Script'},
-          {text: 'Releases', link: 'https://github.com/elia2000/aurelia/releases'},
+          {text: 'Releases', link: 'https://github.com/elia2000/Aurelle/releases'},
         ],
         sidebar: enSidebar,
         editLink: {
-          pattern: 'https://github.com/elia2000/aurelia/edit/main/docs/:path',
+          pattern: 'https://github.com/elia2000/Aurelle/edit/main/docs/:path',
           text: 'Edit this page on GitHub',
         },
         footer: {
@@ -151,11 +151,11 @@ export default defineConfig({
         nav: [
           {text: 'خانه', link: '/fa/'},
           {text: 'راهنما', link: '/fa/Deployment-Script'},
-          {text: 'نسخه‌ها', link: 'https://github.com/elia2000/aurelia/releases'},
+          {text: 'نسخه‌ها', link: 'https://github.com/elia2000/Aurelle/releases'},
         ],
         sidebar: faSidebar,
         editLink: {
-          pattern: 'https://github.com/elia2000/aurelia/edit/main/docs/:path',
+          pattern: 'https://github.com/elia2000/Aurelle/edit/main/docs/:path',
           text: 'ویرایش این صفحه در GitHub',
         },
         footer: {
