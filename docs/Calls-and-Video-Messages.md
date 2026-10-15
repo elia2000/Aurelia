@@ -34,7 +34,22 @@ Everything here works in the browser and in the installed PWA. The protocol is d
 3. Once connected, both screens show the same **four emoji**. Ask each other to read them out: if they match, nobody is intercepting the call.
 4. Tap the lock badge to open the **safety number**. If the numbers match on both phones, press *Mark as verified*. That contact is then remembered as verified on this device until their devices change. You do not need a call for this: the shield button in the header of a direct chat opens the same screen.
 
+While you call, the screen tells you where things stand:
+
+| You see | Meaning |
+|---|---|
+| **Calling…** | The call is being placed. |
+| **Waiting…** | The call is placed, but the other person's app is closed or offline. They get a push notification (if they enabled notifications), and the call connects if they open the app in time (the call stays open for about 45 seconds). |
+| **Ringing…** | Their app is open and is ringing right now. The ring tone on your side only plays during this step. |
+| **Connecting…** | They answered and the two devices are setting up the encrypted connection. After about 10 seconds it adds *Still connecting*. |
+
 Calls are one-to-one and happen in direct chats. You can minimise the call screen and keep browsing.
+
+### Video calls and the camera
+
+- In a video call the camera button turns your video on and off at any time. When someone's camera is off the other person sees a **black screen** that says *Camera off* (their name stays visible), and a small black tile stands in for your own picture.
+- On an incoming video call you can press **Answer with camera off** to join without showing yourself. You still see them, and you can switch your camera on later without reconnecting.
+- If the camera is blocked or missing, the call is **not** dropped: you join without video and the screen tells you why. Only a blocked or missing microphone ends a call.
 
 ### Video messages
 

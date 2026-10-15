@@ -5,6 +5,8 @@ import { ApiError } from "../../src/api/e2eeApi.js";
 import {
   FakePeerConnection,
   FakeServer,
+  FakeStream,
+  FakeTrack,
   linkDataChannels,
   makeGetUserMedia,
   waitFor,
@@ -26,6 +28,7 @@ async function connectedCall({ kind = "audio", aliceOpts, bobOpts } = {}) {
 
 beforeEach(() => {
   FakePeerConnection.instances = [];
+  FakePeerConnection.autoConnect = true;
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -486,8 +489,9 @@ describe("connection recovery", () => {
     await vi.advanceTimersByTimeAsync(14_000);
     expect(alice.manager.getState().phase).toBe(CALL_PHASE.CONNECTED); // still waiting for recovery
     await vi.advanceTimersByTimeAsync(2_000);
-    expect(alice.manager.getState().endReason).toBe("failed");
-    expect(bob.manager.getState().endReason).toBe("failed");
+    // A call that was up and then lost its connection says so (it did not fail to connect).
+    expect(alice.manager.getState().endReason).toBe("connection_lost");
+    expect(bob.manager.getState().endReason).toBe("connection_lost");
   });
 
   test("brief disconnects are tolerated", async () => {
@@ -856,5 +860,178 @@ describe("devices the person has not acknowledged", () => {
     await waitFor(() => phase(CALL_PHASE.ENDED)(bob), { label: "bob refuses the invite" });
     expect(bob.manager.getState().endReason).toBe("key_mismatch");
     expect(bob.getUserMedia).not.toHaveBeenCalled();
+  });
+});
+
+describe("waiting versus ringing", () => {
+  test("the caller waits until the other person's app reports that it is ringing", async () => {
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    server.managers.set(bob.user.id, []); // bob's app is closed: nothing is delivered to it
+
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await waitFor(() => alice.manager.getState().waiting, { label: "waiting" });
+    expect(alice.manager.getState()).toMatchObject({ phase: "outgoing", waiting: true, ringing: false });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(alice.manager.getState().ringing).toBe(false); // still nobody reached
+
+    // Bob opens the app: the pending call rings there and the caller is told.
+    server.managers.set(bob.user.id, [bob.manager]);
+    const invite = server.log.find((e) => e.op === "startCall");
+    await bob.manager.handleEvent({
+      type: "call_invite",
+      callId: invite.callId,
+      kind: "audio",
+      chatId: "c",
+      from: { userId: alice.user.id, username: "alice", nickname: "alice" },
+      invite: invite.invite,
+    });
+    await waitFor(() => alice.manager.getState().ringing, { label: "ringing" });
+    expect(alice.manager.getState()).toMatchObject({ ringing: true, waiting: false });
+    expect(bob.api.markCallRinging).toHaveBeenCalledTimes(1);
+  });
+
+  test("an online callee is rung almost immediately", async () => {
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(bob));
+    await waitFor(() => alice.manager.getState().ringing, { label: "ringing" });
+    expect(alice.manager.getState().waiting).toBe(false);
+  });
+
+  test("a ringing report that arrives after the call moved on changes nothing", async () => {
+    const { alice } = await connectedCall();
+    const callId = alice.manager.getState().callId;
+    await alice.manager.handleEvent({ type: "call_ringing", callId });
+    expect(alice.manager.getState()).toMatchObject({ phase: CALL_PHASE.CONNECTED, ringing: false });
+  });
+});
+
+describe("connections that do not come up", () => {
+  const stuckCall = async (hasRelay) => {
+    FakePeerConnection.autoConnect = false;
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    for (const who of [alice, bob]) {
+      who.api.fetchIceConfig.mockResolvedValue({ iceServers: [], hasRelay });
+    }
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(bob));
+    await bob.manager.accept();
+    await waitFor(() => phase(CALL_PHASE.CONNECTING)(alice) && phase(CALL_PHASE.CONNECTING)(bob), { label: "connecting" });
+    return { alice, bob };
+  };
+
+  test("a slow connection says it is still trying", async () => {
+    const { alice } = await stuckCall(true);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    // (timers armed before faking keep their real clock, so wait for real)
+    vi.useRealTimers();
+    await waitFor(() => alice.manager.getState().connectingSlow, { timeout: 12_000, label: "slow hint" });
+    expect(alice.manager.getState().phase).toBe(CALL_PHASE.CONNECTING);
+  }, 20_000);
+
+  test("with no relay configured the failure points at the relay", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    const { alice, bob } = await stuckCall(false);
+    await vi.advanceTimersByTimeAsync(46_000);
+    expect(alice.manager.getState().endReason).toBe("connect_failed_no_relay");
+    expect(bob.manager.getState().endReason).toBe("connect_failed_no_relay");
+  });
+
+  test("with a relay the failure is a plain connection failure, and the other side is told", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    const { alice, bob } = await stuckCall(true);
+    await vi.advanceTimersByTimeAsync(46_000);
+    expect(alice.manager.getState().endReason).toBe("connect_failed");
+    expect(bob.manager.getState().endReason).toBe("connect_failed");
+    // Reported to the server as a failure, not a hang-up.
+    const reports = [...alice.api.endCall.mock.calls, ...bob.api.endCall.mock.calls];
+    expect(reports.some(([, reason]) => reason === "failed")).toBe(true);
+  });
+});
+
+describe("video calls with the camera off", () => {
+  const videoCall = async ({ aliceOpts, bobOpts, aliceCamera, bobCamera } = {}) => {
+    const server = new FakeServer();
+    const alice = await server.addUser("alice", aliceOpts);
+    const bob = await server.addUser("bob", bobOpts);
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob), kind: "video", camera: aliceCamera });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(bob));
+    await bob.manager.accept({ camera: bobCamera });
+    await waitFor(() => phase(CALL_PHASE.CONNECTED)(alice) && phase(CALL_PHASE.CONNECTED)(bob), { label: "connected" });
+    linkDataChannels(alice.pc, bob.pc);
+    return { server, alice, bob };
+  };
+
+  test("answering with the camera off never opens the camera, yet the call is still a video call", async () => {
+    const { alice, bob } = await videoCall({ bobCamera: false });
+    expect(bob.getUserMedia.calls.every((c) => c.video === false)).toBe(true);
+    const state = bob.manager.getState();
+    expect(state).toMatchObject({ kind: "video", cameraOn: false });
+    expect(state.localStream.getVideoTracks()).toHaveLength(0);
+    // A two-way video line exists, so the camera can be turned on later without renegotiating.
+    const line = bob.pc.transceivers.find((t) => t.receiver.track.kind === "video");
+    expect(line?.direction).toBe("sendrecv");
+    // The other person is told, so their screen can go black instead of showing a frozen frame.
+    await waitFor(() => alice.manager.getState().remoteCameraOn === false, { label: "alice sees camera off" });
+  });
+
+  test("the camera can be turned on later, and the other person is told", async () => {
+    const { alice, bob } = await videoCall({ bobCamera: false });
+    await bob.manager.setCameraEnabled(true);
+    await waitFor(() => bob.manager.getState().cameraOn, { label: "camera on" });
+    const sender = bob.pc.transceivers.find((t) => t.receiver.track.kind === "video").sender;
+    expect(sender.replaceTrack).toHaveBeenCalledWith(expect.objectContaining({ kind: "video" }));
+    await waitFor(() => alice.manager.getState().remoteCameraOn === true, { label: "alice sees camera on" });
+  });
+
+  test("a caller can also start a video call with the camera off", async () => {
+    const { alice } = await videoCall({ aliceCamera: false });
+    expect(alice.getUserMedia.calls.every((c) => c.video === false)).toBe(true);
+    expect(alice.manager.getState()).toMatchObject({ kind: "video", cameraOn: false });
+  });
+
+  test("a blocked camera does not end the call: the person joins without video and is told", async () => {
+    const noCamera = vi.fn(async (constraints) => {
+      if (constraints.video) throw Object.assign(new Error("denied"), { name: "NotAllowedError" });
+      return new FakeStream([new FakeTrack("audio")]);
+    });
+    const { bob } = await videoCall({ bobOpts: { getUserMedia: noCamera } });
+    expect(bob.manager.getState()).toMatchObject({ phase: CALL_PHASE.CONNECTED, cameraOn: false, cameraBlocked: "permission_denied" });
+  });
+
+  test("a missing camera is reported distinctly", async () => {
+    const noCamera = vi.fn(async (constraints) => {
+      if (constraints.video) throw Object.assign(new Error("none"), { name: "NotFoundError" });
+      return new FakeStream([new FakeTrack("audio")]);
+    });
+    const { alice } = await videoCall({ aliceOpts: { getUserMedia: noCamera } });
+    expect(alice.manager.getState().cameraBlocked).toBe("no_device");
+  });
+
+  test("a blocked microphone still ends a video call", async () => {
+    const server = new FakeServer();
+    const alice = await server.addUser("alice", { getUserMedia: makeGetUserMedia({ deny: "NotAllowedError" }) });
+    const bob = await server.addUser("bob");
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob), kind: "video" });
+    await waitFor(() => phase(CALL_PHASE.ENDED)(alice));
+    expect(alice.manager.getState().endReason).toBe("permission_denied");
+  });
+
+  test("a remote video track alone does not claim that their camera is on; media flowing does", async () => {
+    const { alice } = await videoCall({ bobCamera: false });
+    // A browser creates the remote video track as soon as the line is negotiated,
+    // but it stays muted until a picture actually arrives.
+    const track = new FakeTrack("video");
+    track.muted = true;
+    alice.pc.ontrack({ track });
+    expect(alice.manager.getState().remoteCameraOn).toBe(false);
+    track.onunmute();
+    expect(alice.manager.getState().remoteCameraOn).toBe(true);
   });
 });

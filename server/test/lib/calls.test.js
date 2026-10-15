@@ -36,6 +36,20 @@ describe("call registry", () => {
     expect(registry.getLiveCallForUser(BOB.id)).toBeNull();
   });
 
+  test("ringing is reported once, by the callee only, and only while the call rings", () => {
+    inviteAB();
+    expect(() => registry.markRinging("call-1", ALICE.id)).toThrow(CallError);
+    expect(() => registry.markRinging("call-1", CAROL.id)).toThrow(CallError);
+    expect(registry.markRinging("call-1", BOB.id)?.id).toBe("call-1");
+    expect(registry.markRinging("call-1", BOB.id)).toBeNull(); // already known
+  });
+
+  test("a call that was answered or ended is never reported as ringing", () => {
+    inviteAB();
+    registry.accept("call-1", BOB.id, "dev-b");
+    expect(registry.markRinging("call-1", BOB.id)).toBeNull();
+  });
+
   test("reports busy for the callee and for the caller", () => {
     inviteAB();
     expect(() =>

@@ -9,6 +9,7 @@ import { REALTIME_OPEN_EVENT } from "../../calls/callContext.js";
 
 const CALL_EVENT_TYPES = new Set([
   "call_invite",
+  "call_ringing",
   "call_accept",
   "call_signal",
   "call_end",

@@ -86,6 +86,10 @@ class FakeDataChannel {
 
 export class FakePeerConnection {
   static instances = [];
+  /** false: media never connects (a network that needs a relay nobody set up). */
+  static autoConnect = true;
+  /** Like a browser, a received video offer creates a receive-only video line. */
+  static videoLineFromOffer = true;
 
   constructor(config) {
     this.config = config;
@@ -110,7 +114,15 @@ export class FakePeerConnection {
     this.transceivers.push({ sender, receiver: { track: { kind: track.kind } }, setCodecPreferences: vi.fn() });
     return sender;
   }
-  addTransceiver() { return {}; }
+  addTransceiver(kind, init = {}) {
+    // Like a browser: a two-way transceiver without a track yet, which a track
+    // can later be swapped into without renegotiating.
+    const sender = new FakeSender(null);
+    const transceiver = { sender, receiver: { track: { kind } }, direction: init.direction, setCodecPreferences: vi.fn() };
+    this.senders.push(sender);
+    this.transceivers.push(transceiver);
+    return transceiver;
+  }
   getTransceivers() { return this.transceivers; }
   createDataChannel() {
     this.dc = new FakeDataChannel();
@@ -134,6 +146,21 @@ export class FakePeerConnection {
   }
   async setRemoteDescription(desc) {
     this.remoteDescription = desc;
+    if (
+      desc.type === "offer" &&
+      FakePeerConnection.videoLineFromOffer &&
+      FakePeerConnection.instances.some(
+        (pc) => pc !== this && pc.transceivers.some((t) => t.receiver.track.kind === "video"),
+      ) &&
+      !this.transceivers.some((t) => t.receiver.track.kind === "video")
+    ) {
+      this.transceivers.push({
+        sender: new FakeSender(null),
+        receiver: { track: { kind: "video" } },
+        direction: "recvonly",
+        setCodecPreferences: vi.fn(),
+      });
+    }
     this.#maybeConnect();
   }
   async addIceCandidate(c) { this.addedCandidates.push(c); }
@@ -147,7 +174,7 @@ export class FakePeerConnection {
     this.onconnectionstatechange?.();
   }
   #maybeConnect() {
-    if (this.localDescription && this.remoteDescription && this.connectionState === "new") {
+    if (FakePeerConnection.autoConnect && this.localDescription && this.remoteDescription && this.connectionState === "new") {
       setImmediate(() => this.setState("connected"));
     }
   }
@@ -253,6 +280,14 @@ export class FakeServer {
           ...(eph ? { eph } : {}),
           toDeviceId: to === call.callee ? call.calleeDeviceId : server.callerDeviceOf(call),
         });
+      }),
+      markCallRinging: vi.fn(async (callId) => {
+        server.log.push({ op: "ringing", callId });
+        const call = server.calls.get(callId);
+        if (call && !call.calleeDeviceId && !call.ringingSent) {
+          call.ringingSent = true;
+          server.deliver(call.caller, { type: "call_ringing", callId });
+        }
       }),
       markCallConnected: vi.fn(async () => {}),
       endCall: vi.fn(async (callId, reason) => {

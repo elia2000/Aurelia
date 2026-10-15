@@ -258,6 +258,12 @@ Provide the provider's CA certificate to Node.js via the `NODE_EXTRA_CA_CERTS` e
 Calls are peer-to-peer. When the two devices cannot reach each other directly (mobile data, strict NAT, corporate firewalls) a relay is needed.
 
 - The call buttons are missing: you are not on HTTPS (or `localhost`), the browser has no WebRTC/camera support, or `CALLS_ENABLED=false`.
+- The call is answered but sits on *Connecting…* and ends with *Couldn't connect* (or *This server has no relay…*): the two devices cannot reach each other directly, which is normal behind mobile data and many routers, and no working relay is available. Check, in this order:
+  1. While signed in, open `/api/calls/ice-config`. It must list a `turn:` server with a `username` and `credential`. If `iceServers` is empty, `CALLS_TURN_URLS` / `CALLS_TURN_SECRET` are missing or the app was not restarted after changing `.env`.
+  2. Test the relay itself: open the browser's *Trickle ICE* test page (`webrtc.github.io/samples/src/content/peerconnection/trickle-ice/`), paste one `turn:` URL, the `username` and `credential` from step 1, and press *Gather candidates*. A row of type **relay** means coturn works. No relay row means coturn is unreachable (firewall) or its secret does not match `CALLS_TURN_SECRET`.
+  3. Open `3478` (UDP and TCP) and the relay port range `49160-49260` (UDP) in the firewall, and set coturn's `external-ip` to the server's public address.
+  4. The relay's DNS name must not go through Cloudflare's proxy (use *DNS only*), because calls use UDP.
+- The call stays on *Waiting…* instead of *Ringing…*: the other person's app is closed or offline. This is expected; they are only notified by push (if enabled) and the call connects if they open the app within about 45 seconds.
 - The call rings but stays on *Connecting…* between different networks: set up the relay. See [Calls & Video Messages](./Calls-and-Video-Messages.md#setting-up-the-relay).
 - Open `/api/calls/ice-config` while signed in. If `iceServers` is empty, `CALLS_TURN_URLS` or `CALLS_TURN_SECRET` is not set (and the server was not restarted).
 - Check that `3478` (UDP and TCP) and the relay port range `49160-49260` (UDP) are open in the firewall, and that `CALLS_TURN_EXTERNAL_IP` is the server's public address. Check the relay log with `docker compose logs coturn`.

@@ -172,7 +172,7 @@ export function CallProvider({ user, children }) {
       minimized,
       setMinimized,
       startCall,
-      accept: () => manager?.accept(),
+      accept: (options) => manager?.accept(options),
       decline: () => manager?.decline(),
       hangup: () => manager?.hangup(),
       setMuted: (muted) => manager?.setMuted(muted),

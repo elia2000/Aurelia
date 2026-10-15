@@ -82,6 +82,10 @@ export const acceptCall = (callId, accept) =>
 export const sendCallSignal = (callId, { kind, blob, seq, eph }) =>
   post(`/api/calls/${encodeURIComponent(callId)}/signal`, { kind, blob, seq, ...(eph ? { eph } : {}) });
 
+/** The incoming-call screen is showing: lets the caller change "Waiting…" to "Ringing…". */
+export const markCallRinging = (callId) =>
+  post(`/api/calls/${encodeURIComponent(callId)}/ringing`, {});
+
 export const markCallConnected = (callId) =>
   post(`/api/calls/${encodeURIComponent(callId)}/connected`, {});
 

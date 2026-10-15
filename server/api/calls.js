@@ -409,6 +409,26 @@ function registerCallRoutes(app, deps) {
     },
   );
 
+  // The callee's app reports that it is showing the incoming-call screen, so
+  // the caller can switch from "Waiting…" (nobody reached yet) to "Ringing…".
+  // A callee whose app is closed never sends this; its device only gets a push.
+  app.post(
+    "/api/calls/:callId/ringing",
+    validateUuidParams("callId"),
+    async (req, res) => {
+      const user = await resolveCaller(req, res);
+      if (!user) return;
+      if (!signalThrottle.take(user.id)) return tooMany(res);
+      try {
+        const call = callRegistry.markRinging(req.params.callId, user.id);
+        if (call) emit(call.caller.username, { type: "call_ringing", callId: call.id });
+        return res.json({ ok: true });
+      } catch (error) {
+        return sendCallError(res, error);
+      }
+    },
+  );
+
   app.post(
     "/api/calls/:callId/connected",
     validateUuidParams("callId"),

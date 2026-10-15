@@ -96,6 +96,7 @@ export function createCallRegistry({
       calleeDeviceId: null,
       invitePayload,
       offlineSince: null,
+      ringingAt: null,
     };
     calls.set(callId, call);
     activeByUserId.set(caller.id, callId);
@@ -134,6 +135,22 @@ export function createCallRegistry({
     call.state = CALL_STATES.CONNECTING;
     call.answeredAt = now();
     call.calleeDeviceId = deviceId || null;
+    return call;
+  }
+
+  /**
+   * The callee's app is showing the incoming-call screen. Returns the call the
+   * first time (so the caller can be told once), null when it was already known
+   * or the call is no longer ringing.
+   */
+  function markRinging(callId, userId) {
+    const auth = authorize(callId, userId);
+    if (!auth || auth.role !== "callee") {
+      throw new CallError("forbidden", "Not your call.", 403);
+    }
+    const { call } = auth;
+    if (call.state !== CALL_STATES.RINGING || call.ringingAt) return null;
+    call.ringingAt = now();
     return call;
   }
 
@@ -232,6 +249,7 @@ export function createCallRegistry({
     get,
     authorize,
     accept,
+    markRinging,
     markActive,
     end,
     endBy,

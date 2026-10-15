@@ -104,6 +104,64 @@ describe("CallOverlay", () => {
     expect(document.querySelector('[role="timer"]').getAttribute("aria-live")).toBe("off");
   });
 
+  test("an outgoing call says Waiting… until the other app is ringing, then Ringing…", async () => {
+    renderOverlay({ phase: "outgoing", ringing: false, waiting: true, peer });
+    await expect.element(page.getByText("Waiting…")).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("Ringing…");
+  });
+
+  test("before the call is placed it says Calling…", async () => {
+    renderOverlay({ phase: "outgoing", ringing: false, waiting: false, peer });
+    await expect.element(page.getByText("Calling…")).toBeInTheDocument();
+  });
+
+  test("a video call can be answered with the camera off; a voice call has no such button", async () => {
+    const value = renderOverlay({ phase: "incoming", kind: "video", ringing: true, peer, trust: { status: "ok" } });
+    await page.getByRole("button", { name: "Answer with camera off" }).click();
+    expect(value.accept).toHaveBeenCalledWith({ camera: false });
+    await page.getByRole("button", { name: "Accept call" }).click();
+    expect(value.accept).toHaveBeenLastCalledWith();
+  });
+
+  test("an incoming voice call offers no camera choice", async () => {
+    renderOverlay({ phase: "incoming", kind: "audio", ringing: true, peer, trust: { status: "ok" } });
+    await expect.element(page.getByRole("button", { name: "Accept call" })).toBeInTheDocument();
+    expect(document.querySelector('button[aria-label="Answer with camera off"]')).toBeNull();
+  });
+
+  test("in a video call, when the other camera is off the screen is black with a clear label (no avatar)", async () => {
+    renderOverlay({ phase: "connected", kind: "video", peer, cameraOn: true, remoteCameraOn: false, connectedAt: Date.now() });
+    await expect.element(page.getByText("Camera off")).toBeInTheDocument();
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog.className).toContain("bg-black");
+    // No avatar stage: the name is still there so you know who it is.
+    expect(dialog.querySelector("h2").textContent).toBe("Bob");
+    expect(dialog.querySelector(".h-28.w-28")).toBeNull();
+  });
+
+  test("your own camera being off shows a black tile instead of a missing picture", async () => {
+    renderOverlay({ phase: "connected", kind: "video", peer, cameraOn: false, remoteCameraOn: true, connectedAt: Date.now() });
+    await expect.element(page.getByRole("img", { name: "Your camera is off" })).toBeInTheDocument();
+  });
+
+  test("a voice call keeps the avatar stage and never says the camera is off", async () => {
+    renderOverlay({ phase: "connected", kind: "audio", peer, connectedAt: Date.now() });
+    await expect.element(page.getByRole("timer")).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("Camera off");
+    expect(document.querySelector('[role="dialog"]').className).not.toContain("bg-black");
+  });
+
+  test("a slow connection says it is still trying", async () => {
+    renderOverlay({ phase: "connecting", peer, connectingSlow: true });
+    await expect.element(page.getByText(/Still connecting/)).toBeInTheDocument();
+    renderOverlay({ phase: "connecting", peer, connectingSlow: false });
+  });
+
+  test("a blocked or missing camera is explained", async () => {
+    renderOverlay({ phase: "connected", kind: "video", peer, cameraBlocked: "permission_denied", connectedAt: Date.now() });
+    await expect.element(page.getByText(/Camera access is blocked, so you are not sending video/)).toBeInTheDocument();
+  });
+
   test("an outgoing call shows ringing and can be cancelled", async () => {
     const value = renderOverlay({ phase: "outgoing", ringing: true, peer });
     await expect.element(page.getByText("Ringing…")).toBeInTheDocument();
@@ -148,6 +206,9 @@ describe("CallOverlay", () => {
     ["declined", "Call declined"],
     ["busy", "User is busy"],
     ["busy_self", "You are already in a call"],
+    ["connect_failed", "Couldn't connect. Check your network and try again."],
+    ["connect_failed_no_relay", "Couldn't connect. This server has no relay (TURN) set up, which calls between different networks need."],
+    ["connection_lost", "Connection lost"],
     ["clock_skew", "This device's clock looks wrong. Check the date and time."],
     ["relay_unavailable", "This server only allows relayed calls, but no relay is set up."],
     ["no_answer", "No answer"],

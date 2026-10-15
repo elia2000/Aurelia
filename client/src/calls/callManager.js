@@ -48,6 +48,7 @@ const STATS_INTERVAL_MS = 5_000;
 const ENDED_LINGER_MS = 2_500;
 const MAX_ICE_RESTARTS = 3;
 const MAX_SIGNAL_AUTH_FAILURES = 3;
+const SLOW_CONNECT_MS = 10_000;
 
 const idleState = () => ({
   phase: CALL_PHASE.IDLE,
@@ -57,12 +58,15 @@ const idleState = () => ({
   chatId: null,
   peer: null,
   ringing: false,
+  waiting: false,
   sas: null,
   trust: null,
   muted: false,
   remoteMuted: false,
   cameraOn: false,
   remoteCameraOn: false,
+  cameraBlocked: null,
+  connectingSlow: false,
   videoTier: DEFAULT_VIDEO_TIER,
   networkPaused: false,
   relayed: false,
@@ -79,6 +83,9 @@ const FAILURE_REASONS = new Set([
   "handshake_failed",
   "clock_skew",
   "relay_unavailable",
+  "connect_failed",
+  "connect_failed_no_relay",
+  "connection_lost",
   "key_mismatch",
   "permission_denied",
   "no_device",
@@ -155,7 +162,14 @@ export class CallManager {
   }
 
   // ── outgoing ─────────────────────────────────────────────────────────────
-  async startCall({ chatId, peer, kind = "audio" }) {
+  /**
+   * @param {object} args
+   * @param {"audio"|"video"} [args.kind]
+   * @param {boolean} [args.camera]  false: a video call that starts with the
+   *   camera off (the other person's video still shows, and the camera can be
+   *   turned on at any time)
+   */
+  async startCall({ chatId, peer, kind = "audio", camera = true }) {
     if (this.#call) {
       // The "call ended" card lingers for a moment; a new call replaces it.
       if (this.#state.phase !== CALL_PHASE.ENDED) throw new Error("A call is already in progress.");
@@ -168,7 +182,8 @@ export class CallManager {
       chatId,
       peer,
     });
-    this.#set({ phase: CALL_PHASE.OUTGOING, ringing: false, trust: null });
+    call.cameraWanted = camera !== false;
+    this.#set({ phase: CALL_PHASE.OUTGOING, ringing: false, waiting: false, trust: null });
 
     try {
       // The microphone/camera stream is attached to the call the moment it
@@ -212,7 +227,11 @@ export class CallManager {
       }
       call.posted = true;
       call.deferredInvite = null; // we won; the server turned the other call away
-      this.#set({ ringing: true });
+      // The call is placed, but nobody has been reached yet: "ringing" is only
+      // shown once the other person's app reports that it is ringing (their
+      // phone may be offline or the app closed, in which case it only gets a
+      // push notification).
+      this.#set({ ringing: false, waiting: true });
       call.ringTimer = setTimeout(() => this.#finish(call, "no_answer", { notifyServer: true }), RING_TIMEOUT_MS);
     } catch (error) {
       const deferred = call.deferredInvite;
@@ -221,6 +240,13 @@ export class CallManager {
       // won: ring for it instead of leaving the caller with nobody to answer.
       if (deferred) this.#onInvite(deferred);
     }
+  }
+
+  #onRinging(event) {
+    const call = this.#call;
+    if (!call || call.id !== event.callId || call.direction !== "outgoing") return;
+    if (this.#state.phase !== CALL_PHASE.OUTGOING) return;
+    this.#set({ ringing: true, waiting: false });
   }
 
   async #onAccept(event) {
@@ -342,16 +368,20 @@ export class CallManager {
         trust: callerKeys.assessment,
       });
       call.ringTimer = setTimeout(() => this.#finish(call, "missed"), RING_TIMEOUT_MS);
+      // Tell the caller this app is actually ringing (it shows "Waiting…" until then).
+      Promise.resolve(this.#api.markCallRinging?.(callId)).catch(() => {});
     } catch (error) {
       this.#api.endCall(callId, "failed").catch(() => {});
       this.#failActive(call, error, { notifyServer: false });
     }
   }
 
-  async accept() {
+  /** @param {{camera?: boolean}} [options]  camera: false answers a video call with the camera off */
+  async accept({ camera = true } = {}) {
     const call = this.#call;
     if (!call || this.#state.phase !== CALL_PHASE.INCOMING) return;
     clearTimeout(call.ringTimer);
+    call.cameraWanted = camera !== false;
     this.#set({ phase: CALL_PHASE.CONNECTING, ringing: false });
 
     try {
@@ -429,6 +459,8 @@ export class CallManager {
     switch (event?.type) {
       case "call_invite":
         return this.#onInvite(event);
+      case "call_ringing":
+        return this.#onRinging(event);
       case "call_accept":
         return this.#onAccept(event);
       case "call_signal":
@@ -472,6 +504,9 @@ export class CallManager {
     }
     let reason = SERVER_END_REASONS[event.reason] || "hangup";
     if (reason === "missed" && call.direction === "outgoing") reason = "no_answer";
+    // The other side gave up on the connection first (both usually notice at
+    // about the same moment): explain it the same way as when we notice first.
+    if (reason === "failed" && call.session) reason = this.#connectFailureReason(call);
     this.#finish(call, reason);
   }
 
@@ -562,6 +597,7 @@ export class CallManager {
     try {
       if (kind === "offer" && call.direction === "incoming") {
         await call.pc.setRemoteDescription({ type: "offer", sdp: String(payload.sdp) });
+        this.#adoptOfferedVideoLine(call);
         await this.#drainRemoteCandidates(call);
         const answer = await call.pc.createAnswer();
         const sdp = tuneOpusSdp(answer.sdp);
@@ -582,6 +618,22 @@ export class CallManager {
     } catch (error) {
       this.#failActive(call, error);
     }
+  }
+
+  /**
+   * Answering a video call without a camera: the offer's video line exists now
+   * but only receives. Make it two-way before answering so the camera can be
+   * switched on later by swapping in a track, with no new negotiation.
+   */
+  #adoptOfferedVideoLine(call) {
+    if (call.kind !== "video" || call.videoSender) return;
+    const line = call.pc.getTransceivers().find((t) => t.receiver?.track?.kind === "video");
+    if (!line) return;
+    try {
+      line.direction = "sendrecv";
+    } catch (_) {}
+    call.videoSender = line.sender || null;
+    this.#applyCodecPreferences(call);
   }
 
   async #drainRemoteCandidates(call) {
@@ -619,10 +671,15 @@ export class CallManager {
       const sender = pc.addTrack(track, call.localStream);
       if (track.kind === "video") call.videoSender = sender;
     });
-    if (call.kind === "video" && !call.videoSender) {
-      // Camera unavailable: still receive remote video.
-      const transceiver = pc.addTransceiver?.("video", { direction: "recvonly" });
-      if (transceiver) call.videoSender = null;
+    if (call.kind === "video" && !call.videoSender && call.direction === "outgoing") {
+      // Camera off (chosen or unavailable): still send and receive video, just
+      // with no picture to send yet. A two-way transceiver means turning the
+      // camera on later is a track swap, not a renegotiation. (The answering
+      // side cannot do this up front: a browser does not attach a transceiver
+      // created without a track to the offer's video line, so it configures
+      // the line the offer created, see #handleSignal.)
+      const transceiver = pc.addTransceiver?.("video", { direction: "sendrecv" });
+      call.videoSender = transceiver?.sender || null;
     }
     this.#applyCodecPreferences(call);
 
@@ -640,7 +697,15 @@ export class CallManager {
       if (!call.remoteStream.getTracks().includes(event.track)) {
         call.remoteStream.addTrack(event.track);
       }
-      if (event.track.kind === "video") this.#set({ remoteCameraOn: true });
+      if (event.track.kind === "video") {
+        // A remote video track exists even when the other camera is off; it
+        // only carries a picture once media flows. The in-band state message
+        // is what says whether their camera is on.
+        if (event.track.muted !== true) this.#set({ remoteCameraOn: true });
+        event.track.onunmute = () => {
+          if (!this.#isStale(call)) this.#set({ remoteCameraOn: true });
+        };
+      }
       this.#set({ remoteStream: call.remoteStream });
     };
 
@@ -704,9 +769,10 @@ export class CallManager {
       clearTimeout(call.disconnectTimer);
       clearTimeout(call.connectWatchdog);
       clearTimeout(call.failTimer);
+      clearTimeout(call.slowTimer);
       call.restarts = 0;
       if (this.#state.phase !== CALL_PHASE.CONNECTED) {
-        this.#set({ phase: CALL_PHASE.CONNECTED, connectedAt: Date.now() });
+        this.#set({ phase: CALL_PHASE.CONNECTED, connectedAt: Date.now(), connectingSlow: false });
         this.#api.markCallConnected(call.id).catch(() => {});
         this.#startStats(call);
         this.#applyVideoTier(call);
@@ -728,7 +794,7 @@ export class CallManager {
     clearTimeout(call.failTimer);
     call.failTimer = setTimeout(() => {
       if (!this.#isStale(call) && call.pc.connectionState !== "connected") {
-        this.#finish(call, "failed", { notifyServer: true });
+        this.#finish(call, this.#connectFailureReason(call), { notifyServer: true });
       }
     }, FAILED_WAIT_MS);
 
@@ -744,26 +810,62 @@ export class CallManager {
 
   #armConnectWatchdog(call) {
     clearTimeout(call.connectWatchdog);
+    clearTimeout(call.slowTimer);
+    call.slowTimer = setTimeout(() => {
+      if (!this.#isStale(call) && this.#state.phase === CALL_PHASE.CONNECTING) {
+        this.#set({ connectingSlow: true });
+      }
+    }, SLOW_CONNECT_MS);
     call.connectWatchdog = setTimeout(() => {
       if (!this.#isStale(call) && this.#state.phase === CALL_PHASE.CONNECTING) {
-        this.#finish(call, "failed", { notifyServer: true });
+        this.#finish(call, this.#connectFailureReason(call), { notifyServer: true });
       }
     }, 45_000);
   }
 
+  /**
+   * Why the media connection did not come up. Two phones on different
+   * networks usually need a relay; without one this is the likely reason, so
+   * say so (the person who runs the server can act on it).
+   */
+  #connectFailureReason(call) {
+    if (this.#state.phase === CALL_PHASE.CONNECTED) return "connection_lost";
+    return call.iceConfig?.hasRelay ? "connect_failed" : "connect_failed_no_relay";
+  }
+
   // ── media ────────────────────────────────────────────────────────────────
-  async #acquireMedia(kind) {
-    const constraints = {
-      audio: CAPTURE_CONSTRAINTS.audio,
-      video: kind === "video" ? CAPTURE_CONSTRAINTS.video : false,
+  /**
+   * Opens the microphone and, for a video call where the camera is wanted, the
+   * camera. A camera that is blocked or missing must not kill the call: the
+   * person joins without video instead (and is told so). Only a missing or
+   * blocked MICROPHONE ends the call.
+   * @returns {Promise<{stream: MediaStream, cameraBlocked: string|null}>}
+   */
+  async #acquireMedia(kind, wantCamera = true) {
+    const wantVideo = kind === "video" && wantCamera;
+    const reasonOf = (error) => {
+      const name = String(error?.name || "");
+      if (name === "NotAllowedError" || name === "SecurityError") return "permission_denied";
+      if (name === "NotFoundError" || name === "OverconstrainedError") return "no_device";
+      return "failed";
     };
     try {
-      return await this.#opts.getUserMedia(constraints);
+      const stream = await this.#opts.getUserMedia({
+        audio: CAPTURE_CONSTRAINTS.audio,
+        video: wantVideo ? CAPTURE_CONSTRAINTS.video : false,
+      });
+      return { stream, cameraBlocked: null };
     } catch (error) {
-      const name = String(error?.name || "");
-      if (name === "NotAllowedError" || name === "SecurityError") throw new MediaError("permission_denied");
-      if (name === "NotFoundError" || name === "OverconstrainedError") throw new MediaError("no_device");
-      throw new MediaError("failed");
+      const reason = reasonOf(error);
+      if (wantVideo) {
+        try {
+          const stream = await this.#opts.getUserMedia({ audio: CAPTURE_CONSTRAINTS.audio, video: false });
+          return { stream, cameraBlocked: reason };
+        } catch (audioError) {
+          throw new MediaError(reasonOf(audioError));
+        }
+      }
+      throw new MediaError(reason);
     }
   }
 
@@ -775,11 +877,12 @@ export class CallManager {
    * the call is gone is stopped here, so nothing keeps recording.
    */
   #acquireForCall(call) {
-    return this.#acquireMedia(call.kind).then((stream) => {
+    return this.#acquireMedia(call.kind, call.cameraWanted !== false).then(({ stream, cameraBlocked }) => {
       if (this.#isStale(call)) {
         this.#stopStream(stream);
         return null;
       }
+      call.cameraBlocked = cameraBlocked;
       this.#attachLocalStream(call, stream);
       return stream;
     });
@@ -789,10 +892,17 @@ export class CallManager {
     call.localStream = stream;
     // A video call that rings while the page is hidden must not turn the
     // camera on for the person who is not even looking.
-    call.videoSuppressed = { user: false, hidden: Boolean(call.pageHidden), network: false };
+    // A video call can start with the camera off (chosen, or blocked/missing);
+    // it stays a video call, so the camera can be turned on later.
+    call.videoSuppressed = {
+      user: call.kind === "video" && (call.cameraWanted === false || Boolean(call.cameraBlocked)),
+      hidden: Boolean(call.pageHidden),
+      network: false,
+    };
     this.#set({
       localStream: stream,
       cameraOn: stream.getVideoTracks().length > 0,
+      cameraBlocked: call.cameraBlocked || null,
       muted: false,
     });
     if (call.kind === "video" && call.pageHidden) this.#reconcileCamera(call);
@@ -859,6 +969,7 @@ export class CallManager {
           const track = fresh.getVideoTracks()[0];
           stream.addTrack(track);
           if (call.videoSender) await call.videoSender.replaceTrack(track);
+          call.cameraBlocked = null;
           await this.#applyVideoTier(call);
         }
       } else if (!wanted() && current) {
@@ -866,12 +977,20 @@ export class CallManager {
         if (call.videoSender) await call.videoSender.replaceTrack(null);
         current.stop(); // releases the camera: LED off, no capture power draw
       }
-    } catch (_) {
-      // Leave the camera as it is if it cannot be (re)started.
+    } catch (error) {
+      // Leave the camera as it is if it cannot be (re)started, and say why.
+      const name = String(error?.name || "");
+      call.cameraBlocked =
+        name === "NotAllowedError" || name === "SecurityError"
+          ? "permission_denied"
+          : name === "NotFoundError" || name === "OverconstrainedError"
+            ? "no_device"
+            : "failed";
     }
     if (this.#isStale(call)) return;
     this.#set({
       cameraOn: stream.getVideoTracks().length > 0,
+      cameraBlocked: call.cameraBlocked || null,
       networkPaused: s.network,
     });
     this.#sendMediaState(call);
@@ -1027,7 +1146,7 @@ export class CallManager {
 
   #teardown(call) {
     call.done = true;
-    [call.ringTimer, call.iceTimer, call.disconnectTimer, call.failTimer, call.connectWatchdog].forEach(clearTimeout);
+    [call.ringTimer, call.iceTimer, call.disconnectTimer, call.failTimer, call.connectWatchdog, call.slowTimer].forEach(clearTimeout);
     clearInterval(call.statsTimer);
     try {
       call.dc?.close();
@@ -1058,6 +1177,8 @@ export class CallManager {
       phase: CALL_PHASE.ENDED,
       endReason: reason,
       ringing: false,
+      waiting: false,
+      connectingSlow: false,
       localStream: null,
       remoteStream: null,
       cameraOn: false,
@@ -1096,8 +1217,13 @@ export class CallManager {
     else if (error?.code === "relay_unavailable") reason = "relay_unavailable";
     else if (error?.name === "E2eeUnavailableError") reason = "e2ee_unavailable";
     else if (error?.status === 403 || error?.status === 404) reason = "failed";
+    // A generic failure once the keys exist (a signaling request refused
+    // because the other side just hung up, say) is a connection problem:
+    // describe it the way the connection watchdog does.
+    const generic = reason === "failed";
+    if (generic && call.session) reason = this.#connectFailureReason(call);
     this.#finish(call, reason, { notifyServer });
-    if (reason === "failed") console.warn("[calls]", error);
+    if (generic) console.warn("[calls]", error);
   }
 
   dispose() {

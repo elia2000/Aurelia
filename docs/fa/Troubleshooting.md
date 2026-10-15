@@ -245,6 +245,12 @@ Acquire connection error: Error: self-signed certificate in certificate chain
 تماس‌ها همتا به همتا هستند. وقتی دو دستگاه نتوانند مستقیماً به هم برسند (اینترنت موبایل، NAT سخت‌گیر، فایروال سازمانی) به یک رله نیاز است.
 
 - دکمه‌های تماس وجود ندارند: روی HTTPS (یا `localhost`) نیستید، مرورگر از WebRTC/دوربین پشتیبانی نمی‌کند، یا `CALLS_ENABLED=false` است.
+- تماس پاسخ داده می‌شود اما روی *Connecting…* می‌ماند و با *Couldn't connect* (یا *This server has no relay…*) پایان می‌یابد: دو دستگاه نمی‌توانند مستقیماً به هم برسند (که پشت اینترنت موبایل و بسیاری از روترها عادی است) و رله‌ی کارآمدی هم در دسترس نیست. به این ترتیب بررسی کنید:
+  1. در حالی که وارد حساب هستید `/api/calls/ice-config` را باز کنید. باید یک سرور `turn:` با `username` و `credential` فهرست شود. اگر `iceServers` خالی است، `CALLS_TURN_URLS` / `CALLS_TURN_SECRET` تنظیم نشده‌اند یا پس از تغییر `.env` برنامه دوباره راه‌اندازی نشده است.
+  2. خود رله را آزمایش کنید: صفحه‌ی آزمایش *Trickle ICE* مرورگر (`webrtc.github.io/samples/src/content/peerconnection/trickle-ice/`) را باز کنید، یکی از آدرس‌های `turn:` و `username` و `credential` گام ۱ را وارد کنید و *Gather candidates* را بزنید. ردیفی از نوع **relay** یعنی coturn کار می‌کند. نبودن ردیف relay یعنی coturn در دسترس نیست (فایروال) یا رازش با `CALLS_TURN_SECRET` یکی نیست.
+  3. پورت `3478` (UDP و TCP) و بازه‌ی پورت رله `49160-49260` (UDP) را در فایروال باز کنید و `external-ip` در coturn را آدرس عمومی سرور قرار دهید.
+  4. نام DNS رله نباید از پراکسی Cloudflare عبور کند (حالت *DNS only*)، چون تماس‌ها از UDP استفاده می‌کنند.
+- تماس به‌جای *Ringing…* روی *Waiting…* می‌ماند: برنامه‌ی طرف مقابل بسته یا آفلاین است. این انتظار می‌رود؛ فقط با push (در صورت فعال بودن) خبردار می‌شود و اگر در حدود ۴۵ ثانیه برنامه را باز کند تماس وصل می‌شود.
 - تماس زنگ می‌خورد اما بین شبکه‌های مختلف روی *Connecting…* می‌ماند: رله را راه‌اندازی کنید. [تماس‌ها و پیام‌های ویدیویی](./Calls-and-Video-Messages.md#setting-up-the-relay) را ببینید.
 - در حالی که وارد حساب هستید `/api/calls/ice-config` را باز کنید. اگر `iceServers` خالی است، `CALLS_TURN_URLS` یا `CALLS_TURN_SECRET` تنظیم نشده (یا سرور دوباره راه‌اندازی نشده است).
 - بررسی کنید که `3478` (UDP و TCP) و بازه‌ی پورت رله `49160-49260` (UDP) در فایروال باز باشند و `CALLS_TURN_EXTERNAL_IP` آدرس عمومی سرور باشد. لاگ رله را با `docker compose logs coturn` ببینید.

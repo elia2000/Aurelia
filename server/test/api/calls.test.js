@@ -289,6 +289,36 @@ describe("call signaling API", () => {
     expect(other.body.code).toBe("busy_self");
   });
 
+  test("the callee's app reporting that it rings tells the caller exactly once; others cannot", async () => {
+    await placeCall();
+    ctx.eventRecorder.clear();
+    const url = `/api/calls/${CALL_ID}/ringing`;
+
+    // Nobody but the callee can say the callee's phone is ringing.
+    expect((await alice(request(ctx.app).post(url)).send({})).status).toBe(403);
+    expect((await carol(request(ctx.app).post(url)).send({})).status).toBe(403);
+    expect(ctx.eventRecorder.of("call_ringing")).toHaveLength(0);
+
+    expect((await bob(request(ctx.app).post(url)).send({})).status).toBe(200);
+    const [event] = ctx.eventRecorder.of("call_ringing");
+    expect(event.username).toBe("alice");
+    expect(event.payload).toMatchObject({ type: "call_ringing", callId: CALL_ID });
+
+    // A second device of the callee ringing too does not repeat it.
+    expect((await bob(request(ctx.app).post(url)).send({})).status).toBe(200);
+    expect(ctx.eventRecorder.of("call_ringing")).toHaveLength(1);
+  });
+
+  test("a call that is no longer ringing is not reported as ringing", async () => {
+    await placeCall();
+    await bob(request(ctx.app).post(`/api/calls/${CALL_ID}/accept`)).send(acceptBody());
+    ctx.eventRecorder.clear();
+    const res = await bob(request(ctx.app).post(`/api/calls/${CALL_ID}/ringing`)).send({});
+    expect(res.status).toBe(200);
+    expect(ctx.eventRecorder.of("call_ringing")).toHaveLength(0);
+    expect((await bob(request(ctx.app).post("/api/calls/not-a-uuid/ringing")).send({})).status).toBe(400);
+  });
+
   test("callee accept is relayed to the caller; other devices stop ringing", async () => {
     await placeCall();
     ctx.eventRecorder.clear();

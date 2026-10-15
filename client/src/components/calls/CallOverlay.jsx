@@ -32,6 +32,10 @@ const END_MESSAGES = {
   busy: "User is busy",
   busy_self: "You are already in a call",
   failed: "Call failed",
+  connect_failed: "Couldn't connect. Check your network and try again.",
+  connect_failed_no_relay:
+    "Couldn't connect. This server has no relay (TURN) set up, which calls between different networks need.",
+  connection_lost: "Connection lost",
   clock_skew: "This device's clock looks wrong. Check the date and time.",
   relay_unavailable: "This server only allows relayed calls, but no relay is set up.",
   permission_denied: "Microphone or camera access was blocked",
@@ -98,7 +102,7 @@ export default function CallOverlay({ user }) {
   const localVideoRef = useRef(null);
   const dialogRef = useRef(null);
 
-  const { phase, peer, kind, muted, cameraOn, remoteCameraOn, remoteMuted, sas, trust, relayed, networkPaused } = state;
+  const { phase, peer, kind, muted, cameraOn, remoteCameraOn, remoteMuted, sas, trust, relayed, networkPaused, cameraBlocked, connectingSlow } = state;
   const active = phase && phase !== CALL_PHASE.IDLE;
   const connected = phase === CALL_PHASE.CONNECTED;
   const elapsed = useElapsed(state.connectedAt, connected);
@@ -136,11 +140,18 @@ export default function CallOverlay({ user }) {
   const fa = hasPersian(peerName) ? "font-fa" : "";
   const incoming = phase === CALL_PHASE.INCOMING;
   const ended = phase === CALL_PHASE.ENDED;
+  // In a connected video call there is no avatar stage: when the other camera
+  // is off the screen is simply black.
+  const videoStage = kind === "video" && connected;
 
   let statusText = "";
   if (ended) statusText = END_MESSAGES[state.endReason] || "Call ended";
   else if (incoming) statusText = kind === "video" ? "Incoming video call" : "Incoming voice call";
-  else if (phase === CALL_PHASE.OUTGOING) statusText = state.ringing ? "Ringing…" : "Calling…";
+  else if (phase === CALL_PHASE.OUTGOING) {
+    // "Ringing" only once the other person's app says it is ringing. Until then
+    // (their app closed or offline) they have at most been sent a notification.
+    statusText = state.ringing ? "Ringing…" : state.waiting ? "Waiting…" : "Calling…";
+  }
   else if (phase === CALL_PHASE.CONNECTING) statusText = "Connecting…";
   else if (connected) statusText = elapsed;
 
@@ -204,7 +215,7 @@ export default function CallOverlay({ user }) {
         tabIndex={-1}
         role="dialog"
         aria-label={`${statusText} with ${peerName}`}
-        className="fixed inset-0 z-[340] flex flex-col overflow-hidden bg-slate-950 text-slate-50 outline-none md:inset-auto md:bottom-6 md:right-6 md:h-[560px] md:w-[360px] md:rounded-3xl md:border md:border-emerald-500/30 md:shadow-2xl md:shadow-emerald-500/20"
+        className={`fixed inset-0 z-[340] flex flex-col overflow-hidden ${videoStage ? "bg-black" : "bg-slate-950"} text-slate-50 outline-none md:inset-auto md:bottom-6 md:right-6 md:h-[560px] md:w-[360px] md:rounded-3xl md:border md:border-emerald-500/30 md:shadow-2xl md:shadow-emerald-500/20`}
       >
         {showRemoteVideo ? (
           <video
@@ -259,7 +270,7 @@ export default function CallOverlay({ user }) {
         ) : null}
 
         <div className="relative z-10 flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-          {!showRemoteVideo ? (
+          {!showRemoteVideo && !videoStage ? (
             <Avatar
               src={peer?.avatarUrl || peer?.avatar_url}
               name={peerName}
@@ -279,6 +290,25 @@ export default function CallOverlay({ user }) {
           >
             {statusText}
           </p>
+          {videoStage && !remoteCameraOn ? (
+            <p className="inline-flex items-center gap-1.5 text-sm text-slate-400">
+              <VideoOff size={16} aria-hidden="true" /> Camera off
+            </p>
+          ) : null}
+          {phase === CALL_PHASE.CONNECTING && connectingSlow ? (
+            <p className="max-w-[18rem] text-xs text-slate-400">
+              Still connecting. This can take a little longer on mobile networks.
+            </p>
+          ) : null}
+          {cameraBlocked && !ended && kind === "video" ? (
+            <p className="max-w-[18rem] text-xs text-amber-200">
+              {cameraBlocked === "permission_denied"
+                ? "Camera access is blocked, so you are not sending video."
+                : cameraBlocked === "no_device"
+                  ? "No camera was found, so you are not sending video."
+                  : "The camera could not be started, so you are not sending video."}
+            </p>
+          ) : null}
           {connected && remoteMuted ? (
             <p className="text-xs text-slate-400">{peerName} is muted</p>
           ) : null}
@@ -292,6 +322,16 @@ export default function CallOverlay({ user }) {
           ) : null}
         </div>
 
+        {videoStage && !cameraOn && !minimized ? (
+          <div
+            className="absolute right-4 z-20 flex h-32 w-24 items-center justify-center rounded-2xl border border-white/10 bg-black text-slate-500 shadow-lg md:h-28 md:w-20"
+            style={{ top: "calc(max(1rem, env(safe-area-inset-top)) + 3.5rem)" }}
+            aria-label="Your camera is off"
+            role="img"
+          >
+            <VideoOff size={22} aria-hidden="true" />
+          </div>
+        ) : null}
         {showLocalVideo ? (
           <video
             ref={localVideoRef}
@@ -312,7 +352,14 @@ export default function CallOverlay({ user }) {
               <RoundButton label="Decline call" danger onClick={decline}>
                 <PhoneOff size={22} />
               </RoundButton>
-              <RoundButton label="Accept call" accept onClick={accept}>
+              {kind === "video" ? (
+                // Answer a video call without showing yourself: you still see
+                // them, and the camera can be turned on during the call.
+                <RoundButton label="Answer with camera off" onClick={() => accept({ camera: false })}>
+                  <VideoOff size={22} />
+                </RoundButton>
+              ) : null}
+              <RoundButton label="Accept call" accept onClick={() => accept()}>
                 {kind === "video" ? <Video size={22} /> : <Phone size={22} />}
               </RoundButton>
             </>
