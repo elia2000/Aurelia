@@ -70,13 +70,22 @@ export function createPushService({
     await Promise.all(
       targets.map(async (sub) => {
         const badge = badgeByUserId[sub.user_id] ?? 1;
-        const showPreview = sub.message_preview !== 0;
+        const isCall = payload?.data?.type === "call";
+        // Call alerts are not message previews, so the preview opt-out does
+        // not apply to them. They also expire fast: ringing is pointless
+        // once the caller has given up.
+        const showPreview = isCall || sub.message_preview !== 0;
+        const { ttl: payloadTtl, ...payloadForClient } = payload || {};
         const perUserPayload = showPreview
-          ? { ...payload, badge }
-          : { ...payload, body: "New message", badge };
+          ? { ...payloadForClient, badge }
+          : { ...payloadForClient, body: "New message", badge };
         const perUserBody = JSON.stringify(perUserPayload);
+        const ttlSeconds =
+          Number.isFinite(Number(payloadTtl)) && Number(payloadTtl) > 0
+            ? Math.trunc(Number(payloadTtl))
+            : 86400;
         try {
-          const sendOptions = { urgency: "high", TTL: 86400 };
+          const sendOptions = { urgency: "high", TTL: ttlSeconds };
           if (proxyAgent) sendOptions.agent = proxyAgent;
           await webpush.sendNotification(
             {

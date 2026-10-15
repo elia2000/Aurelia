@@ -2133,6 +2133,7 @@ async function deleteUserByIdPostgres(userId) {
     await trx("hidden_chat_messages").where("user_id", userId).del();
     await trx("chat_message_reads").where("user_id", userId).del();
     await trx("push_subscriptions").where("user_id", userId).del();
+    await trx("e2ee_devices").where("user_id", userId).del();
     await trx("chat_messages")
       .where("read_by_user_id", userId)
       .update({ read_by_user_id: null });
@@ -2263,6 +2264,7 @@ function deleteUserByIdSqlite(userId) {
     runWithoutSave(dbKnex("hidden_chat_messages").where("user_id", userId).del());
     runWithoutSave(dbKnex("chat_message_reads").where("user_id", userId).del());
     runWithoutSave(dbKnex("push_subscriptions").where("user_id", userId).del());
+    runWithoutSave(dbKnex("e2ee_devices").where("user_id", userId).del());
     runWithoutSave(
       dbKnex("chat_messages")
         .where("read_by_user_id", userId)
@@ -2704,6 +2706,7 @@ export function findMessageById(messageId) {
         "forwarded_from_color",
         "created_at",
         "expires_at",
+        "e2ee_envelope",
       )
       .where("id", messageId)
       .first(),
@@ -3038,6 +3041,7 @@ export function getMessages(chatId, options = {}) {
       chat_messages.forwarded_from_color,
       chat_messages.created_at,
       chat_messages.expires_at,
+      chat_messages.e2ee_envelope,
       chat_messages.read_at,
       chat_messages.read_by_user_id,
       chat_messages.reply_to_message_id,
@@ -3585,6 +3589,113 @@ export function listPushSubscriptionsByUserIds(userIds = []) {
     dbKnex("push_subscriptions")
       .select("user_id", "endpoint", "p256dh", "auth", "message_preview")
       .whereIn("user_id", ids),
+  );
+}
+
+// ── End-to-end encryption: device public-key directory ──────────────────────
+// Only PUBLIC keys are stored. The server cannot decrypt anything wrapped for
+// these keys.
+
+const E2EE_DEVICE_COLUMNS = [
+  "id",
+  "user_id",
+  "label",
+  "ecdh_public",
+  "ecdsa_public",
+  "created_at",
+  "last_seen_at",
+  "revoked_at",
+];
+
+function nowDbTimestamp() {
+  return new Date().toISOString().replace("T", " ").slice(0, 19);
+}
+
+export function findE2eeDevice(userId, deviceId) {
+  if (!userId || !deviceId) return isPostgresMode() ? Promise.resolve(null) : null;
+  const row = getRow(
+    dbKnex("e2ee_devices")
+      .select(E2EE_DEVICE_COLUMNS)
+      .where({ user_id: userId, id: deviceId })
+      .first(),
+  );
+  if (row && typeof row.then === "function") return row.then((r) => r || null);
+  return row || null;
+}
+
+export function countActiveE2eeDevices(userId) {
+  if (!userId) return isPostgresMode() ? Promise.resolve(0) : 0;
+  const row = getRow(
+    dbKnex("e2ee_devices")
+      .where("user_id", userId)
+      .whereNull("revoked_at")
+      .count({ total: "*" })
+      .first(),
+  );
+  if (row && typeof row.then === "function") {
+    return row.then((r) => Number(r?.total || 0));
+  }
+  return Number(row?.total || 0);
+}
+
+export function createE2eeDevice({ userId, label, ecdhPublic, ecdsaPublic }) {
+  const id = generateUuid();
+  const ts = nowDbTimestamp();
+  const record = {
+    id,
+    user_id: userId,
+    label: label || null,
+    ecdh_public: ecdhPublic,
+    ecdsa_public: ecdsaPublic,
+    created_at: ts,
+    last_seen_at: ts,
+    revoked_at: null,
+  };
+  const res = run(dbKnex("e2ee_devices").insert(record));
+  if (res && typeof res.then === "function") return res.then(() => record);
+  return record;
+}
+
+export function touchE2eeDevice(userId, deviceId) {
+  if (!userId || !deviceId) return isPostgresMode() ? Promise.resolve(0) : 0;
+  return run(
+    dbKnex("e2ee_devices")
+      .where({ user_id: userId, id: deviceId })
+      .whereNull("revoked_at")
+      .update({ last_seen_at: nowDbTimestamp() }),
+  );
+}
+
+export function revokeE2eeDevice(userId, deviceId) {
+  if (!userId || !deviceId) return isPostgresMode() ? Promise.resolve(0) : 0;
+  return run(
+    dbKnex("e2ee_devices")
+      .where({ user_id: userId, id: deviceId })
+      .whereNull("revoked_at")
+      .update({ revoked_at: nowDbTimestamp() }),
+  );
+}
+
+export function listE2eeDevicesByUserIds(userIds = []) {
+  const ids = Array.from(
+    new Set((Array.isArray(userIds) ? userIds : []).filter(Boolean)),
+  );
+  if (!ids.length) return isPostgresMode() ? Promise.resolve([]) : [];
+  return getAll(
+    dbKnex("e2ee_devices")
+      .select(E2EE_DEVICE_COLUMNS)
+      .whereIn("user_id", ids)
+      .whereNull("revoked_at")
+      .orderBy("created_at", "asc"),
+  );
+}
+
+export function setMessageE2eeEnvelope(messageId, envelopeJson) {
+  if (!messageId) return isPostgresMode() ? Promise.resolve(0) : 0;
+  return run(
+    dbKnex("chat_messages")
+      .where("id", messageId)
+      .update({ e2ee_envelope: envelopeJson || null }),
   );
 }
 
@@ -4278,6 +4389,7 @@ const RESET_TABLES = [
   "remote_channel_sources",
   "remote_channel_provider_state",
   "push_subscriptions",
+  "e2ee_devices",
   "sessions",
   "chats",
   "users",

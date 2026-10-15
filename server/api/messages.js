@@ -6,6 +6,10 @@ import { resolveWebhookCallbackUrl } from "../lib/webhookUrl.js";
 import { markEncryptedFileRecord } from "../lib/storageEncryption.js";
 import { resolveThumbUrl } from "../lib/thumbUrl.js";
 import { readEnvBool } from "../settings/env.js";
+import {
+  parseVideoNoteEnvelope,
+  safeParseStoredEnvelope,
+} from "../lib/e2eeEnvelope.js";
 
 function registerMessageRoutes(app, deps) {
   const {
@@ -68,6 +72,8 @@ function registerMessageRoutes(app, deps) {
     enqueueVideoTranscodeJob,
     markMessagesRead,
     markMessageRead,
+    findE2eeDevice,
+    setMessageE2eeEnvelope,
   } = deps;
 
   const safeBasename = (p) => {
@@ -419,8 +425,10 @@ function registerMessageRoutes(app, deps) {
           isMessageAuthoredByUser(message, user.id) ||
           readByMe.has(message.id),
         files: filesByMessageId[message.id] || [],
+        e2ee: safeParseStoredEnvelope(message.e2ee_envelope),
         expiresAt: null,
       }))
+      .map(({ e2ee_envelope: _envelope, ...message }) => message)
       .map((message) => ({
         ...message,
         expiresAt:
@@ -800,6 +808,18 @@ function registerMessageRoutes(app, deps) {
           });
         }
 
+        let e2eeEnvelope = null;
+        let e2eeEnvelopeJson = null;
+        if (req.body?.e2eeEnvelope) {
+          const parsedEnvelope = parseVideoNoteEnvelope(req.body.e2eeEnvelope);
+          if (!parsedEnvelope.ok) {
+            removeUploadedFiles(uploadedFiles);
+            return res.status(400).json({ error: parsedEnvelope.error });
+          }
+          e2eeEnvelope = parsedEnvelope.envelope;
+          e2eeEnvelopeJson = parsedEnvelope.json;
+        }
+
         if (!chatId || !username) {
           removeUploadedFiles(uploadedFiles);
 
@@ -859,6 +879,29 @@ function registerMessageRoutes(app, deps) {
             return res
               .status(403)
               .json({ error: "Only channel owner can send messages." });
+          }
+        }
+        if (e2eeEnvelope) {
+          // Encrypted video messages: one opaque blob, no edits, never in
+          // broadcast channels, and the sender device must be the caller's.
+          if (
+            editMessageId ||
+            totalFilesCount !== 1 ||
+            !["dm", "group", "saved"].includes(chat.type)
+          ) {
+            removeUploadedFiles(uploadedFiles);
+            return res.status(400).json({
+              error: "Encrypted video messages are not supported here.",
+            });
+          }
+          const senderDevice = await resolveMaybePromise(
+            typeof findE2eeDevice === "function"
+              ? findE2eeDevice(user.id, e2eeEnvelope.senderDeviceId)
+              : null,
+          );
+          if (!senderDevice || senderDevice.revoked_at) {
+            removeUploadedFiles(uploadedFiles);
+            return res.status(400).json({ error: "Unknown or revoked sender device." });
           }
         }
         if (replyToMessageId && editMessageId) {
@@ -1284,8 +1327,11 @@ function registerMessageRoutes(app, deps) {
           return `Sent ${files.length} files`;
         };
 
-        const fileSummaryText = summarizeFiles(normalizedFiles);
+        const fileSummaryText = e2eeEnvelope
+          ? "Sent a video message"
+          : summarizeFiles(normalizedFiles);
         const fallbackBody =
+          (e2eeEnvelope ? fileSummaryText : "") ||
           trimmedBody ||
           (normalizedFiles.length === 1
             ? `Sent ${normalizedFiles[0].kind === "media" ? "a media file" : "a document"}`
@@ -1363,6 +1409,11 @@ function registerMessageRoutes(app, deps) {
           }
           const rawCreate = createMessageFiles(messageId, normalizedFiles);
           if (rawCreate && typeof rawCreate.then === "function") await rawCreate;
+          if (e2eeEnvelopeJson && typeof setMessageE2eeEnvelope === "function") {
+            await resolveMaybePromise(
+              setMessageE2eeEnvelope(messageId, e2eeEnvelopeJson),
+            );
+          }
           if (chat.type === "saved") {
             markMessageRead(messageId, user.id);
           }
@@ -1567,6 +1618,7 @@ function registerMessageRoutes(app, deps) {
             body: fallbackBody,
             summaryText: fileSummaryText,
             replyToMessageId,
+            ...(e2eeEnvelope ? { e2ee: e2eeEnvelope } : {}),
             files: responseFiles,
             expiresAt: fileExpiresAt,
             expires_at: fileExpiresAt,
@@ -1587,6 +1639,7 @@ function registerMessageRoutes(app, deps) {
             body: fallbackBody,
             summaryText: fileSummaryText,
             replyToMessageId,
+            ...(e2eeEnvelope ? { e2ee: e2eeEnvelope } : {}),
             files: responseFiles,
             expiresAt: fileExpiresAt,
             expires_at: fileExpiresAt,
@@ -1610,6 +1663,7 @@ function registerMessageRoutes(app, deps) {
           deduped: dedupedMessage,
           expiresAt: fileExpiresAt,
           files: responseFiles,
+          ...(e2eeEnvelope ? { e2ee: e2eeEnvelope } : {}),
         });
 
         if (!editTarget) {
@@ -1956,6 +2010,12 @@ function registerMessageRoutes(app, deps) {
     }
     if (sourceMessage.hidden_everyone_at) {
       return res.status(410).json({ error: "Source message is no longer available." });
+    }
+    if (sourceMessage.e2ee_envelope) {
+      // The content key is wrapped for the original chat's devices only.
+      return res.status(400).json({
+        error: "End-to-end encrypted messages cannot be forwarded.",
+      });
     }
     const rawIsMem = isMember(sourceMessage.chat_id, user.id);
     const memberCheck = rawIsMem && typeof rawIsMem.then === "function" ? await rawIsMem : rawIsMem;

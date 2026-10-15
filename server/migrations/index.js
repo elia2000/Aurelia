@@ -39,6 +39,8 @@ import { migration038PendingPresignedUploads } from "./038-pending-presigned-upl
 import { migration039PostgresTimestampDefaults } from "./039-postgres-timestamp-defaults.js";
 import { migration040QueueMessageIdText } from "./040-queue-message-id-text.js";
 import { migration041AdminAuditLogs } from "./041-admin-audit-logs.js";
+import { migration042E2eeDevices } from "./042-e2ee-devices.js";
+import { migration043MessageE2eeEnvelope } from "./043-message-e2ee-envelope.js";
 
 export const migrations = [
   migration001InitialSchema,
@@ -82,4 +84,6 @@ export const migrations = [
   migration039PostgresTimestampDefaults,
   migration040QueueMessageIdText,
   migration041AdminAuditLogs,
+  migration042E2eeDevices,
+  migration043MessageE2eeEnvelope,
 ];

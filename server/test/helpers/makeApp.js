@@ -14,6 +14,8 @@ import { createSessionHelpers } from "../../lib/sessions.js";
 import { USER_COLORS } from "../../settings/colors.js";
 import { createStorageProvider } from "../../lib/storage/index.js";
 import { generateUuid } from "../../lib/uuidUtils.js";
+import { createCallRegistry } from "../../lib/calls.js";
+import { makeE2eeStore, makeEventRecorder } from "./e2eeStore.js";
 
 // ─── Minimal in-memory session store ─────────────────────────────────────────
 
@@ -85,6 +87,8 @@ export function makeApp(overrides = {}) {
   };
 
   const pendingUploadsStore = [];
+  const e2eeStore = overrides.e2eeStore ?? makeE2eeStore();
+  const eventRecorder = overrides.eventRecorder ?? makeEventRecorder();
   const defaultStorageProvider =
     overrides.storageProvider ||
     overrides.deps?.storageProvider ||
@@ -452,11 +456,38 @@ export function makeApp(overrides = {}) {
     PUSH_ENABLED: false,
     createPushNotification: () => {},
 
+    // ── E2EE device directory + call signaling ───────────────────────────────
+    findE2eeDevice: e2eeStore.findE2eeDevice,
+    countActiveE2eeDevices: e2eeStore.countActiveE2eeDevices,
+    createE2eeDevice: e2eeStore.createE2eeDevice,
+    touchE2eeDevice: e2eeStore.touchE2eeDevice,
+    revokeE2eeDevice: e2eeStore.revokeE2eeDevice,
+    listE2eeDevicesByUserIds: e2eeStore.listE2eeDevicesByUserIds,
+    setMessageE2eeEnvelope: () => {},
+    callRegistry: createCallRegistry(),
+    callsConfig: () => ({
+      enabled: true,
+      turnUrls: [],
+      stunUrls: [],
+      turnSecret: "",
+      credentialTtlSeconds: 3600,
+    }),
+    callSweepIntervalMs: 0,
+    emitToUser: eventRecorder.emitToUser,
+
     // ── Spread any remaining overrides ───────────────────────────────────────
     ...overrides.deps,
     ...overrides.dbOverrides,
   };
 
   registerApiRoutes(app, deps);
-  return { app, sessionStore, userStore, deps, pendingUploadsStore };
+  return {
+    app,
+    sessionStore,
+    userStore,
+    deps,
+    pendingUploadsStore,
+    e2eeStore,
+    eventRecorder,
+  };
 }

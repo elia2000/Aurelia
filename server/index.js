@@ -15,6 +15,8 @@ import { registerApiRoutes } from "./api/index.js";
 import { ensureValidVapidKeys } from "./lib/vapid.js";
 import { createSseHub } from "./lib/sse.js";
 import { createWebSocketGateway } from "./lib/websocketGateway.js";
+import { createCallRegistry } from "./lib/calls.js";
+import { readCallsConfig } from "./lib/callsConfig.js";
 import { createPresenceTracker } from "./lib/presenceTracker.js";
 import { createPushService } from "./lib/push.js";
 import { createUploadTools } from "./lib/uploads.js";
@@ -117,6 +119,13 @@ import {
   upsertPushSubscription,
   deletePushSubscription,
   listPushSubscriptionsByUserIds,
+  findE2eeDevice,
+  createE2eeDevice,
+  countActiveE2eeDevices,
+  touchE2eeDevice,
+  revokeE2eeDevice,
+  listE2eeDevicesByUserIds,
+  setMessageE2eeEnvelope,
   getTotalUnreadCount,
   listMutedUserIdsForChat,
   claimNextRemoteChannelQueueItem,
@@ -1160,6 +1169,24 @@ const remoteChannelManager = createRemoteChannelManager({
 
 apiDeps.remoteChannelManager = remoteChannelManager;
 apiDeps.mirrorJobRegistry = mirrorJobRegistry;
+
+// End-to-end encryption device directory + 1:1 call signaling.
+Object.assign(apiDeps, {
+  findE2eeDevice,
+  createE2eeDevice,
+  countActiveE2eeDevices,
+  touchE2eeDevice,
+  revokeE2eeDevice,
+  listE2eeDevicesByUserIds,
+  setMessageE2eeEnvelope,
+  findDmChat,
+  callRegistry: createCallRegistry(),
+  callsConfig: () => readCallsConfig(),
+  emitToUser: (username, payload) => {
+    emitSseEvent(username, payload);
+    wsPresenceBroadcaster?.(username, payload);
+  },
+});
 mirrorManagerRef.current = remoteChannelManager;
 
 if (isProduction) {
