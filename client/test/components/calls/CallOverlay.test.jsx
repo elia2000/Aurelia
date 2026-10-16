@@ -237,6 +237,46 @@ describe("CallOverlay", () => {
     expect(value.dismiss).toHaveBeenCalledTimes(1);
   });
 
+  test("a call that fails while minimised opens up so the reason can be read", async () => {
+    const value = renderOverlay(
+      { phase: "ended", endReason: "connect_failed_no_relay", peer },
+      { minimized: true },
+    );
+    await vi.waitFor(() => expect(value.setMinimized).toHaveBeenCalledWith(false));
+  });
+
+  test("a normal hang-up while minimised leaves the pill alone", async () => {
+    const value = renderOverlay({ phase: "ended", endReason: "hangup", peer }, { minimized: true });
+    await expect.element(page.getByText("Call ended")).toBeInTheDocument();
+    expect(value.setMinimized).not.toHaveBeenCalled();
+  });
+
+  test("the pill shortens a long status instead of squeezing its name and buttons", async () => {
+    renderOverlay({ phase: "connecting", peer }, { minimized: true });
+    await expect.element(page.getByText("Connecting…")).toBeInTheDocument();
+    // (no stylesheet is loaded in these tests, so the classes are what can be checked)
+    const status = [...document.querySelectorAll('[role="status"] span')].find((el) => el.textContent === "Connecting…");
+    expect(status.className).toContain("truncate");
+    expect(status.getAttribute("title")).toBe("Connecting…");
+    for (const name of ["Expand call", "End call"]) {
+      expect(document.querySelector(`button[aria-label="${name}"]`).className).toContain("shrink-0");
+    }
+  });
+
+  test("status hints sit in a live region so screen readers announce them", async () => {
+    renderOverlay({ phase: "connecting", peer, connectingSlow: true });
+    await expect.element(page.getByText(/Still connecting/)).toBeInTheDocument();
+    const hint = [...document.querySelectorAll("p")].find((el) => el.textContent.includes("Still connecting"));
+    expect(hint.closest('[aria-live="polite"]')).not.toBeNull();
+  });
+
+  test("a camera problem is announced too", async () => {
+    renderOverlay({ phase: "connected", kind: "video", peer, cameraBlocked: "no_device", connectedAt: Date.now() });
+    await expect.element(page.getByText(/No camera was found/)).toBeInTheDocument();
+    const blocked = [...document.querySelectorAll("p")].find((el) => el.textContent.includes("No camera was found"));
+    expect(blocked.closest('[aria-live="polite"]')).not.toBeNull();
+  });
+
   test("a call that is still going has no Close button", async () => {
     renderOverlay({ phase: "connected", peer, connectedAt: Date.now() });
     expect(document.querySelector('button[aria-label="Close"]')).toBeNull();

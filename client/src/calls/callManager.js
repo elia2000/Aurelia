@@ -95,6 +95,9 @@ const FAILURE_REASONS = new Set([
   "e2ee_unavailable",
 ]);
 
+/** True for an end reason that means "this did not work" (as opposed to a normal end). */
+export const isFailureReason = (reason) => FAILURE_REASONS.has(reason);
+
 const SERVER_END_REASONS = {
   declined: "declined",
   cancelled: "cancelled",

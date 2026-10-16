@@ -16,7 +16,7 @@ import {
 } from "../../icons/lucide.js";
 import Avatar from "../common/Avatar.jsx";
 import SafetyNumberModal from "./SafetyNumberModal.jsx";
-import { CALL_PHASE } from "../../calls/callManager.js";
+import { CALL_PHASE, isFailureReason } from "../../calls/callManager.js";
 import { useCalls } from "../../calls/callContext.js";
 import { TRUST } from "../../e2ee/trust.js";
 import { hasPersian } from "../../utils/fontUtils.js";
@@ -123,6 +123,13 @@ export default function CallOverlay({ user }) {
     if (!active) setSafetyOpen(false);
   }, [active]);
 
+  // A call that fails explains why on its card, which a minimised pill is too
+  // small to show: open the card so the reason can be read.
+  const failedEnd = phase === CALL_PHASE.ENDED && isFailureReason(state.endReason);
+  useEffect(() => {
+    if (failedEnd && minimized) setMinimized(false);
+  }, [failedEnd, minimized, setMinimized]);
+
   // An incoming call must not steal focus from what the person is typing:
   // pressing Space or Enter in the message box would otherwise answer it (and
   // turn the microphone on). Take focus only when nothing editable has it.
@@ -179,16 +186,18 @@ export default function CallOverlay({ user }) {
           className="fixed left-1/2 z-[340] flex -translate-x-1/2 items-center gap-3 rounded-full bg-emerald-600 py-1.5 pl-4 pr-1.5 text-white shadow-lg"
           style={{ top: "max(0.5rem, env(safe-area-inset-top))" }}
         >
-          <Lock size={14} aria-hidden="true" />
-          <span className={`max-w-[40vw] truncate text-sm font-semibold ${fa}`} dir="auto">
+          <Lock size={14} aria-hidden="true" className="shrink-0" />
+          <span className={`min-w-0 max-w-[40vw] truncate text-sm font-semibold ${fa}`} dir="auto">
             {peerName}
           </span>
-          <span className="text-xs tabular-nums opacity-90">{statusText}</span>
+          <span className="min-w-0 max-w-[30vw] truncate text-xs tabular-nums opacity-90" title={statusText}>
+            {statusText}
+          </span>
           <button
             type="button"
             onClick={() => setMinimized(false)}
             aria-label="Expand call"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-white/15 hover:bg-white/25"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/15 hover:bg-white/25"
           >
             <Maximize2 size={15} />
           </button>
@@ -197,7 +206,7 @@ export default function CallOverlay({ user }) {
               type="button"
               onClick={hangup}
               aria-label="End call"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-rose-600 hover:bg-rose-500"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-rose-600 hover:bg-rose-500"
             >
               <PhoneOff size={15} />
             </button>
@@ -291,25 +300,29 @@ export default function CallOverlay({ user }) {
           >
             {statusText}
           </p>
-          {videoStage && !remoteCameraOn ? (
-            <p className="inline-flex items-center gap-1.5 text-sm text-slate-400">
-              <VideoOff size={16} aria-hidden="true" /> Camera off
-            </p>
-          ) : null}
-          {phase === CALL_PHASE.CONNECTING && connectingSlow ? (
-            <p className="max-w-[18rem] text-xs text-slate-400">
-              Still connecting. This can take a little longer on mobile networks.
-            </p>
-          ) : null}
-          {cameraBlocked && !ended && kind === "video" ? (
-            <p className="max-w-[18rem] text-xs text-amber-200">
-              {cameraBlocked === "permission_denied"
-                ? "Camera access is blocked, so you are not sending video."
-                : cameraBlocked === "no_device"
-                  ? "No camera was found, so you are not sending video."
-                  : "The camera could not be started, so you are not sending video."}
-            </p>
-          ) : null}
+          {/* Hints that appear while the call goes on are announced (the region
+              exists from the start, so screen readers notice what is added). */}
+          <div aria-live="polite" className="flex flex-col items-center gap-3">
+            {videoStage && !remoteCameraOn ? (
+              <p className="inline-flex items-center gap-1.5 text-sm text-slate-400">
+                <VideoOff size={16} aria-hidden="true" /> Camera off
+              </p>
+            ) : null}
+            {phase === CALL_PHASE.CONNECTING && connectingSlow ? (
+              <p className="max-w-[18rem] text-xs text-slate-400">
+                Still connecting. This can take a little longer on mobile networks.
+              </p>
+            ) : null}
+            {cameraBlocked && !ended && kind === "video" ? (
+              <p className="max-w-[18rem] text-xs text-amber-200">
+                {cameraBlocked === "permission_denied"
+                  ? "Camera access is blocked, so you are not sending video."
+                  : cameraBlocked === "no_device"
+                    ? "No camera was found, so you are not sending video."
+                    : "The camera could not be started, so you are not sending video."}
+              </p>
+            ) : null}
+          </div>
           {connected && remoteMuted ? (
             <p className="text-xs text-slate-400">{peerName} is muted</p>
           ) : null}
