@@ -10,6 +10,36 @@ import { makeApp } from "../helpers/makeApp.js";
 //
 // Tests are grouped by the SettingsTab group they belong to.
 
+describe("GET /api/app/build", () => {
+  test("says which client build the server is serving, never cached", async () => {
+    const files = { "/test/client/dist/build-id.txt": "abc123-lq1x\n" };
+    const { app } = makeApp({
+      deps: {
+        fs: {
+          readFileSync: (file) => {
+            if (file in files) return files[file];
+            throw new Error("ENOENT");
+          },
+          existsSync: (file) => file in files,
+        },
+      },
+    });
+    const res = await request(app).get("/api/app/build");
+    expect(res.status).toBe(200);
+    expect(res.headers["cache-control"]).toBe("no-store");
+    expect(res.body).toEqual({ buildId: "abc123-lq1x" });
+    const info = await request(app).get("/api/app/info");
+    expect(info.body.buildId).toBe("abc123-lq1x");
+  });
+
+  test("an unbuilt client has no build id", async () => {
+    const { app } = makeApp();
+    const res = await request(app).get("/api/app/build");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ buildId: "" });
+  });
+});
+
 describe("GET /api/app/info", () => {
   // ── Shape ──────────────────────────────────────────────────────────────────
 

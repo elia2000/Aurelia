@@ -7,6 +7,7 @@ import { fetchAppInfo } from './api/appMetaApi.js'
 import { setNameLimits } from './utils/nameLimits.js'
 import { setChatPageConfig } from './settings/chatPageConfig.js'
 import InstallBar from './components/pwa/InstallBar.jsx'
+import NewVersionBanner from './components/pwa/NewVersionBanner.jsx'
 import InstallGuideModal from './components/pwa/InstallGuideModal.jsx'
 import {
   getSavedSessionUser,
@@ -1092,6 +1093,7 @@ export default function App() {
         </div>
       </div>
 
+      <NewVersionBanner />
       <InstallBar
         ref={installBarRef}
         show={showInstallBar}

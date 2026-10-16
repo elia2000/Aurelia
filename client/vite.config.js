@@ -1,4 +1,6 @@
+import fs from "node:fs";
 import path from "node:path";
+import { execSync } from "node:child_process";
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import { visualizer } from "rollup-plugin-visualizer";
@@ -16,9 +18,31 @@ export default defineConfig(({ mode }) => {
     String(rootEnv.ANALYZE || process.env.ANALYZE || "").toLowerCase() ===
     "true";
 
+  // Identifies this build. The server serves it (build-id.txt) so that a page
+  // loaded before an update can tell it is out of date.
+  const gitSha = (() => {
+    try {
+      return execSync("git rev-parse --short HEAD", {
+        cwd: import.meta.dirname,
+        stdio: ["ignore", "pipe", "ignore"],
+      }).toString().trim();
+    } catch {
+      return "build";
+    }
+  })();
+  const buildId = `${gitSha}-${Date.now().toString(36)}`;
+
   return {
+    define: { __BUILD_ID__: JSON.stringify(buildId) },
     plugins: [
       react(),
+      {
+        name: "aurelle-build-id",
+        writeBundle(options) {
+          const outDir = options.dir || path.resolve(import.meta.dirname, "dist");
+          fs.writeFileSync(path.join(outDir, "build-id.txt"), `${buildId}\n`);
+        },
+      },
       ...(analyze
         ? [
             visualizer({

@@ -1052,6 +1052,27 @@ describe("waiting versus ringing", () => {
     expect(alice.manager.getState()).toMatchObject({ waiting: false, ringing: false });
   });
 
+  test("a phone whose screen is off or whose app is in the background is not 'ringing' for the caller", async () => {
+    let visible = false;
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob", { isPageVisible: () => visible });
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(bob), { label: "bob has the invite" });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(bob.api.markCallRinging).not.toHaveBeenCalled();
+    expect(alice.manager.getState()).toMatchObject({ waiting: true, ringing: false });
+
+    // The person picks the phone up: now the call really is on their screen.
+    visible = true;
+    bob.manager.setPageHidden(false);
+    await waitFor(() => alice.manager.getState().ringing, { label: "ringing once it is on screen" });
+    expect(bob.api.markCallRinging).toHaveBeenCalledTimes(1);
+    bob.manager.setPageHidden(false); // looking again does not report twice
+    await new Promise((r) => setTimeout(r, 50));
+    expect(bob.api.markCallRinging).toHaveBeenCalledTimes(1);
+  });
+
   test("a ringing report that arrives after the call moved on changes nothing", async () => {
     const { alice } = await connectedCall();
     const callId = alice.manager.getState().callId;
@@ -1135,6 +1156,43 @@ describe("connections that do not come up", () => {
     expect(details).toContain("Relay candidates: 0");
     expect(details).toContain("turn:relay.example:3478?transport=tcp");
     expect(details).toContain("701");
+  });
+
+  test("a relay host behind Cloudflare's proxy is named at once, and again when the call fails", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    FakePeerConnection.gatheringCompletes = false; // no need to wait for ICE to give up
+    FakePeerConnection.autoConnect = false;
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    for (const who of [alice, bob]) {
+      who.api.fetchIceConfig.mockResolvedValue({ iceServers: [], hasRelay: true, relayProxied: true });
+    }
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(bob));
+    await bob.manager.accept();
+    await waitFor(() => phase(CALL_PHASE.CONNECTING)(alice) && phase(CALL_PHASE.CONNECTING)(bob), { label: "connecting" });
+    expect(alice.manager.getState().relayCheck).toBe("proxied"); // known before ICE has tried anything
+
+    await vi.advanceTimersByTimeAsync(46_000);
+    expect(alice.manager.getState().endReason).toBe("connect_failed_relay_proxied");
+    expect(bob.manager.getState().endReason).toBe("connect_failed_relay_proxied");
+  });
+
+  test("a proxied name that nevertheless yields a relay address (a paid Cloudflare setup) is not blamed", async () => {
+    FakePeerConnection.autoConnect = false;
+    FakePeerConnection.relayCandidates = true;
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    for (const who of [alice, bob]) {
+      who.api.fetchIceConfig.mockResolvedValue({ iceServers: [], hasRelay: true, relayProxied: true });
+    }
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(bob));
+    await bob.manager.accept();
+    await waitFor(() => phase(CALL_PHASE.CONNECTING)(alice));
+    await waitFor(() => alice.manager.getState().relayCheck === "ok", { label: "relay found" });
   });
 
   test("a relay that answers but refuses this device is told apart from one that cannot be reached", async () => {

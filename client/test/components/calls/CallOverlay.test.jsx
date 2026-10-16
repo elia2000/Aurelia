@@ -168,6 +168,11 @@ describe("CallOverlay", () => {
     await expect.element(page.getByText(/relay server refused this device/)).toBeInTheDocument();
   });
 
+  test("a relay behind Cloudflare's proxy is explained while the call is still connecting", async () => {
+    renderOverlay({ phase: "connecting", peer, relayCheck: "proxied" });
+    await expect.element(page.getByText(/behind Cloudflare's proxy/)).toBeInTheDocument();
+  });
+
   test("a relay that answers, or one still being tried, adds no warning", async () => {
     renderOverlay({ phase: "connecting", peer, relayCheck: "ok" });
     await expect.element(page.getByText("Connecting…")).toBeInTheDocument();
@@ -256,6 +261,7 @@ describe("CallOverlay", () => {
     ["connect_failed_no_relay", "Couldn't connect. This server has no relay (TURN) set up, which calls between different networks need."],
     ["connect_failed_relay_unreachable", "Couldn't reach this server's relay. If you use a VPN or proxy, it must allow connections to the server."],
     ["connect_failed_relay_refused", "This server's relay refused this device. Ask whoever runs the server to check the relay settings."],
+    ["connect_failed_relay_proxied", "This server's relay is behind Cloudflare's proxy, which cannot carry calls. Ask whoever runs the server to set its DNS record to “DNS only”."],
     ["connection_lost", "Connection lost"],
     ["clock_skew", "This device's clock looks wrong. Check the date and time."],
     ["relay_unavailable", "This server only allows relayed calls, but no relay is set up."],

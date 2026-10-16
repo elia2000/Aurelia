@@ -2,6 +2,7 @@ import { validateUuidBody, validateUuidParams } from "../lib/uuidMiddleware.js";
 import { isBase64Url, isValidP256PublicKey } from "../lib/e2eeKeys.js";
 import { CALL_KINDS, CallError } from "../lib/calls.js";
 import { buildIceServers } from "../lib/callsConfig.js";
+import { createRelayDnsCheck } from "../lib/relayDns.js";
 import { createThrottle } from "../lib/throttle.js";
 
 const MAX_SIGNAL_BLOB_CHARS = 32 * 1024;
@@ -73,6 +74,7 @@ function registerCallRoutes(app, deps) {
     findE2eeDevice,
     callRegistry,
     callsConfig,
+    relayDnsCheck,
     emitToUser,
     sendPushNotificationToUsers,
     isUserConnected,
@@ -89,6 +91,17 @@ function registerCallRoutes(app, deps) {
 
   const config = () =>
     typeof callsConfig === "function" ? callsConfig() : callsConfig || {};
+
+  // A relay host name behind Cloudflare's proxy cannot carry calls. The answer
+  // is remembered for a few minutes and never slows or breaks a call.
+  const relayDns = relayDnsCheck || createRelayDnsCheck();
+  const relayIsProxied = async () => {
+    try {
+      return Boolean((await relayDns.inspect(config())).proxied);
+    } catch (_) {
+      return false;
+    }
+  };
 
   // Limits are per signed-in person, not per IP address: behind a proxy that
   // does not forward the client address everybody would share one bucket, and
@@ -190,7 +203,7 @@ function registerCallRoutes(app, deps) {
     const result = buildIceServers(config(), user.id);
     res.set("Cache-Control", "no-store");
     if (result.relayUnavailable) return relayUnavailable(res);
-    return res.json(result);
+    return res.json({ ...result, relayProxied: result.hasRelay ? await relayIsProxied() : false });
   });
 
   // Lets a freshly (re)loaded client — e.g. opened from a push notification —

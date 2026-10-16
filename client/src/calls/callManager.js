@@ -72,7 +72,7 @@ const idleState = () => ({
   remoteCameraOn: false,
   cameraBlocked: null,
   connectingSlow: false,
-  relayCheck: null, // null (no relay in use) | "pending" | "ok" | "unreachable" | "refused"
+  relayCheck: null, // null (no relay in use) | "pending" | "ok" | "unreachable" | "refused" | "proxied"
   connectionDetails: null, // lines for the "technical details" of a call that failed to connect
   videoTier: DEFAULT_VIDEO_TIER,
   networkPaused: false,
@@ -94,6 +94,7 @@ const FAILURE_REASONS = new Set([
   "connect_failed_no_relay",
   "connect_failed_relay_unreachable",
   "connect_failed_relay_refused",
+  "connect_failed_relay_proxied",
   "connection_lost",
   "key_mismatch",
   "permission_denied",
@@ -122,6 +123,7 @@ const CONNECTION_FAILURES = new Set([
   "connect_failed_no_relay",
   "connect_failed_relay_unreachable",
   "connect_failed_relay_refused",
+  "connect_failed_relay_proxied",
   "connection_lost",
 ]);
 
@@ -157,6 +159,9 @@ export class CallManager {
         }
       },
       requestWakeLock: async () => navigator.wakeLock.request("screen"),
+      // "Ringing" is only reported to the caller while this screen can really
+      // show the call (not in the background, not with the screen off).
+      isPageVisible: () => typeof document === "undefined" || !document.hidden,
       broadcast: null,
       ...opts,
     };
@@ -276,6 +281,13 @@ export class CallManager {
     call.ringingSeen = true;
     if (this.#state.phase !== CALL_PHASE.OUTGOING) return;
     this.#set({ ringing: true, waiting: false });
+  }
+
+  #maybeReportRinging(call) {
+    if (call.ringingReported || this.#isStale(call) || this.#state.phase !== CALL_PHASE.INCOMING) return;
+    if (!this.#opts.isPageVisible()) return; // reported when the screen comes back, see setPageHidden
+    call.ringingReported = true;
+    this.#reportRinging(call);
   }
 
   /**
@@ -418,8 +430,9 @@ export class CallManager {
         trust: callerKeys.assessment,
       });
       call.ringTimer = setTimeout(() => this.#finish(call, "missed"), RING_TIMEOUT_MS);
-      // Tell the caller this app is actually ringing (it shows "Waiting…" until then).
-      this.#reportRinging(call);
+      // Tell the caller this app is actually ringing (it shows "Waiting…" until
+      // then), once the call is on a screen somebody can see.
+      this.#maybeReportRinging(call);
     } catch (error) {
       this.#api.endCall(callId, "failed").catch(() => {});
       this.#failActive(call, error, { notifyServer: false });
@@ -918,17 +931,21 @@ export class CallManager {
     if (this.#isStale(call)) return;
     let check = null;
     if (call.iceConfig?.hasRelay) {
-      check = call.ice.relayTotal > 0 ? "ok" : call.ice.gathered ? this.#relayFailure(call) : "pending";
+      check = call.ice.relayTotal > 0 ? "ok" : this.#relayFailure(call) || "pending";
     }
     if (check !== this.#state.relayCheck) this.#set({ relayCheck: check });
   }
 
   /**
-   * No relay address was obtained. An answer such as "401 Unauthorized" means the
-   * relay was reached and said no (wrong secret, clocks apart); 701 or silence
-   * means it could not be reached at all.
+   * Why no relay address was obtained, as far as it is known: null while ICE
+   * is still trying. The server says when the relay's host name is behind
+   * Cloudflare's proxy, which can never work. Otherwise an answer such as
+   * "401 Unauthorized" means the relay was reached and said no (wrong secret,
+   * clocks apart); 701 or silence means it could not be reached at all.
    */
   #relayFailure(call) {
+    if (call.iceConfig?.relayProxied) return "proxied";
+    if (!call.ice.gathered) return null;
     const answered = call.ice.errors.some((e) => e.code >= 300 && e.code < 700);
     return answered ? "refused" : "unreachable";
   }
@@ -954,8 +971,9 @@ export class CallManager {
     if (!call.iceConfig?.hasRelay) return "connect_failed_no_relay";
     // A relay is configured but this device never got an address on it (it is
     // blocked, or a VPN/proxy does not carry the connection to it).
-    if (call.ice?.gathered && call.ice.relayTotal === 0) {
-      return this.#relayFailure(call) === "refused" ? "connect_failed_relay_refused" : "connect_failed_relay_unreachable";
+    if (call.ice?.relayTotal === 0) {
+      const why = this.#relayFailure(call);
+      if (why) return `connect_failed_relay_${why}`;
     }
     return "connect_failed";
   }
@@ -1065,6 +1083,7 @@ export class CallManager {
     const call = this.#call;
     if (!call) return;
     call.pageHidden = Boolean(hidden);
+    if (!hidden && call.direction === "incoming") this.#maybeReportRinging(call);
     if (call.kind !== "video") return;
     call.videoSuppressed.hidden = Boolean(hidden);
     this.#syncWakeLock(call);

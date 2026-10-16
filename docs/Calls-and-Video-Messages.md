@@ -40,7 +40,7 @@ While you call, the screen tells you where things stand:
 |---|---|
 | **Calling…** | The call is being placed. |
 | **Waiting…** | The call is placed, but the other person's app has not reported that it is ringing: it is closed or offline, or they appear offline (*invisible*). They get a push notification (if they enabled notifications), and the call connects if they open the app in time (the call stays open for about 45 seconds). |
-| **Ringing…** | Their app is open and is ringing right now (people who appear offline never trigger this: their callers stay on *Waiting…* while the phone rings). The ring tone on your side only plays during this step. |
+| **Ringing…** | Their app is open, on screen, and is ringing right now (an app in the background, or a phone with the screen off, keeps you on *Waiting…* until it is looked at; people who appear offline never trigger this: their callers stay on *Waiting…* while the phone rings). The ring tone on your side only plays during this step. |
 | **Connecting…** | They answered and the two devices are setting up the encrypted connection. After about 10 seconds it adds *Still connecting*. |
 
 When a call cannot be set up, the screen says why and stays for about 10 seconds (press **Close** to dismiss it sooner):
@@ -124,6 +124,10 @@ The bundled configuration refuses to relay to private networks (so it cannot be 
 
 Run coturn with `use-auth-secret` and `static-auth-secret=<secret>`, then set `CALLS_TURN_SECRET` and `CALLS_TURN_URLS` to match. Use `turns:` URLs for TLS.
 
+::: warning The relay's DNS record must not be proxied
+If your domain is on Cloudflare, the record for the relay host (`turn.example.com`) must be **DNS only** (grey cloud). The orange-cloud proxy only carries web traffic, so a proxied relay can never be reached and calls between different networks stay on *Connecting…*. Aurelle checks this at start-up and tells you in the log and on the call screen. The record of the app itself should stay proxied.
+:::
+
 ### Behind a VPN, a proxy or a censored network
 
 Calls need a path from each phone to the relay. Two things commonly get in the way:
@@ -137,6 +141,7 @@ When a call cannot connect, the *Couldn't reach this server's relay* card (and t
 |---|---|
 | `Relay candidates: 0` and `error 701 … timed out` for each `turn:` address | This phone could not reach the relay at all: the VPN/proxy does not carry the connection, a firewall blocks it, or coturn is not running there. Test with the Trickle ICE page from [Troubleshooting](./Troubleshooting.md#calls-not-connecting) on the same phone and the same VPN. |
 | `Relay candidates: 1` or more (for example `tcp 1`) but the call still fails | This phone reaches the relay. The other person's phone is the one that cannot, so check their connection and VPN. |
+| *This server's relay is behind Cloudflare's proxy* | The relay's DNS record is proxied (orange cloud). Set it to **DNS only**, or use the server's IP address in `CALLS_TURN_URLS`. |
 | *This server's relay refused this device* (`error 401 Unauthorized`) | The relay was reached but refused the credentials: `CALLS_TURN_SECRET` differs from coturn's `static-auth-secret`, or the clocks of the app server and the relay differ. |
 
 ### Hide IP addresses (high-security mode)

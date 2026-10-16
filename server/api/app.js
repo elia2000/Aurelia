@@ -3,9 +3,28 @@ import { readAppMeta } from "../lib/appMeta.js";
 function registerAppRoutes(app, deps) {
   const { REMOTE_CHANNELS, getSetting, fs, path, projectRootDir, callsConfig } = deps;
 
+  // The id the client build stamped into itself (client/dist/build-id.txt). A
+  // page that was loaded before the latest build compares it with its own and
+  // offers to reload, so an old open tab is never mistaken for the new code.
+  const readBuildId = () => {
+    try {
+      const file = path.join(projectRootDir, "client", "dist", "build-id.txt");
+      if (!fs.existsSync(file)) return "";
+      return String(fs.readFileSync(file, "utf8") || "").trim().slice(0, 80);
+    } catch (_) {
+      return "";
+    }
+  };
+
+  app.get("/api/app/build", (_req, res) => {
+    res.set("Cache-Control", "no-store");
+    res.json({ buildId: readBuildId() });
+  });
+
   app.get("/api/app/info", (_req, res) => {
     const appMeta = readAppMeta({ fs, path, projectRootDir });
     res.json({
+      buildId: readBuildId(),
       version: appMeta.version,
       normalizedVersion: appMeta.normalizedVersion,
       changelog: appMeta.changelog,

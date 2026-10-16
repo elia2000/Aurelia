@@ -40,6 +40,8 @@ const END_MESSAGES = {
     "Couldn't reach this server's relay. If you use a VPN or proxy, it must allow connections to the server.",
   connect_failed_relay_refused:
     "This server's relay refused this device. Ask whoever runs the server to check the relay settings.",
+  connect_failed_relay_proxied:
+    "This server's relay is behind Cloudflare's proxy, which cannot carry calls. Ask whoever runs the server to set its DNS record to “DNS only”.",
   connection_lost: "Connection lost",
   clock_skew: "This device's clock looks wrong. Check the date and time.",
   relay_unavailable: "This server only allows relayed calls, but no relay is set up.",
@@ -326,6 +328,11 @@ export default function CallOverlay({ user }) {
               <p className="max-w-[18rem] text-xs text-amber-200">
                 Can't reach the relay server yet. Calls between different networks need it. If you use a VPN or proxy,
                 it must allow this connection.
+              </p>
+            ) : phase === CALL_PHASE.CONNECTING && relayCheck === "proxied" ? (
+              <p className="max-w-[18rem] text-xs text-amber-200">
+                This server's relay is behind Cloudflare's proxy, which cannot carry calls. Its DNS record must be set
+                to “DNS only”.
               </p>
             ) : phase === CALL_PHASE.CONNECTING && relayCheck === "refused" ? (
               <p className="max-w-[18rem] text-xs text-amber-200">

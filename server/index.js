@@ -17,6 +17,7 @@ import { createSseHub } from "./lib/sse.js";
 import { createWebSocketGateway } from "./lib/websocketGateway.js";
 import { createCallRegistry } from "./lib/calls.js";
 import { callsConfigWarnings, readCallsConfig } from "./lib/callsConfig.js";
+import { createRelayDnsCheck } from "./lib/relayDns.js";
 import { createPresenceTracker } from "./lib/presenceTracker.js";
 import { createPushService } from "./lib/push.js";
 import { createUploadTools } from "./lib/uploads.js";
@@ -1192,6 +1193,11 @@ Object.assign(apiDeps, {
   },
 });
 callsConfigWarnings(readCallsConfig()).forEach((warning) => console.warn(`[calls] ${warning}`));
+// A relay host name behind Cloudflare's proxy cannot work: say so at start-up.
+createRelayDnsCheck()
+  .inspect(readCallsConfig())
+  .then((result) => result.warnings.forEach((warning) => console.warn(`[calls] ${warning}`)))
+  .catch(() => {});
 mirrorManagerRef.current = remoteChannelManager;
 
 if (isProduction) {

@@ -504,6 +504,51 @@ describe("call signaling API", () => {
     expect(res.body.forceRelay).toBe(false);
   });
 
+  test("ice-config says when the relay's host name is behind Cloudflare's proxy", async () => {
+    const turn = { enabled: true, turnUrls: ["turn:turn.example.com:3478"], turnSecret: "s", stunUrls: [], credentialTtlSeconds: 600 };
+    const proxied = makeApp({
+      userStore: makeUserStore([user(ALICE_ID, "alice")]),
+      deps: {
+        callsConfig: () => turn,
+        callSweepIntervalMs: 0,
+        relayDnsCheck: { inspect: async () => ({ proxied: true, hosts: ["turn.example.com"], warnings: [] }) },
+      },
+    });
+    proxied.sessionStore.createSession(ALICE_ID, "tok-a");
+    const bad = await request(proxied.app).get("/api/calls/ice-config").set("Cookie", ["sid=tok-a"]);
+    expect(bad.status).toBe(200);
+    expect(bad.body.hasRelay).toBe(true);
+    expect(bad.body.relayProxied).toBe(true);
+
+    const fine = makeApp({
+      userStore: makeUserStore([user(ALICE_ID, "alice")]),
+      deps: {
+        callsConfig: () => turn,
+        callSweepIntervalMs: 0,
+        relayDnsCheck: { inspect: async () => ({ proxied: false, hosts: [], warnings: [] }) },
+      },
+    });
+    fine.sessionStore.createSession(ALICE_ID, "tok-a");
+    const good = await request(fine.app).get("/api/calls/ice-config").set("Cookie", ["sid=tok-a"]);
+    expect(good.body.relayProxied).toBe(false);
+  });
+
+  test("a failing DNS check never breaks ice-config", async () => {
+    const turn = { enabled: true, turnUrls: ["turn:turn.example.com:3478"], turnSecret: "s", stunUrls: [], credentialTtlSeconds: 600 };
+    const broken = makeApp({
+      userStore: makeUserStore([user(ALICE_ID, "alice")]),
+      deps: {
+        callsConfig: () => turn,
+        callSweepIntervalMs: 0,
+        relayDnsCheck: { inspect: async () => { throw new Error("resolver exploded"); } },
+      },
+    });
+    broken.sessionStore.createSession(ALICE_ID, "tok-a");
+    const res = await request(broken.app).get("/api/calls/ice-config").set("Cookie", ["sid=tok-a"]);
+    expect(res.status).toBe(200);
+    expect(res.body.relayProxied).toBe(false);
+  });
+
   test("the whole API is switched off when calls are disabled", async () => {
     const off = makeApp({
       deps: { callsConfig: () => ({ enabled: false }), callSweepIntervalMs: 0 },
