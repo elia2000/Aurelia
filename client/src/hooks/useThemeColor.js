@@ -15,7 +15,8 @@ export function useThemeSnapshot() {
 
 /**
  * Applies the signed-in person's theme colour to the whole app, and moves a
- * "random" colour on at midnight (and when the page comes back to the front).
+ * colour that changes every day on at midnight UTC (and when the page comes
+ * back to the front).
  * Used once, near the top of the app.
  */
 export function useThemeColor(userKey) {
@@ -29,9 +30,9 @@ export function useThemeColor(userKey) {
     applyThemeColor(snapshot.color);
   }, [snapshot.color]);
 
-  const random = snapshot.preference.mode === "random";
+  const daily = snapshot.daily;
   useEffect(() => {
-    if (!random) return undefined;
+    if (!daily) return undefined;
     let timer;
     const schedule = () => {
       clearTimeout(timer);
@@ -51,7 +52,7 @@ export function useThemeColor(userKey) {
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [random]);
+  }, [daily]);
 
   return snapshot;
 }

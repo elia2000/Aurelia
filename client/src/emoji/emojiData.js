@@ -1,6 +1,8 @@
 // The emoji picker's data, built from `emoji-datasource-apple` (loaded only
 // when the picker is opened: it is a large file).
 
+import { defaultStorage } from "../utils/safeStorage.js";
+
 export const CATEGORY_ORDER = [
   "Smileys & Emotion",
   "People & Body",
@@ -78,7 +80,6 @@ export function applySkinTone(emoji, toneId) {
   return variation ? { ...emoji, char: variation.char, image: variation.image } : emoji;
 }
 
-const defaultStorage = () => (typeof localStorage === "undefined" ? null : localStorage);
 
 export function loadRecent(storage = defaultStorage()) {
   try {

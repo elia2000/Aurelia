@@ -54,6 +54,18 @@ describe("theme palette in /api/app/info", () => {
   });
 });
 
+describe("theme default in /api/app/info", () => {
+  test("is Random unless the admin chose something else", async () => {
+    const { app } = makeApp();
+    expect((await request(app).get("/api/app/info")).body.themeDefault).toBe("random");
+  });
+  test("is whatever the admin set, cleaned up", async () => {
+    expect((await request(makeApp({ settings: { THEME_DEFAULT: "#2563EB" } }).app).get("/api/app/info")).body.themeDefault).toBe("#2563eb");
+    expect((await request(makeApp({ settings: { THEME_DEFAULT: "default" } }).app).get("/api/app/info")).body.themeDefault).toBe("default");
+    expect((await request(makeApp({ settings: { THEME_DEFAULT: "garbage" } }).app).get("/api/app/info")).body.themeDefault).toBe("random");
+  });
+});
+
 describe("GET /api/app/info", () => {
   // ── Shape ──────────────────────────────────────────────────────────────────
 

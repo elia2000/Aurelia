@@ -38,3 +38,23 @@ export function parseThemePalette(value) {
   }
   return out.length ? out : [...DEFAULT_THEME_PALETTE];
 }
+
+/**
+ * What people who never chose a colour get: "random" (the shared colour of the
+ * day), "default" (the built-in green) or one fixed "#rrggbb" for everybody.
+ * Anything unclear means "random".
+ */
+export function parseThemeDefault(value) {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (text === "default" || text === "green") return "default";
+  if (text === "random" || !text) return "random";
+  return normalizeHex(text) || "random";
+}
+
+/** Like parseThemeDefault, but null when the value is not one of the allowed spellings. */
+export function parseThemeDefaultStrict(value) {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!text) return "random";
+  if (text === "random" || text === "default" || text === "green") return parseThemeDefault(text);
+  return normalizeHex(text);
+}

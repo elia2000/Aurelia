@@ -4,8 +4,10 @@ import {
   applyThemeColor,
   colorScale,
   dailyColor,
+  followsTheDay,
+  msUntilNextDay,
+  parseThemeDefault,
   dayNumber,
-  hashString,
   normalizeHex,
   parsePalette,
   resolveThemeColor,
@@ -35,35 +37,46 @@ describe("hex handling", () => {
 
 describe("the daily colour", () => {
   const palette = DEFAULT_PALETTE;
-  const day = (n) => new Date(2026, 0, 1 + n, 12, 0, 0);
+  const day = (n) => new Date(Date.UTC(2026, 0, 1 + n, 12, 0, 0));
 
-  test("is stable for a person within a day and changes the next day", () => {
-    const a = dailyColor(palette, "user-1", day(0));
-    expect(dailyColor(palette, "user-1", new Date(2026, 0, 1, 0, 1))).toBe(a);
-    expect(dailyColor(palette, "user-1", new Date(2026, 0, 1, 23, 59))).toBe(a);
-    expect(dailyColor(palette, "user-1", day(1))).not.toBe(a);
+  test("is stable within a day and changes the next day", () => {
+    const a = dailyColor(palette, day(0));
+    expect(dailyColor(palette, new Date(Date.UTC(2026, 0, 1, 0, 1)))).toBe(a);
+    expect(dailyColor(palette, new Date(Date.UTC(2026, 0, 1, 23, 59)))).toBe(a);
+    expect(dailyColor(palette, day(1))).not.toBe(a);
   });
 
   test("walks through the whole palette: 30 days give 30 different colours", () => {
-    const seen = new Set(Array.from({ length: 30 }, (_, n) => dailyColor(palette, "user-1", day(n))));
+    const seen = new Set(Array.from({ length: 30 }, (_, n) => dailyColor(palette, day(n))));
     expect(seen.size).toBe(30);
-  });
-
-  test("people do not all get the same colour on the same day", () => {
-    const colours = new Set(["a", "b", "c", "d", "e", "f", "g", "h"].map((id) => dailyColor(palette, id, day(0))));
-    expect(colours.size).toBeGreaterThan(3);
   });
 
   test("uses the palette it is given, whatever its length", () => {
     const small = ["#ff0000", "#00ff00", "#0000ff"];
-    const seen = new Set(Array.from({ length: 6 }, (_, n) => dailyColor(small, "u", day(n))));
+    const seen = new Set(Array.from({ length: 6 }, (_, n) => dailyColor(small, day(n))));
     expect([...seen].sort()).toEqual([...small].sort());
   });
 
-  test("day numbers follow the local calendar day", () => {
-    expect(dayNumber(new Date(2026, 5, 10, 0, 0, 1)) + 1).toBe(dayNumber(new Date(2026, 5, 11, 23, 59, 59)));
-    expect(hashString("abc")).toBe(hashString("abc"));
-    expect(hashString("abc")).not.toBe(hashString("abd"));
+  test("the day follows UTC, so people in different time zones share it", () => {
+    // 23:30 on 1 January in UTC-5 and 04:30 on 2 January in UTC are the same instant.
+    const instant = new Date("2026-01-02T04:30:00Z");
+    expect(dayNumber(instant)).toBe(dayNumber(new Date("2026-01-02T00:00:00Z")));
+    expect(dayNumber(new Date("2026-01-01T23:59:59Z")) + 1).toBe(dayNumber(new Date("2026-01-02T00:00:00Z")));
+  });
+
+  test("the colour moves on at UTC midnight", () => {
+    expect(msUntilNextDay(new Date("2026-04-02T23:59:30Z"))).toBe(30_000);
+    expect(msUntilNextDay(new Date("2026-04-02T00:00:00Z"))).toBe(86_400_000);
+  });
+});
+
+describe("the server's default", () => {
+  test("is Random unless it names the built-in green or one colour", () => {
+    expect(parseThemeDefault(undefined)).toBe("random");
+    expect(parseThemeDefault("")).toBe("random");
+    expect(parseThemeDefault("banana")).toBe("random");
+    expect(parseThemeDefault("default")).toBe("default");
+    expect(parseThemeDefault("#2563EB")).toBe("#2563eb");
   });
 });
 
@@ -125,18 +138,31 @@ describe("applying a colour", () => {
 
 describe("resolving the preference", () => {
   const palette = ["#ff0000", "#00ff00", "#0000ff"];
-  const date = new Date(2026, 0, 5, 9, 0);
-  test("default means the built-in look", () => {
-    expect(resolveThemeColor({ mode: "default" }, palette, "u", date)).toBeNull();
-    expect(resolveThemeColor(undefined, palette, "u", date)).toBeNull();
+  const date = new Date(Date.UTC(2026, 0, 5, 9, 0));
+  const today = dailyColor(palette, date);
+
+  test("no choice follows the server's default", () => {
+    expect(resolveThemeColor({ mode: "inherit" }, palette, "random", date)).toBe(today);
+    expect(resolveThemeColor(undefined, palette, "random", date)).toBe(today);
+    expect(resolveThemeColor({ mode: "inherit" }, palette, "#2563EB", date)).toBe("#2563eb");
+    expect(resolveThemeColor({ mode: "inherit" }, palette, "default", date)).toBeNull();
+  });
+  test("the built-in green is a choice of its own, whatever the server suggests", () => {
+    expect(resolveThemeColor({ mode: "default" }, palette, "random", date)).toBeNull();
   });
   test("a chosen colour is used as it is", () => {
-    expect(resolveThemeColor({ mode: "custom", color: "#ABCDEF" }, palette, "u", date)).toBe("#abcdef");
-    expect(resolveThemeColor({ mode: "custom", color: "garbage" }, palette, "u", date)).toBeNull();
+    expect(resolveThemeColor({ mode: "custom", color: "#ABCDEF" }, palette, "random", date)).toBe("#abcdef");
+    expect(resolveThemeColor({ mode: "custom", color: "garbage" }, palette, "random", date)).toBeNull();
   });
-  test("random means today's colour from the palette", () => {
-    const today = resolveThemeColor({ mode: "random" }, palette, "u", date);
+  test("random means today's colour from the palette, the same for everybody", () => {
+    expect(resolveThemeColor({ mode: "random" }, palette, "#2563eb", date)).toBe(today);
     expect(palette).toContain(today);
-    expect(today).toBe(dailyColor(palette, "u", date));
+  });
+  test("only a colour that changes every day needs the clock", () => {
+    expect(followsTheDay({ mode: "random" }, "default")).toBe(true);
+    expect(followsTheDay({ mode: "inherit" }, "random")).toBe(true);
+    expect(followsTheDay({ mode: "inherit" }, "#2563eb")).toBe(false);
+    expect(followsTheDay({ mode: "custom", color: "#2563eb" }, "random")).toBe(false);
+    expect(followsTheDay({ mode: "default" }, "random")).toBe(false);
   });
 });

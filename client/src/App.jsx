@@ -9,7 +9,7 @@ import { setChatPageConfig } from './settings/chatPageConfig.js'
 import InstallBar from './components/pwa/InstallBar.jsx'
 import NewVersionBanner from './components/pwa/NewVersionBanner.jsx'
 import { useThemeColor } from './hooks/useThemeColor.js'
-import { setThemePalette } from './utils/themeStore.js'
+import { setThemeDefault, setThemePalette } from './utils/themeStore.js'
 import InstallGuideModal from './components/pwa/InstallGuideModal.jsx'
 import {
   getSavedSessionUser,
@@ -735,6 +735,7 @@ export default function App() {
         })
         setMessageMaxChars(data?.messageMaxChars)
         setThemePalette(data?.themePalette)
+        setThemeDefault(data?.themeDefault)
         setChatPageConfig({
           messageFetchLimit: data?.chatMessageFetchLimit,
           messagePageSize: data?.chatMessagePageSize,

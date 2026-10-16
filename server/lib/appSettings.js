@@ -16,7 +16,7 @@
 
 import { readEnvBool, readEnvInt } from "../settings/env.js";
 import { dbKnex } from "../db/knex.js";
-import { MAX_THEME_COLORS, normalizeHex, tokenizePalette } from "./themePalette.js";
+import { MAX_THEME_COLORS, normalizeHex, parseThemeDefaultStrict, tokenizePalette } from "./themePalette.js";
 
 // ─── Setting types ────────────────────────────────────────────────────────────
 
@@ -38,6 +38,12 @@ const TYPE_STRING = "string";
 //   defaultVal  – hard-coded fallback if env var is also absent
 //   min / max   – only for TYPE_INT, applied during validation
 //   restart     – if true, hint to the admin panel that a server restart is needed
+
+function validateThemeDefault(s) {
+  const value = parseThemeDefaultStrict(s);
+  if (!value) return { valid: false, error: 'Use "random", "default" or a hex colour like #2563eb.' };
+  return { valid: true, value };
+}
 
 function validateThemePalette(s) {
   const tokens = tokenizePalette(s);
@@ -392,6 +398,17 @@ export const SETTING_DEFS = [
   },
 
   // ── Appearance ────────────────────────────────────────────────────────────────
+  {
+    key: "THEME_DEFAULT",
+    type: TYPE_STRING,
+    label: "Default theme colour",
+    description:
+      "What people get until they pick a colour: 'random' (one shared colour for everybody that changes every day, taken from the palette below), 'default' (the built-in green) or one hex colour such as #2563eb.",
+    group: "appearance",
+    envKey: "THEME_DEFAULT",
+    defaultVal: "random",
+    validate: validateThemeDefault,
+  },
   {
     key: "THEME_PALETTE",
     type: TYPE_STRING,

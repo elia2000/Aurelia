@@ -9,31 +9,42 @@ const swatch = (selected) =>
   }`;
 
 /**
- * The accent colour of the app: the built-in green, any colour of the palette
- * the admin set, a colour of your own, or "Random", which moves to a new colour
- * of that palette every day.
+ * The accent colour of the app: what the server suggests ("Default"), "Random"
+ * (a new colour of the admin's palette every day, the same for everybody), the
+ * built-in green, any colour of the palette, or a colour of your own.
  */
 export const AppearanceSettingsPanel = memo(function AppearanceSettingsPanel({ onDone, variant = "desktop" }) {
-  const { palette, preference, color, userKey } = useThemeSnapshot();
+  const { palette, preference, color, themeDefault } = useThemeSnapshot();
   const isMobile = variant === "mobile";
   const mode = preference.mode;
   const row = `flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left font-semibold transition ${
     isMobile ? "text-xs" : "text-sm"
   } border-emerald-200/70 bg-white/90 text-emerald-700 hover:border-emerald-300 hover:bg-emerald-50 dark:border-emerald-500/30 dark:bg-slate-900/50 dark:text-emerald-200 dark:hover:bg-emerald-500/10`;
   const picked = mode === "custom" ? preference.color : null;
-  const today = dailyColor(palette, userKey);
+  const today = dailyColor(palette);
+  // What "Default" means on this server.
+  const defaultColor = themeDefault === "random" ? today : themeDefault === "default" ? DEFAULT_THEME_COLOR : themeDefault;
+  const defaultText =
+    themeDefault === "random"
+      ? `A new colour every day · today ${today}`
+      : themeDefault === "default"
+        ? "The built-in green"
+        : themeDefault;
 
   return (
     <div className="space-y-4 text-slate-600 dark:text-slate-300">
       <div className="space-y-2">
         <button
           type="button"
-          onClick={() => setThemePreference({ mode: "default" })}
-          aria-pressed={mode === "default"}
-          className={`${row} ${mode === "default" ? "ring-2 ring-emerald-300" : ""}`}
+          onClick={() => setThemePreference({ mode: "inherit" })}
+          aria-pressed={mode === "inherit"}
+          className={`${row} ${mode === "inherit" ? "ring-2 ring-emerald-300" : ""}`}
         >
-          <span className="h-6 w-6 shrink-0 rounded-full" style={{ background: DEFAULT_THEME_COLOR }} aria-hidden="true" />
-          <span className="min-w-0 flex-1">Default</span>
+          <span className="h-6 w-6 shrink-0 rounded-full" style={{ background: defaultColor }} aria-hidden="true" />
+          <span className="min-w-0 flex-1">
+            Default
+            <span className="block text-[11px] font-normal text-slate-500 dark:text-slate-400">{defaultText}</span>
+          </span>
         </button>
         <button
           type="button"
@@ -45,9 +56,18 @@ export const AppearanceSettingsPanel = memo(function AppearanceSettingsPanel({ o
           <span className="min-w-0 flex-1">
             Random
             <span className="block text-[11px] font-normal text-slate-500 dark:text-slate-400">
-              A new colour every day · today {today}
+              A new colour every day, the same for everybody · today {today}
             </span>
           </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setThemePreference({ mode: "default" })}
+          aria-pressed={mode === "default"}
+          className={`${row} ${mode === "default" ? "ring-2 ring-emerald-300" : ""}`}
+        >
+          <span className="h-6 w-6 shrink-0 rounded-full" style={{ background: DEFAULT_THEME_COLOR }} aria-hidden="true" />
+          <span className="min-w-0 flex-1">Built-in green</span>
         </button>
       </div>
 

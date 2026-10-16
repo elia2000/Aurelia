@@ -1,22 +1,39 @@
 // The theme colour state shared by the app and the settings screen: the
-// palette the admin set, the person's choice, and the colour that means today.
+// palette and default the admin set, the person's choice, and the colour that
+// means today.
 
 import {
   DEFAULT_PALETTE,
+  followsTheDay,
+  loadServerTheme,
   loadThemePreference,
+  msUntilNextDay,
   parsePalette,
+  parseThemeDefault,
   resolveThemeColor,
+  saveServerTheme,
   saveThemePreference,
 } from "./themeColor.js";
 
+export { msUntilNextDay };
+
 const listeners = new Set();
-let palette = [...DEFAULT_PALETTE];
+const remembered = loadServerTheme();
+let palette = remembered.palette;
+let themeDefault = remembered.themeDefault;
 let userKey = null;
-let preference = { mode: "default" };
+let preference = { mode: "inherit" };
 let snapshot = null;
 
 function compute(now) {
-  return { palette, userKey, preference, color: resolveThemeColor(preference, palette, userKey, now()) };
+  return {
+    palette,
+    themeDefault,
+    userKey,
+    preference,
+    color: resolveThemeColor(preference, palette, themeDefault, now()),
+    daily: followsTheDay(preference, themeDefault),
+  };
 }
 
 function sameSnapshot(a, b) {
@@ -24,8 +41,10 @@ function sameSnapshot(a, b) {
     a &&
     a.userKey === b.userKey &&
     a.color === b.color &&
+    a.daily === b.daily &&
     a.preference.mode === b.preference.mode &&
     a.preference.color === b.preference.color &&
+    a.themeDefault === b.themeDefault &&
     a.palette === b.palette
   );
 }
@@ -47,39 +66,44 @@ export function subscribeTheme(listener) {
 }
 
 /** The colours "Random" draws from, as the server sent them. */
-export function setThemePalette(list, { now } = {}) {
+export function setThemePalette(list, { now, storage } = {}) {
   palette = parsePalette(list);
+  saveServerTheme({ palette, themeDefault }, storage);
+  emit(now);
+}
+
+/** What people get until they choose ("random", "default" or "#rrggbb"), as the server sent it. */
+export function setThemeDefault(value, { now, storage } = {}) {
+  themeDefault = parseThemeDefault(value);
+  saveServerTheme({ palette, themeDefault }, storage);
   emit(now);
 }
 
 /** Whose choice applies (null when nobody is signed in). */
 export function setThemeUser(key, { storage, now } = {}) {
   userKey = key ? String(key) : null;
-  preference = userKey ? loadThemePreference(userKey, storage) : { mode: "default" };
+  preference = userKey ? loadThemePreference(userKey, storage) : { mode: "inherit" };
   emit(now);
 }
 
 export function setThemePreference(next, { storage, now } = {}) {
-  preference = next?.mode === "random" || next?.mode === "custom" ? next : { mode: "default" };
+  const mode = next?.mode;
+  preference = mode === "random" || mode === "custom" || mode === "default" ? next : { mode: "inherit" };
   if (userKey) saveThemePreference(userKey, preference, storage);
   emit(now);
 }
 
-/** Looks at the clock again (the colour changes at midnight). */
+/** Looks at the clock again (the colour changes at midnight, UTC). */
 export function refreshThemeColor({ now } = {}) {
   emit(now);
 }
 
-/** Milliseconds from `date` to the next local midnight. */
-export function msUntilNextDay(date = new Date()) {
-  const next = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1, 0, 0, 0, 0);
-  return next.getTime() - date.getTime();
-}
-
+/** Back to the built-in settings, without reading what was remembered (for tests). */
 export function resetThemeStore() {
   palette = [...DEFAULT_PALETTE];
+  themeDefault = "random";
   userKey = null;
-  preference = { mode: "default" };
+  preference = { mode: "inherit" };
   snapshot = null;
   snapshot = compute(() => new Date());
 }

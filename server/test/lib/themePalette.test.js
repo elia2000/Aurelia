@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { DEFAULT_THEME_PALETTE, MAX_THEME_COLORS, normalizeHex, parseThemePalette } from "../../lib/themePalette.js";
+import { DEFAULT_THEME_PALETTE, MAX_THEME_COLORS, normalizeHex, parseThemeDefault, parseThemePalette } from "../../lib/themePalette.js";
 import { SETTING_DEFS, validateSetting } from "../../lib/appSettings.js";
 
 describe("normalizeHex", () => {
@@ -60,5 +60,40 @@ describe("the THEME_PALETTE admin setting", () => {
   });
   test("an empty value means 'use the built-in palette'", () => {
     expect(validateSetting("THEME_PALETTE", "").valid).toBe(true);
+  });
+});
+
+describe("parseThemeDefault", () => {
+  test("is Random unless the admin says otherwise", () => {
+    expect(parseThemeDefault("")).toBe("random");
+    expect(parseThemeDefault(undefined)).toBe("random");
+    expect(parseThemeDefault("nonsense")).toBe("random");
+    expect(parseThemeDefault(" Random ")).toBe("random");
+  });
+  test("can be the built-in green or one fixed colour for everybody", () => {
+    expect(parseThemeDefault("default")).toBe("default");
+    expect(parseThemeDefault("GREEN")).toBe("default");
+    expect(parseThemeDefault("#2563EB")).toBe("#2563eb");
+    expect(parseThemeDefault("0f0")).toBe("#00ff00");
+  });
+});
+
+describe("the THEME_DEFAULT admin setting", () => {
+  test("is a public setting in the appearance group, Random by default", () => {
+    const def = SETTING_DEFS.find((d) => d.key === "THEME_DEFAULT");
+    expect(def).toBeTruthy();
+    expect(def.group).toBe("appearance");
+    expect(def.envKey).toBe("THEME_DEFAULT");
+    expect(def.adminOnly).not.toBe(true);
+    expect(def.defaultVal).toBe("random");
+  });
+  test("accepts random, default or a hex colour, saved in one spelling", () => {
+    expect(validateSetting("THEME_DEFAULT", "Random")).toMatchObject({ valid: true, value: "random" });
+    expect(validateSetting("THEME_DEFAULT", "green")).toMatchObject({ valid: true, value: "default" });
+    expect(validateSetting("THEME_DEFAULT", "#2563EB")).toMatchObject({ valid: true, value: "#2563eb" });
+  });
+  test("refuses anything else", () => {
+    expect(validateSetting("THEME_DEFAULT", "banana").valid).toBe(false);
+    expect(validateSetting("THEME_DEFAULT", "#12").valid).toBe(false);
   });
 });

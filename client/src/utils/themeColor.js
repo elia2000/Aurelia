@@ -1,7 +1,10 @@
 // Theme colour: every person can pick the accent colour of the app (or let it
-// change every day, from a palette the admin sets). The app's accent is
+// change every day, from a palette the admin sets: "Random" gives everybody the
+// same colour on the same day). The app's accent is
 // Tailwind's emerald scale, so changing the colour is a matter of replacing
 // those CSS variables: every `emerald-*` class follows.
+
+import { defaultStorage } from "./safeStorage.js";
 
 export const MAX_COLORS = 30;
 export const SHADES = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950];
@@ -35,29 +38,38 @@ export function parsePalette(value) {
   return out.length ? out : [...DEFAULT_PALETTE];
 }
 
-/** A small stable hash (FNV-1a) of a string. */
-export function hashString(text) {
-  let hash = 0x811c9dc5;
-  const input = String(text ?? "");
-  for (let i = 0; i < input.length; i += 1) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash >>> 0;
+/**
+ * What people get until they choose: "random" (today's colour), "default" (the
+ * built-in green) or one fixed "#rrggbb". Anything unclear means "random".
+ */
+export function parseThemeDefault(value) {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (text === "default" || text === "green") return "default";
+  return normalizeHex(text) || "random";
 }
 
-/** The number of the local calendar day (it changes at the person's midnight). */
+const MS_PER_DAY = 86_400_000;
+
+/**
+ * The number of the day. It follows UTC, not the clock of the person's phone,
+ * so that everybody is on the same day at the same moment.
+ */
 export function dayNumber(date = new Date()) {
-  return Math.floor(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86_400_000);
+  return Math.floor(date.getTime() / MS_PER_DAY);
+}
+
+/** Milliseconds from `date` to the next UTC midnight, when the daily colour moves on. */
+export function msUntilNextDay(date = new Date()) {
+  return MS_PER_DAY - (((date.getTime() % MS_PER_DAY) + MS_PER_DAY) % MS_PER_DAY);
 }
 
 /**
- * Today's colour for a person: it steps to the next colour of the palette every
- * day, and people start at different places so that they do not all match.
+ * Today's colour: it steps to the next colour of the palette every day, and is
+ * the same for everybody.
  */
-export function dailyColor(palette, userKey, date = new Date()) {
+export function dailyColor(palette, date = new Date()) {
   const colors = parsePalette(palette);
-  return colors[(dayNumber(date) + hashString(userKey)) % colors.length];
+  return colors[dayNumber(date) % colors.length];
 }
 
 // ── colour maths (OKLab, so that the shades look evenly spaced) ───────────────
@@ -159,19 +171,23 @@ export function applyThemeColor(
 // ── the person's choice ──────────────────────────────────────────────────────
 const STORAGE_PREFIX = "aurelle-theme-color:";
 
-/** @returns {{mode: "default"|"random"|"custom", color?: string}} */
-export function loadThemePreference(userKey, storage = typeof localStorage === "undefined" ? null : localStorage) {
+/**
+ * @returns {{mode: "inherit"|"default"|"random"|"custom", color?: string}}
+ *   "inherit" is no choice at all: the admin's default applies.
+ */
+export function loadThemePreference(userKey, storage = defaultStorage()) {
   try {
     const parsed = JSON.parse(storage?.getItem(`${STORAGE_PREFIX}${userKey}`) || "null");
     if (parsed?.mode === "random") return { mode: "random" };
+    if (parsed?.mode === "default") return { mode: "default" };
     if (parsed?.mode === "custom" && normalizeHex(parsed.color)) return { mode: "custom", color: normalizeHex(parsed.color) };
   } catch (_) {
-    // unreadable: the default look
+    // unreadable: as if nothing was chosen
   }
-  return { mode: "default" };
+  return { mode: "inherit" };
 }
 
-export function saveThemePreference(userKey, preference, storage = typeof localStorage === "undefined" ? null : localStorage) {
+export function saveThemePreference(userKey, preference, storage = defaultStorage()) {
   try {
     storage?.setItem(`${STORAGE_PREFIX}${userKey}`, JSON.stringify(preference));
   } catch (_) {
@@ -179,9 +195,46 @@ export function saveThemePreference(userKey, preference, storage = typeof localS
   }
 }
 
-/** The colour a preference means right now, or null for the built-in look. */
-export function resolveThemeColor(preference, palette, userKey, date = new Date()) {
-  if (preference?.mode === "random") return dailyColor(palette, userKey, date);
-  if (preference?.mode === "custom") return normalizeHex(preference.color);
-  return null;
+/** What the server last told this device (so the first paint is already right). */
+const SERVER_THEME_KEY = "aurelle-theme-server";
+
+export function loadServerTheme(storage = defaultStorage()) {
+  try {
+    const parsed = JSON.parse(storage?.getItem(SERVER_THEME_KEY) || "null");
+    return { palette: parsePalette(parsed?.palette), themeDefault: parseThemeDefault(parsed?.themeDefault) };
+  } catch (_) {
+    return { palette: [...DEFAULT_PALETTE], themeDefault: "random" };
+  }
+}
+
+export function saveServerTheme(value, storage = defaultStorage()) {
+  try {
+    storage?.setItem(SERVER_THEME_KEY, JSON.stringify(value));
+  } catch (_) {
+    // not remembered: the next start asks the server again
+  }
+}
+
+/**
+ * The colour that applies right now, or null for the built-in look.
+ * @param {object} preference   what the person chose
+ * @param {string[]} palette    the admin's palette
+ * @param {string} themeDefault the admin's default: "random", "default" or "#rrggbb"
+ */
+export function resolveThemeColor(preference, palette, themeDefault, date = new Date()) {
+  const mode = preference?.mode;
+  if (mode === "random") return dailyColor(palette, date);
+  if (mode === "custom") return normalizeHex(preference.color);
+  if (mode === "default") return null;
+  const fallback = parseThemeDefault(themeDefault);
+  if (fallback === "random") return dailyColor(palette, date);
+  return fallback === "default" ? null : fallback;
+}
+
+/** True when the colour moves on every day (so something has to look at the clock). */
+export function followsTheDay(preference, themeDefault) {
+  const mode = preference?.mode;
+  if (mode === "random") return true;
+  if (mode === "custom" || mode === "default") return false;
+  return parseThemeDefault(themeDefault) === "random";
 }
