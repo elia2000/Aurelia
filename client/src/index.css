@@ -1500,3 +1500,20 @@ label:hover .sb-dash-br {
 .sb-markdown-inline * {
   display: inline;
 }
+
+/* Emoji drawn as pictures (see src/emoji/emojiImages.js) */
+img.emoji {
+  display: inline-block;
+  width: 1.3em;
+  height: 1.3em;
+  margin: 0 0.04em;
+  vertical-align: -0.3em;
+  object-fit: contain;
+  -webkit-user-drag: none;
+}
+img.emoji-jumbo {
+  width: 3.4rem;
+  height: 3.4rem;
+  margin: 0.1rem 0.12rem;
+  vertical-align: middle;
+}

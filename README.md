@@ -96,3 +96,7 @@ Issues and pull requests are welcome. See [Contributing](/CONTRIBUTING.md).
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+### Emoji pictures
+
+The emoji picker and the emoji in messages are drawn as Apple-style pictures from the [`emoji-datasource-apple`](https://www.npmjs.com/package/emoji-datasource-apple) package. The package's code and data are MIT-licensed, but the pictures themselves are Apple's artwork. They are **not** stored in this repository: `npm ci` downloads them and the client build copies them into `client/dist/emoji/`. If you run a public service, check that this use is acceptable for you. To go without them, remove `emoji-datasource-apple` from `client/package.json`: emoji then fall back to your device's own (the picker needs the package, so it will say emoji could not be loaded).

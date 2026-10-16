@@ -1,6 +1,9 @@
 ﻿import { createRoot } from 'react-dom/client'
 import App from './App.jsx'
 import './index.css'
+import { installEmojiFallback } from './emoji/emojiImages.js'
+
+installEmojiFallback()
 
 const rootElement = document.getElementById('root')
 

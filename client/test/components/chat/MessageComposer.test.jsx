@@ -1,4 +1,4 @@
-import { describe, test, expect, vi } from "vitest";
+import { describe, test, expect, vi, beforeEach } from "vitest";
 import { render } from "vitest-browser-react";
 import { page, userEvent } from "vitest/browser";
 import { MessageComposer } from "../../../src/components/chat/messages/MessageComposer.jsx";
@@ -488,5 +488,45 @@ describe("MessageItem — body suppression for file-only messages", () => {
     );
     // The edit banner shows "Message" as placeholder for generated body
     await expect.element(page.getByText("Message")).toBeInTheDocument();
+  });
+});
+
+// ─── Emoji picker ─────────────────────────────────────────────────────────────
+
+describe("MessageComposer — emoji", () => {
+  beforeEach(() => localStorage.clear());
+
+  test("an Emoji button opens the picker and Escape closes it", async () => {
+    render(<MessageComposer {...BASE_PROPS} />);
+    await page.getByRole("button", { name: "Emoji" }).click();
+    await expect.element(page.getByRole("dialog", { name: "Emoji" })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    await expect.element(page.getByRole("dialog", { name: "Emoji" })).not.toBeInTheDocument();
+  });
+
+  test("a picked emoji goes into the message where the cursor is, and the picker stays open for more", async () => {
+    const onMessageInput = vi.fn();
+    render(<MessageComposer {...BASE_PROPS} onMessageInput={onMessageInput} />);
+    const box = page.getByRole("textbox", { name: /type a message/i });
+    await box.fill("ab");
+    const textarea = document.querySelector("textarea");
+    textarea.setSelectionRange(1, 1); // between the a and the b
+    await page.getByRole("button", { name: "Emoji" }).click();
+    await page.getByRole("button", { name: "grinning", exact: true }).click();
+    await expect.poll(() => textarea.value).toBe("a😀b");
+    expect(onMessageInput).toHaveBeenLastCalledWith("a😀b");
+    await page.getByRole("searchbox", { name: "Search emoji" }).fill("fire");
+    await page.getByRole("button", { name: "fire", exact: true }).click();
+    await expect.poll(() => textarea.value).toMatch(/🔥/);
+    await expect.element(page.getByRole("dialog", { name: "Emoji" })).toBeInTheDocument();
+  });
+
+  test("an emoji that would not fit in the message limit is not added", async () => {
+    render(<MessageComposer {...BASE_PROPS} messageMaxChars={3} />);
+    const box = page.getByRole("textbox", { name: /type a message/i });
+    await box.fill("abc");
+    await page.getByRole("button", { name: "Emoji" }).click();
+    await page.getByRole("button", { name: "grinning", exact: true }).click();
+    expect(document.querySelector("textarea").value).toBe("abc");
   });
 });

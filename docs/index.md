@@ -33,6 +33,10 @@ features:
     title: Admin Panel
     details: Comprehensive management interface for users, chats, settings, and system operations.
     link: /Admin-Panel
+  - icon: 😀
+    title: Emoji and themes
+    details: A Telegram-style emoji picker with Apple-style pictures, and a theme colour for everyone, including a random colour that changes every day.
+    link: /Environment-Variables
   - icon: 🔧
     title: Configurable
     details: Tune ports, uploads, retention, push, and more through environment variables or admin UI.

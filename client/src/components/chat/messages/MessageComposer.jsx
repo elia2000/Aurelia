@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { Suspense, lazy, useEffect, useRef, useState, useCallback } from "react";
 import {
   Camera,
   Check,
@@ -10,11 +10,14 @@ import {
   Play,
   Reply,
   Send,
+  Smile,
   Close,
   Video,
 } from "../../../icons/lucide.js";
 import { hasPersian } from "../../../utils/fontUtils.js";
 import { renderMarkdownInlinePlain } from "../../../utils/markdown.js";
+// Loaded when the emoji button is first used (the emoji list is large).
+const EmojiPicker = lazy(() => import("../emoji/EmojiPicker.jsx"));
 import VerifiedBadge from "../../common/VerifiedBadge.jsx";
 import UserRoleBadge from "../../common/UserRoleBadge.jsx";
 import Tooltip from "../../common/Tooltip.jsx";
@@ -90,6 +93,17 @@ export function MessageComposer({
   const previousEditIdRef = useRef(0);
   const appliedEditIdRef = useRef(0);
   const [messageValue, setMessageValue] = useState("");
+  const [showEmoji, setShowEmoji] = useState(false);
+  const emojiRef = useRef(null);
+
+  useEffect(() => {
+    if (!showEmoji) return undefined;
+    const onPointerDown = (event) => {
+      if (emojiRef.current && !emojiRef.current.contains(event.target)) setShowEmoji(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [showEmoji]);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingMs, setRecordingMs] = useState(0);
   const recordingTimerRef = useRef(null);
@@ -628,6 +642,37 @@ export function MessageComposer({
 
   if (!activeChatId) return null;
 
+  // Puts an emoji into the message where the cursor is. The picker stays open
+  // so that several can be added in a row.
+  const insertEmoji = (emoji) => {
+    const el = messageInputRef.current;
+    const start = el?.selectionStart ?? messageValue.length;
+    const end = el?.selectionEnd ?? start;
+    const next = messageValue.slice(0, start) + emoji + messageValue.slice(end);
+    const limit = Number(messageMaxChars);
+    if (messageMaxChars != null && Number.isFinite(limit) && limit > 0 && next.length > limit) return;
+    setMessageValue(next);
+    if (typeof onMessageInput === "function") onMessageInput(next);
+    requestAnimationFrame(() => {
+      const input = messageInputRef.current;
+      if (!input) return;
+      applyTextareaSize({
+        textareaEl: input,
+        maxTextareaHeight,
+        composerEl: composerRef.current,
+        onComposerResize,
+        onComposerHeightChange,
+      });
+      focusElementPreventScroll(input);
+      const position = start + emoji.length;
+      try {
+        input.setSelectionRange(position, position);
+      } catch (_) {
+        // (an input that cannot hold a selection)
+      }
+    });
+  };
+
   return (
     <form
       ref={composerRef}
@@ -1072,6 +1117,42 @@ export function MessageComposer({
                   restoreComposerFocus();
                 }}
               />
+            </div>
+            <div className="relative" ref={emojiRef}>
+              <button
+                type="button"
+                onPointerDown={(event) => {
+                  captureComposerFocus();
+                  if (!isDesktop) event.preventDefault();
+                }}
+                onClick={() => setShowEmoji((open) => !open)}
+                aria-label="Emoji"
+                aria-expanded={showEmoji}
+                title="Emoji"
+                className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-transparent bg-transparent text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-100 hover:shadow-[0_0_16px_color-mix(in_srgb,var(--color-emerald-500)_22%,transparent)] dark:text-emerald-200 dark:hover:border-emerald-500/30 dark:hover:bg-emerald-500/10"
+              >
+                <Smile size={18} className="icon-anim-sway" />
+              </button>
+              {showEmoji ? (
+                <div
+                  className="absolute bottom-12 left-0 z-40"
+                  // Clicking the picker must not take the cursor out of the message.
+                  onPointerDown={(event) => {
+                    if (event.target.tagName !== "INPUT") event.preventDefault();
+                  }}
+                >
+                  <Suspense fallback={null}>
+                    <EmojiPicker
+                      onSelect={insertEmoji}
+                      onClose={() => {
+                        setShowEmoji(false);
+                        restoreComposerFocus();
+                      }}
+                      autoFocusSearch={isDesktop}
+                    />
+                  </Suspense>
+                </div>
+              ) : null}
             </div>
             <textarea
               ref={messageInputRef}

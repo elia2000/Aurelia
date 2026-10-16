@@ -1221,7 +1221,7 @@ if (isProduction) {
       res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
       return;
     }
-    if (normalizedPath.includes("/assets/")) {
+    if (normalizedPath.includes("/assets/") || normalizedPath.includes("/emoji/")) {
       res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
       return;
     }

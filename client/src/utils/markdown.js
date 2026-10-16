@@ -3,6 +3,7 @@ import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Check, Copy } from "../icons/lucide.js";
+import { emojifyHtml, isJumboEmojiText } from "../emoji/emojiImages.js";
 
 const SCHEME_PATTERN = "[a-z][a-z0-9+.-]*";
 const SIMPLE_LINK_PATTERN = /\b(?:https?:\/\/|www\.)\S+/i;
@@ -428,7 +429,7 @@ const writeToCache = (cache, key, value) => {
   return value;
 };
 
-export const renderMarkdownBlock = (text) => {
+const renderMarkdownBlockHtml = (text) => {
   const raw = normalizeMarkdownInput(text);
   if (!raw) return "";
   const cached = readFromCache(blockCache, raw);
@@ -497,7 +498,7 @@ export const renderMarkdownInline = (text) => {
   return writeToCache(inlineCache, raw, cleaned);
 };
 
-export const renderMarkdownInlinePlain = (text) => {
+const renderMarkdownInlinePlainHtml = (text) => {
   const raw = normalizeMarkdownInput(text);
   if (!raw) return "";
   const cached = readFromCache(inlinePlainCache, raw);
@@ -520,3 +521,12 @@ export const renderMarkdownInlinePlain = (text) => {
     .trim();
   return writeToCache(inlinePlainCache, raw, plain);
 };
+
+// Emoji are drawn as Apple-style pictures (see emoji/emojiImages.js). This runs
+// on the finished, sanitised HTML, outside the caches above.
+export const renderMarkdownBlock = (text) => {
+  const html = renderMarkdownBlockHtml(text);
+  return emojifyHtml(html, { jumbo: isJumboEmojiText(normalizeMarkdownInput(text)) });
+};
+
+export const renderMarkdownInlinePlain = (text) => emojifyHtml(renderMarkdownInlinePlainHtml(text));

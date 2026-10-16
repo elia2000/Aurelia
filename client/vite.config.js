@@ -31,11 +31,35 @@ export default defineConfig(({ mode }) => {
     }
   })();
   const buildId = `${gitSha}-${Date.now().toString(36)}`;
+  const emojiImageDir = path.resolve(import.meta.dirname, "node_modules/emoji-datasource-apple/img/apple/64");
 
   return {
     define: { __BUILD_ID__: JSON.stringify(buildId) },
     plugins: [
       react(),
+      {
+        // The Apple-style emoji pictures come from the `emoji-datasource-apple`
+        // package: served from it while developing, copied into the build.
+        name: "aurelle-emoji-images",
+        configureServer(server) {
+          server.middlewares.use("/emoji/apple/64", (req, res, next) => {
+            const name = path.basename(decodeURIComponent(String(req.url || "").split("?")[0]));
+            const file = path.join(emojiImageDir, name);
+            if (!/^[0-9a-f-]+\.png$/.test(name) || !fs.existsSync(file)) return next();
+            res.setHeader("Content-Type", "image/png");
+            res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+            fs.createReadStream(file).pipe(res);
+          });
+        },
+        writeBundle(options) {
+          if (!fs.existsSync(emojiImageDir)) return; // package missing: emoji fall back to the device's own
+          const outDir = path.join(options.dir || path.resolve(import.meta.dirname, "dist"), "emoji/apple/64");
+          fs.mkdirSync(outDir, { recursive: true });
+          for (const name of fs.readdirSync(emojiImageDir)) {
+            if (name.endsWith(".png")) fs.copyFileSync(path.join(emojiImageDir, name), path.join(outDir, name));
+          }
+        },
+      },
       {
         name: "aurelle-build-id",
         writeBundle(options) {
