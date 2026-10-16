@@ -52,6 +52,46 @@ describe("buildIceServers", () => {
     expect(out.ttlSeconds).toBe(3600);
   });
 
+  test("a TURN address also gets a TCP variant (VPNs and proxies often carry only TCP)", () => {
+    const cfg = readCallsConfig({
+      CALLS_TURN_URLS:
+        "stun:t.example.com:3478, turn:t.example.com:3478, turn:u.example.com:3478?transport=udp, turn:v.example.com:80?transport=tcp, turns:t.example.com:5349",
+      CALLS_TURN_SECRET: "s",
+    });
+    const turn = buildIceServers(cfg, "u").iceServers.find((s) => s.username);
+    expect(turn.urls).toEqual([
+      "stun:t.example.com:3478",
+      "turn:t.example.com:3478",
+      "turn:t.example.com:3478?transport=tcp",
+      "turn:u.example.com:3478?transport=udp",
+      "turn:u.example.com:3478?transport=tcp",
+      // Already TCP, or TLS (which is TCP): nothing to add.
+      "turn:v.example.com:80?transport=tcp",
+      "turns:t.example.com:5349",
+    ]);
+  });
+
+  test("an operator who wants UDP only can switch the extra TCP addresses off", () => {
+    const cfg = readCallsConfig({
+      CALLS_TURN_URLS: "turn:t.example.com:3478, turn:u.example.com:3478?transport=udp",
+      CALLS_TURN_SECRET: "s",
+      CALLS_TURN_TCP_FALLBACK: "false",
+    });
+    expect(cfg.turnTcpFallback).toBe(false);
+    const turn = buildIceServers(cfg, "u").iceServers.find((s) => s.username);
+    expect(turn.urls).toEqual(["turn:t.example.com:3478", "turn:u.example.com:3478?transport=udp"]);
+    expect(readCallsConfig({}).turnTcpFallback).toBe(true);
+  });
+
+  test("the TCP variant is not added twice when it is already listed", () => {
+    const cfg = readCallsConfig({
+      CALLS_TURN_URLS: "turn:t.example.com:3478, turn:t.example.com:3478?transport=tcp",
+      CALLS_TURN_SECRET: "s",
+    });
+    const turn = buildIceServers(cfg, "u").iceServers.find((s) => s.username);
+    expect(turn.urls).toEqual(["turn:t.example.com:3478", "turn:t.example.com:3478?transport=tcp"]);
+  });
+
   test("force-relay is honoured with a relay and FAILS CLOSED without one", () => {
     const withRelay = readCallsConfig({
       CALLS_TURN_URLS: "turn:t.example.com:3478",

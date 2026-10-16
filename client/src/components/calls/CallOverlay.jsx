@@ -36,6 +36,10 @@ const END_MESSAGES = {
   connect_failed: "Couldn't connect. Check your network and try again.",
   connect_failed_no_relay:
     "Couldn't connect. This server has no relay (TURN) set up, which calls between different networks need.",
+  connect_failed_relay_unreachable:
+    "Couldn't reach this server's relay. If you use a VPN or proxy, it must allow connections to the server.",
+  connect_failed_relay_refused:
+    "This server's relay refused this device. Ask whoever runs the server to check the relay settings.",
   connection_lost: "Connection lost",
   clock_skew: "This device's clock looks wrong. Check the date and time.",
   relay_unavailable: "This server only allows relayed calls, but no relay is set up.",
@@ -103,7 +107,7 @@ export default function CallOverlay({ user }) {
   const localVideoRef = useRef(null);
   const dialogRef = useRef(null);
 
-  const { phase, peer, kind, muted, cameraOn, remoteCameraOn, remoteMuted, sas, trust, relayed, networkPaused, cameraBlocked, connectingSlow } = state;
+  const { phase, peer, kind, muted, cameraOn, remoteCameraOn, remoteMuted, sas, trust, relayed, networkPaused, cameraBlocked, connectingSlow, relayCheck, connectionDetails } = state;
   const active = phase && phase !== CALL_PHASE.IDLE;
   const connected = phase === CALL_PHASE.CONNECTED;
   const elapsed = useElapsed(state.connectedAt, connected);
@@ -300,6 +304,16 @@ export default function CallOverlay({ user }) {
           >
             {statusText}
           </p>
+          {ended && connectionDetails?.length ? (
+            <details className="max-w-[18rem] text-left text-xs text-slate-400">
+              <summary className="cursor-pointer text-center">Technical details</summary>
+              <ul className="mt-1 space-y-0.5 break-words font-mono text-[11px]">
+                {connectionDetails.map((line, index) => (
+                  <li key={index}>{line}</li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
           {/* Hints that appear while the call goes on are announced (the region
               exists from the start, so screen readers notice what is added). */}
           <div aria-live="polite" className="flex flex-col items-center gap-3">
@@ -308,7 +322,16 @@ export default function CallOverlay({ user }) {
                 <VideoOff size={16} aria-hidden="true" /> Camera off
               </p>
             ) : null}
-            {phase === CALL_PHASE.CONNECTING && connectingSlow ? (
+            {phase === CALL_PHASE.CONNECTING && relayCheck === "unreachable" ? (
+              <p className="max-w-[18rem] text-xs text-amber-200">
+                Can't reach the relay server yet. Calls between different networks need it. If you use a VPN or proxy,
+                it must allow this connection.
+              </p>
+            ) : phase === CALL_PHASE.CONNECTING && relayCheck === "refused" ? (
+              <p className="max-w-[18rem] text-xs text-amber-200">
+                The relay server refused this device. The relay settings on the server may be wrong.
+              </p>
+            ) : phase === CALL_PHASE.CONNECTING && connectingSlow ? (
               <p className="max-w-[18rem] text-xs text-slate-400">
                 Still connecting. This can take a little longer on mobile networks.
               </p>

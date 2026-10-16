@@ -101,7 +101,7 @@ Aurelle از سرور استاندارد [coturn](https://github.com/coturn/cotu
 
    ```bash
    CALLS_TURN_SECRET=<راز ساخته‌شده>
-   CALLS_TURN_URLS=stun:turn.example.com:3478,turn:turn.example.com:3478?transport=udp,turn:turn.example.com:3478?transport=tcp
+   CALLS_TURN_URLS=stun:turn.example.com:3478,turn:turn.example.com:3478
    CALLS_TURN_EXTERNAL_IP=<آدرس IPv4 عمومی سرور>
    ```
 
@@ -123,6 +123,21 @@ Aurelle از سرور استاندارد [coturn](https://github.com/coturn/cotu
 ### گزینه‌ی ب: coturn اختصاصی خودتان
 
 coturn را با `use-auth-secret` و `static-auth-secret=<secret>` اجرا کنید، سپس `CALLS_TURN_SECRET` و `CALLS_TURN_URLS` را مطابق آن تنظیم کنید. برای TLS از آدرس‌های `turns:` استفاده کنید.
+
+### پشت VPN، پراکسی یا شبکه‌ی سانسورشده {#behind-a-vpn-a-proxy-or-a-censored-network}
+
+تماس به مسیری از هر گوشی تا رله نیاز دارد. دو چیز معمولاً مانع می‌شوند:
+
+- **VPN یا پراکسی که UDP را عبور نمی‌دهد.** WebRTC UDP را ترجیح می‌دهد و بسیاری از برنامه‌های VPN (به‌ویژه حالت «پراکسی» که مرورگر با یک SOCKS/HTTP محلی صحبت می‌کند) فقط TCP را عبور می‌دهند یا UDP را بیرون از تونل رها می‌کنند، جایی که سانسور ممکن است آن را حذف کند. به همین دلیل Aurelle هر آدرس `turn:` را **روی TCP هم** ارائه می‌کند (آدرسی که transport ندارد یا `transport=udp` دارد، یک همتای `transport=tcp` می‌گیرد؛ با `CALLS_TURN_TCP_FALLBACK=false` خاموش می‌شود). مطمئن شوید coturn روی TCP پورت `3478` گوش می‌دهد (به‌طور پیش‌فرض همین‌طور است) و آن پورت باز است. در صورت امکان از برنامه‌ی VPN در حالت سراسری سیستم (VPN service / TUN) استفاده کنید.
+- **فیلتر پورت.** اگر افراد یک تماس از *طریق VPN* به Aurelle می‌رسند، سانسور فقط ترافیک خود VPN را می‌بیند، پس پورت رله برایش مهم نیست؛ مهم این است که VPN به سرور شما برسد. اگر افراد بتوانند بدون VPN هم به رله برسند، `turns:` روی پورت `443` (TLS) کم‌احتمال‌ترین آدرس برای مسدود شدن است، اما `443` باید با هر سرویس دیگری که روی آن گوش می‌دهد مشترک شود (مثلاً یک جلوی SNI-محور مانند `stream` در nginx با `ssl_preread`). وجود سرویس دیگر روی `443` (مثلاً پنل پراکسی) معمول‌ترین مانع است؛ پس این یک راه‌اندازی پیشرفته است و برای حالت VPN لازم نیست.
+
+وقتی تماس برقرار نمی‌شود، کارت *Couldn't reach this server's relay* (و *Technical details* زیر آن) نشان می‌دهد در کدام حالت هستید:
+
+| آنچه می‌بینید | معنا |
+|---|---|
+| `Relay candidates: 0` و `error 701 … timed out` برای هر آدرس `turn:` | این گوشی اصلاً به رله نرسید: VPN/پراکسی اتصال را عبور نمی‌دهد، فایروال مسدود کرده یا coturn آنجا اجرا نمی‌شود. با صفحه‌ی Trickle ICE از [عیب‌یابی](./Troubleshooting.md#calls-not-connecting) روی همین گوشی و همین VPN آزمایش کنید. |
+| `Relay candidates: 1` یا بیشتر (مثلاً `tcp 1`) اما تماس باز هم شکست می‌خورد | این گوشی به رله می‌رسد. گوشی طرف مقابل است که نمی‌رسد؛ اتصال و VPN او را بررسی کنید. |
+| *This server's relay refused this device* (`error 401 Unauthorized`) | به رله رسیده شد اما اعتبارنامه را رد کرد: `CALLS_TURN_SECRET` با `static-auth-secret` در coturn یکی نیست یا ساعت سرور برنامه و رله تفاوت دارد. |
 
 ### پنهان کردن آدرس IP (حالت امنیت بالا)
 

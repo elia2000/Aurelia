@@ -4,6 +4,10 @@ import crypto from "node:crypto";
 //
 //   CALLS_ENABLED                     default true
 //   CALLS_TURN_URLS                   comma-separated turn:/turns:/stun: URLs
+//                                     (turn: URLs are also offered over TCP,
+//                                     see CALLS_TURN_TCP_FALLBACK)
+//   CALLS_TURN_TCP_FALLBACK           default true; false offers the TURN URLs
+//                                     exactly as written
 //   CALLS_TURN_SECRET                 coturn `static-auth-secret`
 //   CALLS_TURN_CREDENTIAL_TTL_SECONDS default 21600 (6h)
 //   CALLS_STUN_URLS                   extra comma-separated stun: URLs
@@ -35,9 +39,27 @@ export function readCallsConfig(env = process.env) {
     stunUrls: splitUrls(env.CALLS_STUN_URLS),
     turnSecret: String(env.CALLS_TURN_SECRET || "").trim(),
     forceRelay: truthy(env.CALLS_FORCE_RELAY, false),
+    turnTcpFallback: truthy(env.CALLS_TURN_TCP_FALLBACK, true),
     credentialTtlSeconds:
       Number.isFinite(ttlRaw) && ttlRaw >= 60 ? Math.trunc(ttlRaw) : 6 * 60 * 60,
   };
+}
+
+/**
+ * Many VPNs, proxies and censored networks carry only TCP, and a `turn:` address
+ * without `transport` (or with `transport=udp`) is UDP to a browser. So every
+ * such address is also offered over TCP (coturn listens on both by default).
+ * `turns:` is TCP already; an address written with `transport=tcp` is left alone.
+ */
+export function withTcpVariants(urls) {
+  const out = [];
+  for (const url of urls) {
+    out.push(url);
+    if (!/^turn:/i.test(url)) continue;
+    if (!/[?&]transport=/i.test(url)) out.push(`${url}?transport=tcp`);
+    else if (/[?&]transport=udp\b/i.test(url)) out.push(url.replace(/transport=udp\b/i, "transport=tcp"));
+  }
+  return [...new Set(out)];
 }
 
 /**
@@ -56,7 +78,8 @@ export function buildIceServers(config, userId, nowMs = Date.now()) {
       .createHmac("sha1", config.turnSecret)
       .update(username)
       .digest("base64");
-    servers.push({ urls: config.turnUrls, username, credential });
+    const urls = config.turnTcpFallback ? withTcpVariants(config.turnUrls) : config.turnUrls;
+    servers.push({ urls, username, credential });
   }
   const hasRelay = Boolean(expiresAt);
   return {

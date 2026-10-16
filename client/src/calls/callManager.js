@@ -46,8 +46,10 @@ const DISCONNECT_GRACE_MS = 8_000;
 const FAILED_WAIT_MS = 15_000;
 const STATS_INTERVAL_MS = 5_000;
 const ENDED_LINGER_MS = 2_500;
-// A call that failed explains why on its card: leave time to read it.
+// A call that failed explains why on its card: leave time to read it (longer
+// when there are technical details to open).
 const FAILED_LINGER_MS = 10_000;
+const DETAILS_LINGER_MS = 20_000;
 const MAX_ICE_RESTARTS = 3;
 const MAX_SIGNAL_AUTH_FAILURES = 3;
 const SLOW_CONNECT_MS = 10_000;
@@ -70,6 +72,8 @@ const idleState = () => ({
   remoteCameraOn: false,
   cameraBlocked: null,
   connectingSlow: false,
+  relayCheck: null, // null (no relay in use) | "pending" | "ok" | "unreachable" | "refused"
+  connectionDetails: null, // lines for the "technical details" of a call that failed to connect
   videoTier: DEFAULT_VIDEO_TIER,
   networkPaused: false,
   relayed: false,
@@ -88,6 +92,8 @@ const FAILURE_REASONS = new Set([
   "relay_unavailable",
   "connect_failed",
   "connect_failed_no_relay",
+  "connect_failed_relay_unreachable",
+  "connect_failed_relay_refused",
   "connection_lost",
   "key_mismatch",
   "permission_denied",
@@ -111,7 +117,13 @@ const SERVER_END_REASONS = {
 // What a device tells the server when the media connection is what failed.
 // Everything else that goes wrong is a plain "failed": only these reasons are
 // described to the people involved as a network or relay problem.
-const CONNECTION_FAILURES = new Set(["connect_failed", "connect_failed_no_relay", "connection_lost"]);
+const CONNECTION_FAILURES = new Set([
+  "connect_failed",
+  "connect_failed_no_relay",
+  "connect_failed_relay_unreachable",
+  "connect_failed_relay_refused",
+  "connection_lost",
+]);
 
 export class CallManager {
   #opts;
@@ -712,6 +724,8 @@ export class CallManager {
       ...(call.iceConfig?.forceRelay || this.#opts.relayOnly ? { iceTransportPolicy: "relay" } : {}),
     });
     call.pc = pc;
+    // What ICE found, to tell "the relay cannot be reached" from other problems.
+    call.ice = { relay: {}, relayTotal: 0, errors: [], gathered: false };
     call.remoteStream = this.#opts.createMediaStream();
     this.#set({ remoteStream: call.remoteStream });
 
@@ -761,15 +775,31 @@ export class CallManager {
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        call.iceBatch.push(
-          typeof event.candidate.toJSON === "function" ? event.candidate.toJSON() : event.candidate,
-        );
+        const json = typeof event.candidate.toJSON === "function" ? event.candidate.toJSON() : event.candidate;
+        call.iceBatch.push(json);
+        this.#noteCandidate(call, event.candidate, json);
       }
       if (!event.candidate) this.#flushIce(call);
       else if (!call.iceTimer) call.iceTimer = setTimeout(() => this.#flushIce(call), ICE_BATCH_MS);
     };
+    pc.onicecandidateerror = (event) => {
+      const errors = call.ice.errors;
+      if (errors.length < 8) {
+        errors.push({
+          url: String(event?.url || ""),
+          code: Number(event?.errorCode) || 0,
+          text: String(event?.errorText || "").slice(0, 80),
+        });
+      }
+    };
+    pc.onicegatheringstatechange = () => {
+      if (pc.iceGatheringState !== "complete") return;
+      call.ice.gathered = true;
+      this.#refreshRelayCheck(call);
+    };
 
     pc.onconnectionstatechange = () => this.#onConnectionState(call);
+    this.#refreshRelayCheck(call);
     return pc;
   }
 
@@ -873,6 +903,47 @@ export class CallManager {
     }, 45_000);
   }
 
+  #noteCandidate(call, candidate, json) {
+    const line = String(json?.candidate || candidate?.candidate || "");
+    if (!/ typ relay\b/.test(line)) return;
+    // The protocol the client used to reach the relay (not the relayed leg).
+    const protocol = String(candidate?.relayProtocol || /transport=(\w+)/i.exec(candidate?.url || "")?.[1] || "udp").toLowerCase();
+    call.ice.relay[protocol] = (call.ice.relay[protocol] || 0) + 1;
+    call.ice.relayTotal += 1;
+    this.#refreshRelayCheck(call);
+  }
+
+  /** Whether a relay was needed and, once gathering is over, whether it was reachable. */
+  #refreshRelayCheck(call) {
+    if (this.#isStale(call)) return;
+    let check = null;
+    if (call.iceConfig?.hasRelay) {
+      check = call.ice.relayTotal > 0 ? "ok" : call.ice.gathered ? this.#relayFailure(call) : "pending";
+    }
+    if (check !== this.#state.relayCheck) this.#set({ relayCheck: check });
+  }
+
+  /**
+   * No relay address was obtained. An answer such as "401 Unauthorized" means the
+   * relay was reached and said no (wrong secret, clocks apart); 701 or silence
+   * means it could not be reached at all.
+   */
+  #relayFailure(call) {
+    const answered = call.ice.errors.some((e) => e.code >= 300 && e.code < 700);
+    return answered ? "refused" : "unreachable";
+  }
+
+  /** Short lines for the "technical details" of a call that could not connect. */
+  #describeConnection(call) {
+    const ice = call.ice;
+    if (!ice) return null;
+    const used = Object.entries(ice.relay).map(([protocol, n]) => `${protocol} ${n}`).join(", ");
+    const lines = [`Relay candidates: ${ice.relayTotal}${used ? ` (${used})` : ""}`];
+    ice.errors.forEach((e) => lines.push(`${e.url || "ICE"}: error ${e.code}${e.text ? ` ${e.text}` : ""}`));
+    if (call.pc) lines.push(`Connection: ${call.pc.connectionState}, ICE: ${call.pc.iceConnectionState}`);
+    return lines;
+  }
+
   /**
    * Why the media connection did not come up. Two phones on different
    * networks usually need a relay; without one this is the likely reason, so
@@ -880,7 +951,13 @@ export class CallManager {
    */
   #connectFailureReason(call) {
     if (this.#state.phase === CALL_PHASE.CONNECTED) return "connection_lost";
-    return call.iceConfig?.hasRelay ? "connect_failed" : "connect_failed_no_relay";
+    if (!call.iceConfig?.hasRelay) return "connect_failed_no_relay";
+    // A relay is configured but this device never got an address on it (it is
+    // blocked, or a VPN/proxy does not carry the connection to it).
+    if (call.ice?.gathered && call.ice.relayTotal === 0) {
+      return this.#relayFailure(call) === "refused" ? "connect_failed_relay_refused" : "connect_failed_relay_unreachable";
+    }
+    return "connect_failed";
   }
 
   // ── media ────────────────────────────────────────────────────────────────
@@ -1218,6 +1295,7 @@ export class CallManager {
 
   #finish(call, reason, { notifyServer = false, serverReason } = {}) {
     if (call.done) return;
+    const connectionDetails = CONNECTION_FAILURES.has(reason) ? this.#describeConnection(call) : null;
     this.#teardown(call);
     if (notifyServer) {
       const toServer =
@@ -1231,6 +1309,8 @@ export class CallManager {
       ringing: false,
       waiting: false,
       connectingSlow: false,
+      relayCheck: null,
+      connectionDetails,
       localStream: null,
       remoteStream: null,
       cameraOn: false,
@@ -1242,7 +1322,7 @@ export class CallManager {
         this.#state = idleState();
         this.#set({});
       }
-    }, FAILURE_REASONS.has(reason) ? FAILED_LINGER_MS : ENDED_LINGER_MS);
+    }, connectionDetails?.length ? DETAILS_LINGER_MS : FAILURE_REASONS.has(reason) ? FAILED_LINGER_MS : ENDED_LINGER_MS);
   }
 
   /** Closes the "call ended" card right away (it also closes by itself). */

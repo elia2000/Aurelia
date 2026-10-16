@@ -29,6 +29,9 @@ async function connectedCall({ kind = "audio", aliceOpts, bobOpts } = {}) {
 beforeEach(() => {
   FakePeerConnection.instances = [];
   FakePeerConnection.autoConnect = true;
+  FakePeerConnection.relayCandidates = false;
+  FakePeerConnection.iceErrors = [];
+  FakePeerConnection.gatheringCompletes = true;
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -1058,8 +1061,9 @@ describe("waiting versus ringing", () => {
 });
 
 describe("connections that do not come up", () => {
-  const stuckCall = async (hasRelay) => {
+  const stuckCall = async (hasRelay, { relayReachable = hasRelay } = {}) => {
     FakePeerConnection.autoConnect = false;
+    FakePeerConnection.relayCandidates = relayReachable;
     const server = new FakeServer();
     const alice = await server.addUser("alice");
     const bob = await server.addUser("bob");
@@ -1103,6 +1107,59 @@ describe("connections that do not come up", () => {
     // Reported to the server as a media failure, so the other side can explain it the same way.
     const reports = [...alice.api.endCall.mock.calls, ...bob.api.endCall.mock.calls];
     expect(reports.some(([, reason]) => reason === "connect_failed")).toBe(true);
+  });
+
+  test("a relay that answers is noted while connecting", async () => {
+    const { alice } = await stuckCall(true);
+    expect(alice.manager.getState().relayCheck).toBe("ok");
+  });
+
+  test("a relay that cannot be reached is noticed as soon as gathering ends, and named when the call fails", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    FakePeerConnection.iceErrors = [
+      { url: "turn:relay.example:3478", errorCode: 701, errorText: "Cannot connect" },
+      { url: "turn:relay.example:3478?transport=tcp", errorCode: 701, errorText: "Cannot connect" },
+    ];
+    const { alice, bob } = await stuckCall(true, { relayReachable: false });
+    // Long before the 45 s give-up: the person is told what is wrong.
+    expect(alice.manager.getState()).toMatchObject({ phase: CALL_PHASE.CONNECTING, relayCheck: "unreachable" });
+
+    await vi.advanceTimersByTimeAsync(46_000);
+    expect(alice.manager.getState().endReason).toBe("connect_failed_relay_unreachable");
+    expect(bob.manager.getState().endReason).toBe("connect_failed_relay_unreachable");
+    const reports = [...alice.api.endCall.mock.calls, ...bob.api.endCall.mock.calls];
+    expect(reports.some(([, reason]) => reason === "connect_failed")).toBe(true);
+
+    // What was tried is kept for the card's technical details.
+    const details = alice.manager.getState().connectionDetails.join("\n");
+    expect(details).toContain("Relay candidates: 0");
+    expect(details).toContain("turn:relay.example:3478?transport=tcp");
+    expect(details).toContain("701");
+  });
+
+  test("a relay that answers but refuses this device is told apart from one that cannot be reached", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    FakePeerConnection.iceErrors = [{ url: "turn:relay.example:3478", errorCode: 401, errorText: "Unauthorized." }];
+    const { alice, bob } = await stuckCall(true, { relayReachable: false });
+    expect(alice.manager.getState().relayCheck).toBe("refused");
+    await vi.advanceTimersByTimeAsync(46_000);
+    expect(alice.manager.getState().endReason).toBe("connect_failed_relay_refused");
+    expect(bob.manager.getState().endReason).toBe("connect_failed_relay_refused");
+    expect(alice.manager.getState().connectionDetails.join("\n")).toContain("error 401 Unauthorized.");
+  });
+
+  test("nothing is claimed about the relay while gathering has not finished", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    FakePeerConnection.gatheringCompletes = false;
+    const { alice } = await stuckCall(true, { relayReachable: false });
+    expect(alice.manager.getState().relayCheck).toBe("pending");
+    await vi.advanceTimersByTimeAsync(46_000);
+    expect(alice.manager.getState().endReason).toBe("connect_failed");
+  });
+
+  test("a server without a relay is not asked about one", async () => {
+    const { alice } = await stuckCall(false);
+    expect(alice.manager.getState().relayCheck).toBeNull();
   });
 
   test("a refused signaling request is a plain failure, not blamed on the relay", async () => {

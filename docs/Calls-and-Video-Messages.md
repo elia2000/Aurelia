@@ -101,7 +101,7 @@ Aurelle supports the standard [coturn](https://github.com/coturn/coturn) server 
 
    ```bash
    CALLS_TURN_SECRET=<the generated secret>
-   CALLS_TURN_URLS=stun:turn.example.com:3478,turn:turn.example.com:3478?transport=udp,turn:turn.example.com:3478?transport=tcp
+   CALLS_TURN_URLS=stun:turn.example.com:3478,turn:turn.example.com:3478
    CALLS_TURN_EXTERNAL_IP=<your server's public IPv4>
    ```
 
@@ -123,6 +123,21 @@ The bundled configuration refuses to relay to private networks (so it cannot be 
 ### Option B: your own coturn
 
 Run coturn with `use-auth-secret` and `static-auth-secret=<secret>`, then set `CALLS_TURN_SECRET` and `CALLS_TURN_URLS` to match. Use `turns:` URLs for TLS.
+
+### Behind a VPN, a proxy or a censored network
+
+Calls need a path from each phone to the relay. Two things commonly get in the way:
+
+- **A VPN or proxy that does not carry UDP.** WebRTC prefers UDP, and many VPN apps (especially "proxy mode" ones, where the browser talks to a local SOCKS/HTTP proxy) only carry TCP or leave UDP outside the tunnel, where a censor may drop it. Aurelle therefore offers every `turn:` address **over TCP as well** (an address with no transport, or with `transport=udp`, gets a `transport=tcp` twin; `CALLS_TURN_TCP_FALLBACK=false` turns this off). Make sure coturn listens on TCP `3478` (it does by default) and that port is open. Where possible use a VPN app in system-wide (VPN service / TUN) mode.
+- **Port filtering.** If the people on a call reach Aurelle *through a VPN*, the censor only sees the VPN's own traffic, so the relay port does not matter to it: what matters is that the VPN can reach your server. If people could reach the relay *without* a VPN, `turns:` on port `443` (TLS) is the address least likely to be blocked, but `443` must then be shared with whatever else listens there (for example an SNI-routing front such as nginx `stream` with `ssl_preread`). Another service already on `443` (a proxy panel, say) is the usual blocker, so this is an advanced setup and not needed for the VPN case.
+
+When a call cannot connect, the *Couldn't reach this server's relay* card (and the *Technical details* under it) tells you which case you are in:
+
+| You see | Meaning |
+|---|---|
+| `Relay candidates: 0` and `error 701 … timed out` for each `turn:` address | This phone could not reach the relay at all: the VPN/proxy does not carry the connection, a firewall blocks it, or coturn is not running there. Test with the Trickle ICE page from [Troubleshooting](./Troubleshooting.md#calls-not-connecting) on the same phone and the same VPN. |
+| `Relay candidates: 1` or more (for example `tcp 1`) but the call still fails | This phone reaches the relay. The other person's phone is the one that cannot, so check their connection and VPN. |
+| *This server's relay refused this device* (`error 401 Unauthorized`) | The relay was reached but refused the credentials: `CALLS_TURN_SECRET` differs from coturn's `static-auth-secret`, or the clocks of the app server and the relay differ. |
 
 ### Hide IP addresses (high-security mode)
 

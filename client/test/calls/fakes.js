@@ -90,11 +90,19 @@ export class FakePeerConnection {
   static autoConnect = true;
   /** Like a browser, a received video offer creates a receive-only video line. */
   static videoLineFromOffer = true;
+  /** true: gathering also yields a relay candidate (the TURN server is reachable). */
+  static relayCandidates = false;
+  /** Events for onicecandidateerror during gathering, e.g. {url, errorCode, errorText}. */
+  static iceErrors = [];
+  /** false: gathering never reports that it is complete. */
+  static gatheringCompletes = true;
 
   constructor(config) {
     this.config = config;
     this.senders = [];
     this.connectionState = "new";
+    this.iceConnectionState = "new";
+    this.iceGatheringState = "new";
     this.localDescription = null;
     this.remoteDescription = null;
     this.addedCandidates = [];
@@ -140,7 +148,20 @@ export class FakePeerConnection {
       const make = (n) => ({ candidate: { toJSON: () => ({ candidate: `candidate:${n} 1 udp 1 10.0.0.${n} 9 typ host`, sdpMid: "0" }) } });
       this.onicecandidate?.(make(1));
       this.onicecandidate?.(make(2));
-      this.onicecandidate?.({ candidate: null });
+      if (FakePeerConnection.relayCandidates) {
+        this.onicecandidate?.({
+          candidate: {
+            relayProtocol: "tcp",
+            toJSON: () => ({ candidate: "candidate:3 1 udp 1 10.0.0.3 9 typ relay raddr 0.0.0.0 rport 0", sdpMid: "0" }),
+          },
+        });
+      }
+      FakePeerConnection.iceErrors.forEach((error) => this.onicecandidateerror?.(error));
+      if (FakePeerConnection.gatheringCompletes) {
+        this.iceGatheringState = "complete";
+        this.onicegatheringstatechange?.();
+        this.onicecandidate?.({ candidate: null });
+      }
     });
     this.#maybeConnect();
   }

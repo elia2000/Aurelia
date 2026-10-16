@@ -157,6 +157,41 @@ describe("CallOverlay", () => {
     await expect.element(page.getByText(/Still connecting/)).toBeInTheDocument();
   });
 
+  test("an unreachable relay is pointed out while the call is still connecting", async () => {
+    renderOverlay({ phase: "connecting", peer, connectingSlow: false, relayCheck: "unreachable" });
+    await expect.element(page.getByText(/Can't reach the relay server yet/)).toBeInTheDocument();
+    expect(document.body.textContent).toContain("VPN or proxy");
+  });
+
+  test("a relay that refuses this device says so while the call is still connecting", async () => {
+    renderOverlay({ phase: "connecting", peer, relayCheck: "refused" });
+    await expect.element(page.getByText(/relay server refused this device/)).toBeInTheDocument();
+  });
+
+  test("a relay that answers, or one still being tried, adds no warning", async () => {
+    renderOverlay({ phase: "connecting", peer, relayCheck: "ok" });
+    await expect.element(page.getByText("Connecting…")).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("relay server yet");
+  });
+
+  test("a call that could not connect offers its technical details", async () => {
+    renderOverlay({
+      phase: "ended",
+      endReason: "connect_failed_relay_unreachable",
+      peer,
+      connectionDetails: ["Relay candidates: 0", "turn:relay.example:3478?transport=tcp: error 701 Cannot connect"],
+    });
+    await page.getByText("Technical details").click();
+    await expect.element(page.getByText("Relay candidates: 0")).toBeVisible();
+    await expect.element(page.getByText(/error 701 Cannot connect/)).toBeVisible();
+  });
+
+  test("a call that ended normally has no technical details", async () => {
+    renderOverlay({ phase: "ended", endReason: "hangup", peer, connectionDetails: null });
+    await expect.element(page.getByText("Call ended")).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("Technical details");
+  });
+
   test("a connection that is not slow says nothing extra", async () => {
     renderOverlay({ phase: "connecting", peer, connectingSlow: false });
     await expect.element(page.getByText("Connecting…")).toBeInTheDocument();
@@ -219,6 +254,8 @@ describe("CallOverlay", () => {
     ["busy_self", "You are already in a call"],
     ["connect_failed", "Couldn't connect. Check your network and try again."],
     ["connect_failed_no_relay", "Couldn't connect. This server has no relay (TURN) set up, which calls between different networks need."],
+    ["connect_failed_relay_unreachable", "Couldn't reach this server's relay. If you use a VPN or proxy, it must allow connections to the server."],
+    ["connect_failed_relay_refused", "This server's relay refused this device. Ask whoever runs the server to check the relay settings."],
     ["connection_lost", "Connection lost"],
     ["clock_skew", "This device's clock looks wrong. Check the date and time."],
     ["relay_unavailable", "This server only allows relayed calls, but no relay is set up."],
