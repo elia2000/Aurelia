@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  Close,
   Lock,
   Maximize2,
   Mic,
@@ -95,7 +96,7 @@ function RoundButton({ label, onClick, active = false, danger = false, accept = 
 }
 
 export default function CallOverlay({ user }) {
-  const { state, minimized, setMinimized, accept, decline, hangup, setMuted, setCameraEnabled } = useCalls();
+  const { state, minimized, setMinimized, accept, decline, hangup, dismiss, setMuted, setCameraEnabled } = useCalls();
   const [safetyOpen, setSafetyOpen] = useState(false);
   const remoteVideoRef = useRef(null);
   const remoteAudioRef = useRef(null);
@@ -347,7 +348,12 @@ export default function CallOverlay({ user }) {
           className="relative z-10 flex items-center justify-center gap-5 px-6 pt-4"
           style={{ paddingBottom: "max(1.5rem, env(safe-area-inset-bottom))" }}
         >
-          {ended ? null : incoming ? (
+          {ended ? (
+            // The reason a call ended stays up long enough to read; this closes it sooner.
+            <RoundButton label="Close" onClick={dismiss}>
+              <Close size={22} />
+            </RoundButton>
+          ) : incoming ? (
             <>
               <RoundButton label="Decline call" danger onClick={decline}>
                 <PhoneOff size={22} />

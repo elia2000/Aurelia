@@ -28,6 +28,7 @@ function withCalls(state, overrides = {}) {
     accept: vi.fn(),
     decline: vi.fn(),
     hangup: vi.fn(),
+    dismiss: vi.fn(),
     setMuted: vi.fn(),
     setCameraEnabled: vi.fn(),
     inCall: state.phase !== "idle",
@@ -154,7 +155,17 @@ describe("CallOverlay", () => {
   test("a slow connection says it is still trying", async () => {
     renderOverlay({ phase: "connecting", peer, connectingSlow: true });
     await expect.element(page.getByText(/Still connecting/)).toBeInTheDocument();
+  });
+
+  test("a connection that is not slow says nothing extra", async () => {
     renderOverlay({ phase: "connecting", peer, connectingSlow: false });
+    await expect.element(page.getByText("Connecting…")).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("Still connecting");
+  });
+
+  test("the hint disappears with the connecting phase even if the flag is stale", async () => {
+    renderOverlay({ phase: "connected", peer, connectingSlow: true, connectedAt: Date.now() });
+    expect(document.body.textContent).not.toContain("Still connecting");
   });
 
   test("a blocked or missing camera is explained", async () => {
@@ -218,6 +229,17 @@ describe("CallOverlay", () => {
   ])("explains why a call ended: %s", async (reason, text) => {
     renderOverlay({ phase: "ended", endReason: reason, peer });
     await expect.element(page.getByText(text)).toBeInTheDocument();
+  });
+
+  test("the card of an ended call can be closed right away", async () => {
+    const value = renderOverlay({ phase: "ended", endReason: "connect_failed_no_relay", peer });
+    await page.getByRole("button", { name: "Close" }).click();
+    expect(value.dismiss).toHaveBeenCalledTimes(1);
+  });
+
+  test("a call that is still going has no Close button", async () => {
+    renderOverlay({ phase: "connected", peer, connectedAt: Date.now() });
+    expect(document.querySelector('button[aria-label="Close"]')).toBeNull();
   });
 
   test("minimised calls collapse to a pill that keeps hang-up one tap away", async () => {

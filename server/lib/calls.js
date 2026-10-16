@@ -183,6 +183,8 @@ export function createCallRegistry({
    * - the caller cancelling a ringing call  -> "cancelled"
    * - the callee refusing a ringing call    -> "declined"
    * - anyone hanging up a running call      -> "hangup"
+   * - a device whose media never connected  -> "failed" or "connect_failed"
+   *   (the latter lets the other side say it was the connection)
    */
   function endBy(callId, userId, requestedReason = null) {
     const auth = authorize(callId, userId);
@@ -192,7 +194,7 @@ export function createCallRegistry({
     let reason = requestedReason || "hangup";
     if (call.state === CALL_STATES.RINGING) {
       reason = role === "caller" ? "cancelled" : "declined";
-    } else if (!["hangup", "failed"].includes(reason)) {
+    } else if (!["hangup", "failed", "connect_failed"].includes(reason)) {
       reason = "hangup";
     }
     return end(callId, reason);

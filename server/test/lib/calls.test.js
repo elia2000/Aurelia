@@ -44,9 +44,20 @@ describe("call registry", () => {
     expect(registry.markRinging("call-1", BOB.id)).toBeNull(); // already known
   });
 
-  test("a call that was answered or ended is never reported as ringing", () => {
+  test("a call that was answered is never reported as ringing", () => {
     inviteAB();
     registry.accept("call-1", BOB.id, "dev-b");
+    expect(registry.markRinging("call-1", BOB.id)).toBeNull();
+  });
+
+  test.each([
+    ["cancelled by the caller", (r) => r.endBy("call-1", ALICE.id)],
+    ["declined by the callee", (r) => r.endBy("call-1", BOB.id)],
+    ["missed", (r) => r.end("call-1", "missed")],
+  ])("a call that was %s is never reported as ringing", (_label, finish) => {
+    inviteAB();
+    finish(registry);
+    expect(registry.get("call-1").state).toBe(CALL_STATES.ENDED);
     expect(registry.markRinging("call-1", BOB.id)).toBeNull();
   });
 
@@ -94,6 +105,18 @@ describe("call registry", () => {
     inviteAB("c");
     registry.accept("c", BOB.id, "dev-b");
     expect(registry.endBy("c", BOB.id, "evil-reason").endReason).toBe("hangup");
+  });
+
+  test("a device can report that the media connection failed, and the reason reaches the other side as is", () => {
+    inviteAB("a");
+    registry.accept("a", BOB.id, "dev-b");
+    expect(registry.endBy("a", ALICE.id, "connect_failed").endReason).toBe("connect_failed");
+    inviteAB("b");
+    registry.accept("b", BOB.id, "dev-b");
+    expect(registry.endBy("b", BOB.id, "failed").endReason).toBe("failed");
+    // ...but a ringing call can only be cancelled or declined, whatever is claimed.
+    inviteAB("c");
+    expect(registry.endBy("c", ALICE.id, "connect_failed").endReason).toBe("cancelled");
   });
 
   test("strangers cannot authorize or end a call", () => {

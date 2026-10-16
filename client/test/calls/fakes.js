@@ -296,7 +296,7 @@ export class FakeServer {
         if (!call) return;
         const other = peerOf(call);
         const wasRinging = !call.calleeDeviceId;
-        const mapped = reason === "declined" ? "declined" : wasRinging && call.caller === user.id ? "cancelled" : reason === "failed" ? "failed" : "hangup";
+        const mapped = reason === "declined" ? "declined" : wasRinging && call.caller === user.id ? "cancelled" : reason === "failed" || reason === "connect_failed" ? reason : "hangup";
         server.deliver(other, { type: "call_end", callId, reason: mapped, by: user.id });
         server.calls.delete(callId);
       }),

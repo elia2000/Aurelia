@@ -175,6 +175,7 @@ export function CallProvider({ user, children }) {
       accept: (options) => manager?.accept(options),
       decline: () => manager?.decline(),
       hangup: () => manager?.hangup(),
+      dismiss: () => manager?.dismiss(),
       setMuted: (muted) => manager?.setMuted(muted),
       setCameraEnabled: (enabled) => manager?.setCameraEnabled(enabled),
       // A call that has just ended only lingers on screen; a new one may start.

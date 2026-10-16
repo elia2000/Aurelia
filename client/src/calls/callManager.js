@@ -46,9 +46,12 @@ const DISCONNECT_GRACE_MS = 8_000;
 const FAILED_WAIT_MS = 15_000;
 const STATS_INTERVAL_MS = 5_000;
 const ENDED_LINGER_MS = 2_500;
+// A call that failed explains why on its card: leave time to read it.
+const FAILED_LINGER_MS = 10_000;
 const MAX_ICE_RESTARTS = 3;
 const MAX_SIGNAL_AUTH_FAILURES = 3;
 const SLOW_CONNECT_MS = 10_000;
+const RINGING_REPORT_RETRY_MS = [1_000, 3_000];
 
 const idleState = () => ({
   phase: CALL_PHASE.IDLE,
@@ -99,7 +102,13 @@ const SERVER_END_REASONS = {
   missed: "missed",
   failed: "failed",
   timeout: "failed",
+  connect_failed: "connect_failed", // the other side's media never came up (or was lost)
 };
+
+// What a device tells the server when the media connection is what failed.
+// Everything else that goes wrong is a plain "failed": only these reasons are
+// described to the people involved as a network or relay problem.
+const CONNECTION_FAILURES = new Set(["connect_failed", "connect_failed_no_relay", "connection_lost"]);
 
 export class CallManager {
   #opts;
@@ -254,6 +263,26 @@ export class CallManager {
     this.#set({ ringing: true, waiting: false });
   }
 
+  /**
+   * The caller shows "Waiting…" until this report arrives, so a report lost to
+   * a bad moment on a mobile network is tried again a couple of times while the
+   * phone is still ringing. A refusal is final: asking again changes nothing.
+   */
+  async #reportRinging(call) {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await this.#api.markCallRinging?.(call.id);
+        return;
+      } catch (error) {
+        const status = Number(error?.status) || 0;
+        const refused = status >= 400 && status < 500 && status !== 429;
+        if (refused || attempt >= RINGING_REPORT_RETRY_MS.length) return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, RINGING_REPORT_RETRY_MS[attempt]));
+      if (this.#isStale(call) || this.#state.phase !== CALL_PHASE.INCOMING) return;
+    }
+  }
+
   async #onAccept(event) {
     const call = this.#call;
     if (!call || call.id !== event.callId || call.direction !== "outgoing") return;
@@ -307,7 +336,7 @@ export class CallManager {
       call.calleeDeviceId = accept.deviceId;
       call.session = session;
       call.ephemeral = null; // forward secrecy: the private half is dropped
-      this.#set({ phase: CALL_PHASE.CONNECTING, ringing: false, sas: sasEmoji(session.sasBytes) });
+      this.#set({ phase: CALL_PHASE.CONNECTING, ringing: false, waiting: false, sas: sasEmoji(session.sasBytes) });
       this.#armConnectWatchdog(call);
 
       this.#buildPeerConnection(call);
@@ -375,7 +404,7 @@ export class CallManager {
       });
       call.ringTimer = setTimeout(() => this.#finish(call, "missed"), RING_TIMEOUT_MS);
       // Tell the caller this app is actually ringing (it shows "Waiting…" until then).
-      Promise.resolve(this.#api.markCallRinging?.(callId)).catch(() => {});
+      this.#reportRinging(call);
     } catch (error) {
       this.#api.endCall(callId, "failed").catch(() => {});
       this.#failActive(call, error, { notifyServer: false });
@@ -510,9 +539,10 @@ export class CallManager {
     }
     let reason = SERVER_END_REASONS[event.reason] || "hangup";
     if (reason === "missed" && call.direction === "outgoing") reason = "no_answer";
-    // The other side gave up on the connection first (both usually notice at
-    // about the same moment): explain it the same way as when we notice first.
-    if (reason === "failed" && call.session) reason = this.#connectFailureReason(call);
+    // The other side gave up on the media connection first (both usually
+    // notice at about the same moment): explain it the same way as when we
+    // notice first. Any other failure they report stays a plain "failed".
+    if (reason === "connect_failed") reason = this.#connectFailureReason(call);
     this.#finish(call, reason);
   }
 
@@ -603,7 +633,7 @@ export class CallManager {
     try {
       if (kind === "offer" && call.direction === "incoming") {
         await call.pc.setRemoteDescription({ type: "offer", sdp: String(payload.sdp) });
-        this.#adoptOfferedVideoLine(call);
+        await this.#adoptOfferedVideoLine(call);
         await this.#drainRemoteCandidates(call);
         const answer = await call.pc.createAnswer();
         const sdp = tuneOpusSdp(answer.sdp);
@@ -631,7 +661,7 @@ export class CallManager {
    * but only receives. Make it two-way before answering so the camera can be
    * switched on later by swapping in a track, with no new negotiation.
    */
-  #adoptOfferedVideoLine(call) {
+  async #adoptOfferedVideoLine(call) {
     if (call.kind !== "video" || call.videoSender) return;
     const line = call.pc.getTransceivers().find((t) => t.receiver?.track?.kind === "video");
     if (!line) return;
@@ -640,6 +670,17 @@ export class CallManager {
     } catch (_) {}
     call.videoSender = line.sender || null;
     this.#applyCodecPreferences(call);
+    // The camera may already have been switched on while the offer was still
+    // on its way: there was no sender to put that picture on yet.
+    const track = call.localStream?.getVideoTracks()[0];
+    if (track && call.videoSender) {
+      try {
+        await call.videoSender.replaceTrack(track);
+        await this.#applyVideoTier(call);
+      } catch (_) {
+        // The next camera toggle tries again.
+      }
+    }
   }
 
   async #drainRemoteCandidates(call) {
@@ -1176,7 +1217,9 @@ export class CallManager {
     if (call.done) return;
     this.#teardown(call);
     if (notifyServer) {
-      const toServer = serverReason ?? (FAILURE_REASONS.has(reason) ? "failed" : undefined);
+      const toServer =
+        serverReason ??
+        (CONNECTION_FAILURES.has(reason) ? "connect_failed" : FAILURE_REASONS.has(reason) ? "failed" : undefined);
       this.#api.endCall(call.id, toServer).catch(() => {});
     }
     this.#set({
@@ -1196,7 +1239,14 @@ export class CallManager {
         this.#state = idleState();
         this.#set({});
       }
-    }, ENDED_LINGER_MS);
+    }, FAILURE_REASONS.has(reason) ? FAILED_LINGER_MS : ENDED_LINGER_MS);
+  }
+
+  /** Closes the "call ended" card right away (it also closes by itself). */
+  dismiss() {
+    const call = this.#call;
+    if (!call || this.#state.phase !== CALL_PHASE.ENDED) return;
+    this.#silentReset(call);
   }
 
   #silentReset(call) {
@@ -1223,11 +1273,11 @@ export class CallManager {
     else if (error?.code === "relay_unavailable") reason = "relay_unavailable";
     else if (error?.name === "E2eeUnavailableError") reason = "e2ee_unavailable";
     else if (error?.status === 403 || error?.status === 404) reason = "failed";
-    // A generic failure once the keys exist (a signaling request refused
-    // because the other side just hung up, say) is a connection problem:
-    // describe it the way the connection watchdog does.
+    // A call that was up and then broke (a renegotiation refused because the
+    // other side just hung up, say) lost its connection. Before that, a generic
+    // error stays a plain failure: it says nothing about the network.
     const generic = reason === "failed";
-    if (generic && call.session) reason = this.#connectFailureReason(call);
+    if (generic && this.#state.phase === CALL_PHASE.CONNECTED) reason = "connection_lost";
     this.#finish(call, reason, { notifyServer });
     if (generic) console.warn("[calls]", error);
   }

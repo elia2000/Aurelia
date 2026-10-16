@@ -98,11 +98,11 @@ The server tracks only the parties and state of a call (ringing, connecting, act
 | Event | Sent to | Meaning |
 |---|---|---|
 | `call_invite` `{callId, kind, chatId, from, invite}` | callee | Incoming call. `invite` is `{deviceId, commit, ts, sig}`. A web push with `data.type = "call"` is always sent as well (it is per device: a phone with the app closed must ring even when a desktop tab is connected), unless the callee muted the chat. |
-| `call_ringing` `{callId}` | caller | The callee's app is showing the incoming-call screen (it sent `POST /api/calls/:id/ringing`). Until then a caller should show *waiting*, not *ringing*: a callee whose app is closed only receives a push. Sent once. |
+| `call_ringing` `{callId}` | caller | The callee's app is showing the incoming-call screen (it sent `POST /api/calls/:id/ringing`). Until then a caller should show *waiting*, not *ringing*: a callee whose app is closed only receives a push. Sent once, and not at all when the callee has chosen to appear offline (*invisible*), so that this cannot be used to tell whether they are online. The callee's app retries its report twice if it could not be delivered. |
 | `call_accept` `{callId, accept}` | caller | The callee answered. |
 | `call_accepted_elsewhere` `{callId, deviceId}` | callee's other devices | Stop ringing. |
 | `call_signal` `{callId, kind, blob, seq, eph?, toDeviceId}` | the other party | An encrypted signaling message; `eph` only on the caller's first offer. |
-| `call_end` `{callId, reason, by}` | both | `declined`, `cancelled`, `hangup`, `missed`, `failed`, `timeout`. |
+| `call_end` `{callId, reason, by}` | both | `declined`, `cancelled`, `hangup`, `missed`, `failed`, `connect_failed`, `timeout`. `connect_failed` is what a device reports (in `POST /api/calls/:id/end`) when the media connection never came up or was lost; any other failure is a plain `failed`, so the other side can describe a network problem only when it was one. |
 
 When a push was sent, a second push with `data.type = "call_end"` (`data.reason`: `missed` when the call was never answered, otherwise `answered`, `declined`, `hangup`, …) follows when the call stops ringing, so a device can remove the sticky "Incoming call" notification (or replace it with a "missed call" one). Clients must not navigate or reload an open app window when such a notification is tapped: a call lives in that window.
 

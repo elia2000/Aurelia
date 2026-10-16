@@ -309,6 +309,50 @@ describe("call signaling API", () => {
     expect(ctx.eventRecorder.of("call_ringing")).toHaveLength(1);
   });
 
+  test("a callee who appears offline (invisible) is not given away by the ringing report", async () => {
+    ctx.userStore.users.get("bob").status = "invisible";
+    await placeCall();
+    ctx.eventRecorder.clear();
+    const res = await bob(request(ctx.app).post(`/api/calls/${CALL_ID}/ringing`)).send({});
+    expect(res.status).toBe(200);
+    // The caller stays on "waiting", the same as for a callee who is really offline.
+    expect(ctx.eventRecorder.of("call_ringing")).toHaveLength(0);
+    // The call itself still rings and can be answered.
+    const accepted = await bob(request(ctx.app).post(`/api/calls/${CALL_ID}/accept`)).send(acceptBody());
+    expect(accepted.status).toBe(200);
+  });
+
+  test("a cancelled or declined call is not reported as ringing", async () => {
+    await placeCall();
+    expect((await alice(request(ctx.app).post(`/api/calls/${CALL_ID}/end`)).send({})).status).toBe(200);
+    ctx.eventRecorder.clear();
+    const res = await bob(request(ctx.app).post(`/api/calls/${CALL_ID}/ringing`)).send({});
+    expect(res.status).toBe(200);
+    expect(ctx.eventRecorder.of("call_ringing")).toHaveLength(0);
+  });
+
+  test("ringing reports are throttled per person", async () => {
+    await placeCall();
+    const url = `/api/calls/${CALL_ID}/ringing`;
+    let last;
+    for (let i = 0; i < 301; i += 1) {
+      last = await bob(request(ctx.app).post(url)).send({});
+    }
+    expect(last.status).toBe(429);
+    // Someone else is not affected by it.
+    expect((await alice(request(ctx.app).post(url)).send({})).status).toBe(403);
+  });
+
+  test("a device can report a failed media connection and the other side hears it as such", async () => {
+    await placeCall();
+    await bob(request(ctx.app).post(`/api/calls/${CALL_ID}/accept`)).send(acceptBody());
+    ctx.eventRecorder.clear();
+    const res = await bob(request(ctx.app).post(`/api/calls/${CALL_ID}/end`)).send({ reason: "connect_failed" });
+    expect(res.status).toBe(200);
+    const [end] = ctx.eventRecorder.of("call_end");
+    expect(end.payload.reason).toBe("connect_failed");
+  });
+
   test("a call that is no longer ringing is not reported as ringing", async () => {
     await placeCall();
     await bob(request(ctx.app).post(`/api/calls/${CALL_ID}/accept`)).send(acceptBody());

@@ -122,6 +122,20 @@ describe("happy path", () => {
     expect(alice.manager.isBusy).toBe(false);
   });
 
+  test("a failure stays on screen long enough to read, and can be dismissed", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { alice } = await connectedCall();
+    const callId = alice.manager.getState().callId;
+    await alice.manager.handleEvent({ type: "call_end", callId, reason: "connect_failed" });
+    expect(alice.manager.getState().endReason).toBe("connection_lost");
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(alice.manager.getState().phase).toBe(CALL_PHASE.ENDED); // the long explanation is still there
+    alice.manager.dismiss();
+    expect(alice.manager.getState().phase).toBe(CALL_PHASE.IDLE);
+    expect(alice.manager.isBusy).toBe(false);
+    alice.manager.dismiss(); // harmless when there is nothing to dismiss
+  });
+
   test("returns to idle shortly after the call ends", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const { alice } = await connectedCall();
@@ -782,6 +796,10 @@ describe("key commitment in the call flow", () => {
     await waitFor(() => phase(CALL_PHASE.ENDED)(bob), { label: "callee rejects reveal" });
     expect(bob.manager.getState().endReason).toBe("handshake_failed");
     expect(other.user.id).toBeTruthy();
+    // The caller only learns that the other side gave up: a security rejection
+    // must not be passed off as a network or relay problem.
+    await waitFor(() => phase(CALL_PHASE.ENDED)(alice), { label: "caller told" });
+    expect(alice.manager.getState().endReason).toBe("failed");
   });
 
   test("candidates that arrive before the key reveal are held, not counted as attacks", async () => {
@@ -973,6 +991,64 @@ describe("waiting versus ringing", () => {
     expect(alice.manager.getState().phase).toBe(CALL_PHASE.CONNECTED);
   });
 
+  test("a ringing report that could not be sent is tried again while the phone is still ringing", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    bob.api.markCallRinging
+      .mockRejectedValueOnce(new ApiError("offline", { status: 0 }))
+      .mockRejectedValueOnce(new ApiError("overloaded", { status: 503 }));
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await vi.waitFor(() => expect(phase(CALL_PHASE.INCOMING)(bob)).toBe(true));
+    await vi.waitFor(() => expect(bob.api.markCallRinging).toHaveBeenCalledTimes(1));
+    expect(alice.manager.getState()).toMatchObject({ waiting: true, ringing: false });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(bob.api.markCallRinging).toHaveBeenCalledTimes(3);
+    await vi.waitFor(() => expect(alice.manager.getState().ringing).toBe(true));
+    expect(alice.manager.getState().waiting).toBe(false);
+  });
+
+  test("the ringing report is not retried once the call is answered, or when the server refuses it", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    bob.api.markCallRinging.mockRejectedValue(new ApiError("down", { status: 503 }));
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await vi.waitFor(() => expect(phase(CALL_PHASE.INCOMING)(bob)).toBe(true));
+    await vi.waitFor(() => expect(bob.api.markCallRinging).toHaveBeenCalledTimes(1));
+    await bob.manager.accept();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(bob.api.markCallRinging).toHaveBeenCalledTimes(1);
+
+    // A refusal (the call is gone, say) will not change by asking again.
+    const server2 = new FakeServer();
+    const carol = await server2.addUser("carol");
+    const dave = await server2.addUser("dave");
+    dave.api.markCallRinging.mockRejectedValue(new ApiError("Not your call.", { status: 403 }));
+    await carol.manager.startCall({ chatId: "c", peer: peerOf(dave) });
+    await vi.waitFor(() => expect(phase(CALL_PHASE.INCOMING)(dave)).toBe(true));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(dave.api.markCallRinging).toHaveBeenCalledTimes(1);
+  });
+
+  test("answering clears a stale waiting flag", async () => {
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    bob.api.markCallRinging.mockResolvedValue(); // the report never reaches the caller
+    server.managers.set(bob.user.id, [bob.manager]);
+    bob.api.markCallRinging.mockImplementation(async () => {});
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(bob));
+    await waitFor(() => alice.manager.getState().waiting, { label: "waiting" });
+    await bob.manager.accept();
+    await waitFor(() => phase(CALL_PHASE.CONNECTING)(alice) || phase(CALL_PHASE.CONNECTED)(alice));
+    expect(alice.manager.getState()).toMatchObject({ waiting: false, ringing: false });
+  });
+
   test("a ringing report that arrives after the call moved on changes nothing", async () => {
     const { alice } = await connectedCall();
     const callId = alice.manager.getState().callId;
@@ -994,17 +1070,21 @@ describe("connections that do not come up", () => {
     await waitFor(() => phase(CALL_PHASE.INCOMING)(bob));
     await bob.manager.accept();
     await waitFor(() => phase(CALL_PHASE.CONNECTING)(alice) && phase(CALL_PHASE.CONNECTING)(bob), { label: "connecting" });
+    // Offer and answer are through (a later clock jump must not race signals still in flight).
+    await waitFor(() => server.log.some((e) => e.op === "signal" && e.kind === "answer"), { label: "answered" });
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
     return { alice, bob };
   };
 
-  test("a slow connection says it is still trying", async () => {
-    const { alice } = await stuckCall(true);
+  test("a slow connection says it is still trying, but not before 10 seconds", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-    // (timers armed before faking keep their real clock, so wait for real)
-    vi.useRealTimers();
-    await waitFor(() => alice.manager.getState().connectingSlow, { timeout: 12_000, label: "slow hint" });
-    expect(alice.manager.getState().phase).toBe(CALL_PHASE.CONNECTING);
-  }, 20_000);
+    const { alice } = await stuckCall(true);
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(alice.manager.getState().connectingSlow).toBe(false);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(alice.manager.getState()).toMatchObject({ phase: CALL_PHASE.CONNECTING, connectingSlow: true });
+  });
 
   test("with no relay configured the failure points at the relay", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
@@ -1020,9 +1100,30 @@ describe("connections that do not come up", () => {
     await vi.advanceTimersByTimeAsync(46_000);
     expect(alice.manager.getState().endReason).toBe("connect_failed");
     expect(bob.manager.getState().endReason).toBe("connect_failed");
-    // Reported to the server as a failure, not a hang-up.
+    // Reported to the server as a media failure, so the other side can explain it the same way.
     const reports = [...alice.api.endCall.mock.calls, ...bob.api.endCall.mock.calls];
-    expect(reports.some(([, reason]) => reason === "failed")).toBe(true);
+    expect(reports.some(([, reason]) => reason === "connect_failed")).toBe(true);
+  });
+
+  test("a refused signaling request is a plain failure, not blamed on the relay", async () => {
+    FakePeerConnection.autoConnect = false;
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    for (const who of [alice, bob]) who.api.fetchIceConfig.mockResolvedValue({ iceServers: [], hasRelay: false });
+    // The server forgot the call (a restart, say): bob's answer is refused.
+    bob.api.sendCallSignal.mockRejectedValue(new ApiError("Call is not in progress.", { status: 409 }));
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(bob));
+    await bob.manager.accept();
+    await waitFor(() => phase(CALL_PHASE.ENDED)(bob), { label: "answer refused" });
+    expect(bob.manager.getState().endReason).toBe("failed");
+  });
+
+  test("a server timeout on a call that was up is not reported as a lost connection", async () => {
+    const { alice } = await connectedCall();
+    await alice.manager.handleEvent({ type: "call_end", callId: alice.manager.getState().callId, reason: "timeout" });
+    expect(alice.manager.getState().endReason).toBe("failed");
   });
 });
 
@@ -1049,7 +1150,9 @@ describe("video calls with the camera off", () => {
     const line = bob.pc.transceivers.find((t) => t.receiver.track.kind === "video");
     expect(line?.direction).toBe("sendrecv");
     // The other person is told, so their screen can go black instead of showing a frozen frame.
-    await waitFor(() => alice.manager.getState().remoteCameraOn === false, { label: "alice sees camera off" });
+    const told = bob.pc.dc.sent.map((raw) => JSON.parse(raw));
+    expect(told).toContainEqual(expect.objectContaining({ t: "state", video: false }));
+    expect(alice.manager.getState().remoteCameraOn).toBe(false);
   });
 
   test("the camera can be turned on later, and the other person is told", async () => {
@@ -1059,6 +1162,36 @@ describe("video calls with the camera off", () => {
     const sender = bob.pc.transceivers.find((t) => t.receiver.track.kind === "video").sender;
     expect(sender.replaceTrack).toHaveBeenCalledWith(expect.objectContaining({ kind: "video" }));
     await waitFor(() => alice.manager.getState().remoteCameraOn === true, { label: "alice sees camera on" });
+  });
+
+  test("a camera turned on before the caller's offer arrives is sent as soon as the call is set up", async () => {
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    // Hold back everything the caller signals to bob: the offer is still on its way.
+    let hold = true;
+    const held = [];
+    const deliver = bob.manager.handleEvent.bind(bob.manager);
+    bob.manager.handleEvent = (event) => {
+      if (hold && event.type === "call_signal") {
+        held.push(event);
+        return Promise.resolve();
+      }
+      return deliver(event);
+    };
+    await alice.manager.startCall({ chatId: "c", peer: peerOf(bob), kind: "video" });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(bob));
+    await bob.manager.accept({ camera: false });
+    await bob.manager.setCameraEnabled(true); // "Connecting…": the camera button is already there
+    expect(bob.manager.getState().cameraOn).toBe(true);
+    await waitFor(() => held.length > 0, { label: "offer on its way" });
+
+    hold = false;
+    for (const event of held) await deliver(event);
+    await waitFor(() => phase(CALL_PHASE.CONNECTED)(alice) && phase(CALL_PHASE.CONNECTED)(bob), { label: "connected" });
+
+    const sender = bob.pc.transceivers.find((t) => t.receiver.track.kind === "video").sender;
+    expect(sender.track).toMatchObject({ kind: "video" }); // what the camera shows is what is sent
   });
 
   test("a caller can also start a video call with the camera off", async () => {

@@ -39,9 +39,16 @@ While you call, the screen tells you where things stand:
 | You see | Meaning |
 |---|---|
 | **Calling…** | The call is being placed. |
-| **Waiting…** | The call is placed, but the other person's app is closed or offline. They get a push notification (if they enabled notifications), and the call connects if they open the app in time (the call stays open for about 45 seconds). |
-| **Ringing…** | Their app is open and is ringing right now. The ring tone on your side only plays during this step. |
+| **Waiting…** | The call is placed, but the other person's app has not reported that it is ringing: it is closed or offline, or they appear offline (*invisible*). They get a push notification (if they enabled notifications), and the call connects if they open the app in time (the call stays open for about 45 seconds). |
+| **Ringing…** | Their app is open and is ringing right now (people who appear offline never trigger this: their callers stay on *Waiting…* while the phone rings). The ring tone on your side only plays during this step. |
 | **Connecting…** | They answered and the two devices are setting up the encrypted connection. After about 10 seconds it adds *Still connecting*. |
+
+When a call cannot be set up, the screen says why and stays for about 10 seconds (press **Close** to dismiss it sooner):
+
+- *Couldn't connect. Check your network…*: the two devices could not reach each other.
+- *Couldn't connect. This server has no relay (TURN) set up…*: the same, on a server without a relay. People on different networks need one; see [Setting up the relay](#setting-up-the-relay).
+- *Connection lost*: the call was working and then stopped.
+- Any other problem (for example a refused security check) is shown as what it is and is never passed off as a network problem.
 
 Calls are one-to-one and happen in direct chats. You can minimise the call screen and keep browsing.
 
