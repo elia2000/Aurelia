@@ -27,24 +27,68 @@ export const CAPTURE_CONSTRAINTS = Object.freeze({
     autoGainControl: true,
     channelCount: 1,
   },
+  // What the camera is asked for when the call starts, and in Auto: 720p, which
+  // the encoder scales down while the network is weak.
   video: {
     facingMode: "user",
-    width: { ideal: 640, max: 1280 },
-    height: { ideal: 360, max: 720 },
-    frameRate: { ideal: 24, max: 30 },
+    width: { ideal: 1280, max: 1280 },
+    height: { ideal: 720, max: 720 },
+    frameRate: { ideal: 30, max: 30 },
   },
 });
 
+/**
+ * The sending levels, lowest first. "off" is audio only. `height` is the
+ * picture height the level aims for; the bitrate is a ceiling, the browser's
+ * own congestion control goes lower whenever the network needs it.
+ */
 export const VIDEO_TIERS = Object.freeze([
-  { id: "off", maxBitrate: 0, maxFramerate: 0, scaleResolutionDownBy: 1 },
-  { id: "low", maxBitrate: 120_000, maxFramerate: 12, scaleResolutionDownBy: 2 },
-  { id: "mid", maxBitrate: 300_000, maxFramerate: 20, scaleResolutionDownBy: 1.5 },
-  { id: "high", maxBitrate: 600_000, maxFramerate: 24, scaleResolutionDownBy: 1 },
+  { id: "off", label: "Audio only", short: "Off", height: 0, maxBitrate: 0, maxFramerate: 0 },
+  { id: "low", label: "240p", short: "240p", height: 240, maxBitrate: 150_000, maxFramerate: 15 },
+  { id: "mid", label: "360p", short: "360p", height: 360, maxBitrate: 400_000, maxFramerate: 24 },
+  { id: "high", label: "480p", short: "480p", height: 480, maxBitrate: 800_000, maxFramerate: 30 },
+  { id: "hd", label: "720p HD", short: "720p", height: 720, maxBitrate: 1_800_000, maxFramerate: 30 },
+  { id: "fhd", label: "1080p Full HD", short: "1080p", height: 1080, maxBitrate: 4_000_000, maxFramerate: 30 },
 ]);
 export const DEFAULT_VIDEO_TIER = "mid";
+/** The highest level Auto climbs to; the top level is for people who ask for it. */
+export const AUTO_MAX_TIER = "hd";
 
 const tierIndex = (id) => Math.max(0, VIDEO_TIERS.findIndex((t) => t.id === id));
 export const getVideoTier = (id) => VIDEO_TIERS[tierIndex(id)];
+
+/** The fixed levels a person can pick, lowest first (the stops of the quality slider). */
+export const FIXED_LEVELS = Object.freeze(VIDEO_TIERS.filter((t) => t.id !== "off"));
+/** The level the slider starts at when Auto is switched off. */
+export const DEFAULT_FIXED_LEVEL = "hd";
+
+/** What a person can ask for when watching: Auto, or one fixed level. */
+export const QUALITY_CHOICES = Object.freeze([
+  { id: "auto", label: "Auto", hint: "Keeps the call smooth: adapts to the network" },
+  ...VIDEO_TIERS.filter((t) => t.id !== "off").reverse().map((t) => ({
+    id: t.id,
+    label: t.label,
+    hint: t.id === "fhd" ? "Best picture, needs a fast connection" : t.id === "low" ? "Saves data" : "",
+  })),
+]);
+export const isQualityChoice = (value) => QUALITY_CHOICES.some((q) => q.id === value);
+
+/** Camera settings that suit what is being sent (Auto and unknown ask for 720p). */
+export function captureVideoConstraints(choice = "auto") {
+  const base = { facingMode: "user" };
+  switch (choice) {
+    case "fhd":
+      return { ...base, width: { ideal: 1920, max: 1920 }, height: { ideal: 1080, max: 1080 }, frameRate: { ideal: 30, max: 30 } };
+    case "low":
+      return { ...base, width: { ideal: 640, max: 1280 }, height: { ideal: 360, max: 720 }, frameRate: { ideal: 15, max: 30 } };
+    case "mid":
+      return { ...base, width: { ideal: 640, max: 1280 }, height: { ideal: 360, max: 720 }, frameRate: { ideal: 24, max: 30 } };
+    case "high":
+      return { ...base, width: { ideal: 960, max: 1280 }, height: { ideal: 540, max: 720 }, frameRate: { ideal: 30, max: 30 } };
+    default:
+      return CAPTURE_CONSTRAINTS.video;
+  }
+}
 
 /** Tunes the Opus payload of a local SDP for voice at low bitrate. */
 export function tuneOpusSdp(sdp, params = OPUS_VOICE, ptime = AUDIO_PTIME_MS) {
@@ -163,13 +207,18 @@ export function summarizeStats(reports) {
     const remote = byId.get(pair.remoteCandidateId);
     relayed = local?.candidateType === "relay" || remote?.candidateType === "relay";
   }
+  let incoming = null;
   for (const r of reports) {
     if (r.type === "remote-inbound-rtp" && typeof r.fractionLost === "number") {
       lossPct = Math.max(lossPct, r.fractionLost * 100);
       if (rttMs === null && typeof r.roundTripTime === "number") rttMs = r.roundTripTime * 1000;
     }
+    // The picture that is arriving: what the person is watching.
+    if (r.type === "inbound-rtp" && (r.kind === "video" || r.mediaType === "video") && r.frameWidth > 0 && r.frameHeight > 0) {
+      incoming = { width: r.frameWidth, height: r.frameHeight, fps: Math.round(r.framesPerSecond || 0) };
+    }
   }
-  return { rttMs, lossPct, relayed, availableKbps };
+  return { rttMs, lossPct, relayed, availableKbps, ...(incoming ? { incoming } : {}) };
 }
 
 export const initialAdaptation = () => ({ bad: 0, good: 0 });
@@ -177,9 +226,10 @@ export const initialAdaptation = () => ({ bad: 0, good: 0 });
 /**
  * Picks the next video tier from one stats sample. Steps down fast, up slowly
  * (hysteresis) so quality does not flap, and falls back to audio-only when
- * even the lowest tier keeps failing.
+ * even the lowest tier keeps failing. It only climbs while the connection
+ * reports room for the next level, and never above `maxId`.
  */
-export function nextVideoTier(currentId, sample, state = initialAdaptation()) {
+export function nextVideoTier(currentId, sample, state = initialAdaptation(), maxId = AUTO_MAX_TIER) {
   const rtt = sample.rttMs ?? 0;
   const bad = sample.lossPct > 8 || rtt > 600;
   const good = sample.lossPct < 2 && rtt < 250;
@@ -187,7 +237,13 @@ export function nextVideoTier(currentId, sample, state = initialAdaptation()) {
   badCount = bad ? badCount + 1 : 0;
   goodCount = good ? goodCount + 1 : 0;
 
-  let idx = tierIndex(currentId);
+  const top = tierIndex(maxId);
+  const roomFor = (index) => {
+    const wanted = VIDEO_TIERS[index]?.maxBitrate;
+    // A connection that does not say how much it can carry is given the benefit of the doubt.
+    return !wanted || sample.availableKbps == null || sample.availableKbps * 1000 >= wanted * 1.3;
+  };
+  let idx = Math.min(tierIndex(currentId), top);
   if (bad && idx > 1) {
     idx -= 1;
     badCount = 0;
@@ -197,20 +253,27 @@ export function nextVideoTier(currentId, sample, state = initialAdaptation()) {
   } else if (good && idx === 0 && goodCount >= 6) {
     idx = 1;
     goodCount = 0;
-  } else if (good && idx >= 1 && idx < VIDEO_TIERS.length - 1 && goodCount >= 4) {
+  } else if (good && idx >= 1 && idx < top && goodCount >= 4 && roomFor(idx + 1)) {
     idx += 1;
     goodCount = 0;
   }
   return { tier: VIDEO_TIERS[idx].id, state: { bad: badCount, good: goodCount } };
 }
 
-/** Sender encoding parameters for a tier. */
-export function encodingForTier(id) {
+/**
+ * Sender encoding parameters for a tier. `capture` is the size of the picture
+ * the camera delivers; it is scaled down so that its SHORTER side has the size
+ * the tier aims for ("720p" is 720 on the short side: 1280x720 held sideways,
+ * 720x1280 on a phone held upright). It is never scaled up.
+ */
+export function encodingForTier(id, capture = { width: 1280, height: 720 }) {
   const tier = getVideoTier(id);
+  const short = Math.min(Number(capture?.width) || Infinity, Number(capture?.height) || Infinity);
+  const scale = tier.height && Number.isFinite(short) ? Math.max(1, short / tier.height) : 1;
   return {
     maxBitrate: tier.maxBitrate,
     maxFramerate: tier.maxFramerate,
-    scaleResolutionDownBy: tier.scaleResolutionDownBy,
+    scaleResolutionDownBy: Math.round(scale * 100) / 100,
     active: tier.id !== "off",
   };
 }

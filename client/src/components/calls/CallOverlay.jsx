@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Close,
@@ -10,12 +10,18 @@ import {
   Phone,
   PhoneOff,
   ShieldOff,
+  SlidersHorizontal,
   Video,
   VideoOff,
+  Volume2,
   WifiOff,
 } from "../../icons/lucide.js";
 import Avatar from "../common/Avatar.jsx";
 import SafetyNumberModal from "./SafetyNumberModal.jsx";
+import CallSettingsMenu from "./CallSettingsMenu.jsx";
+import { guessDefaultRoute, nextQuickRoute } from "../../calls/audioDevices.js";
+import { useAudioDevices } from "../../calls/useAudioDevices.js";
+import { loadFit, objectFitFor, saveFit } from "../../calls/pictureFit.js";
 import { CALL_PHASE, isFailureReason } from "../../calls/callManager.js";
 import { useCalls } from "../../calls/callContext.js";
 import { TRUST } from "../../e2ee/trust.js";
@@ -72,6 +78,18 @@ function useElapsed(since, active) {
   return total >= 3600 ? `${Math.floor(total / 3600)}:${m}:${s}` : `${m}:${s}`;
 }
 
+// The two pictures of a video call: one fills the screen, the other is a small
+// tile in the corner. Tapping the tile swaps them.
+const MAIN_PICTURE = "absolute inset-0 z-0 h-full w-full";
+// How long a video call keeps its name, buttons and notes on screen without a touch.
+const AUTO_HIDE_MS = 5_000;
+// Fades the details of a video call in and out of the way of the picture.
+const chromeClass = (hidden) =>
+  `transition-opacity duration-200 motion-reduce:transition-none ${hidden ? "pointer-events-none opacity-0" : "opacity-100"}`;
+const TILE_PICTURE =
+  "absolute right-4 z-20 h-32 w-24 rounded-2xl border border-white/20 object-cover shadow-lg md:h-28 md:w-20";
+const TILE_TOP = { top: "calc(max(1rem, env(safe-area-inset-top)) + 3.5rem)" };
+
 function useStream(ref, stream) {
   useEffect(() => {
     const el = ref.current;
@@ -81,7 +99,7 @@ function useStream(ref, stream) {
   }, [ref, stream]);
 }
 
-function RoundButton({ label, onClick, active = false, danger = false, accept = false, children, size = "h-14 w-14" }) {
+function RoundButton({ label, onClick, active = false, danger = false, accept = false, children, size = "h-14 w-14", buttonRef, expanded }) {
   const tone = danger
     ? "bg-rose-600 text-white hover:bg-rose-500 shadow-[0_0_14px_rgba(244,63,94,0.35)]"
     : accept
@@ -91,10 +109,13 @@ function RoundButton({ label, onClick, active = false, danger = false, accept = 
         : "bg-white/10 text-white hover:bg-white/20";
   return (
     <button
+      ref={buttonRef}
       type="button"
       onClick={onClick}
       aria-label={label}
-      aria-pressed={active && !danger && !accept ? true : undefined}
+      aria-pressed={expanded === undefined && active && !danger && !accept ? true : undefined}
+      aria-expanded={expanded}
+      aria-haspopup={expanded === undefined ? undefined : "true"}
       title={label}
       className={`inline-flex ${size} items-center justify-center rounded-full transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ${tone}`}
     >
@@ -103,10 +124,25 @@ function RoundButton({ label, onClick, active = false, danger = false, accept = 
   );
 }
 
-export default function CallOverlay({ user }) {
-  const { state, minimized, setMinimized, accept, decline, hangup, dismiss, setMuted, setCameraEnabled } = useCalls();
+export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
+  const { state, minimized, setMinimized, accept, decline, hangup, dismiss, setMuted, setCameraEnabled, setQuality, setMicrophone } = useCalls();
   const [safetyOpen, setSafetyOpen] = useState(false);
   const [copyState, setCopyState] = useState("idle"); // idle | copied | failed
+  const [swapped, setSwapped] = useState(false); // your own picture fills the screen
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [chromeHidden, setChromeHidden] = useState(false); // the details are out of the way of the picture
+  const [fit, setFit] = useState(() => loadFit());
+  const [pictureSize, setPictureSize] = useState({ remote: null, local: null });
+  const [box, setBox] = useState(null);
+  const hideTimer = useRef(null);
+  const lastPointer = useRef("touch");
+  const [audioElement, setAudioElement] = useState(null);
+  const settingsButtonRef = useRef(null);
+  // One stable callback, so the element is only reported when it appears or goes.
+  const attachAudio = useCallback((el) => {
+    remoteAudioRef.current = el;
+    setAudioElement(el);
+  }, []);
   const remoteVideoRef = useRef(null);
   const remoteAudioRef = useRef(null);
   const localVideoRef = useRef(null);
@@ -126,9 +162,153 @@ export default function CallOverlay({ user }) {
     kind === "video" && remoteCameraOn && connected && !minimized;
   const showLocalVideo =
     kind === "video" && cameraOn && phase !== CALL_PHASE.ENDED && !minimized;
+  // Your own picture can fill the screen once the call is on and your camera is
+  // sending. The choice is kept while the call is minimised, and given up when
+  // there is no picture of yours any more.
+  const canSwap = kind === "video" && cameraOn && connected;
+  const swappedView = swapped && canSwap && showLocalVideo;
+  useEffect(() => {
+    if (!canSwap) setSwapped(false);
+  }, [canSwap]);
   useStream(remoteAudioRef, active ? state.remoteStream : null);
   useStream(remoteVideoRef, showRemoteVideo ? state.remoteStream : null);
   useStream(localVideoRef, showLocalVideo ? state.localStream : null);
+
+  // Where the sound goes and which microphone is used.
+  const audioDevices = useAudioDevices({
+    active: Boolean(active) && phase !== CALL_PHASE.INCOMING && phase !== CALL_PHASE.ENDED,
+    microphoneId: state.microphoneId,
+    audioElement,
+  });
+  const { routes } = audioDevices.model;
+  const currentRoute =
+    routes.find((route) => route.id === state.microphoneId) ||
+    (!state.microphoneId || state.microphoneId === "default" ? guessDefaultRoute(routes) : null);
+  const quickRoute = routes.length >= 2 ? nextQuickRoute(routes, currentRoute?.kind) : null;
+  const hasAudioChoices = routes.length > 0 || audioDevices.model.canPickInput || audioDevices.model.canPickOutput;
+  const inCallScreen = phase === CALL_PHASE.CONNECTING || connected;
+  const showSettingsButton = inCallScreen && (hasAudioChoices || kind === "video");
+  useEffect(() => {
+    if (!inCallScreen || minimized) setSettingsOpen(false);
+  }, [inCallScreen, minimized]);
+  const closeSettings = useCallback(() => {
+    setSettingsOpen(false);
+    settingsButtonRef.current?.focus();
+  }, []);
+
+  // ── the picture: how it sits on the screen ──
+  useEffect(() => {
+    const el = dialogRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return undefined;
+    const read = () => {
+      const rect = el.getBoundingClientRect();
+      const next = { w: Math.round(rect.width), h: Math.round(rect.height) };
+      setBox((prev) => (prev && prev.w === next.w && prev.h === next.h ? prev : next));
+    };
+    read();
+    const observer = new ResizeObserver(read);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [active, minimized]);
+  useEffect(() => {
+    const watch = (el, key) => {
+      const read = () => {
+        const next = el.videoWidth ? { w: el.videoWidth, h: el.videoHeight } : null;
+        setPictureSize((prev) =>
+          prev[key]?.w === next?.w && prev[key]?.h === next?.h ? prev : { ...prev, [key]: next },
+        );
+      };
+      read();
+      el.addEventListener("loadedmetadata", read);
+      el.addEventListener("resize", read);
+      return () => {
+        el.removeEventListener("loadedmetadata", read);
+        el.removeEventListener("resize", read);
+      };
+    };
+    const stops = [];
+    if (showRemoteVideo && remoteVideoRef.current) stops.push(watch(remoteVideoRef.current, "remote"));
+    if (showLocalVideo && localVideoRef.current) stops.push(watch(localVideoRef.current, "local"));
+    return () => stops.forEach((stop) => stop());
+  }, [showRemoteVideo, showLocalVideo]);
+  const chooseFit = useCallback((choice) => {
+    setFit(choice);
+    saveFit(choice);
+  }, []);
+  // Whichever picture fills the screen: all of it, or filling the screen with the edges cut off.
+  const mainFit = objectFitFor(fit, swappedView ? pictureSize.local : pictureSize.remote, box);
+  const mainPicture = `${MAIN_PICTURE} ${mainFit === "contain" ? "object-contain" : "object-cover"}`;
+
+  // ── the details of a video call get out of the way of the picture: a tap
+  // hides them (and brings them back), and they hide by themselves after a
+  // few seconds. They stay while something needs reading or choosing, and
+  // while there is no picture to look at instead.
+  const videoOnScreen = kind === "video" && connected && !minimized && (showRemoteVideo || swappedView);
+  const mustStay = settingsOpen || safetyOpen || trust?.status === TRUST.DEVICES_ADDED || Boolean(networkPaused);
+  const hideChrome = chromeHidden && videoOnScreen && !settingsOpen && !safetyOpen;
+  const armHide = useCallback(() => {
+    clearTimeout(hideTimer.current);
+    const tick = () => {
+      // Someone moving through the buttons with the keyboard is still using them.
+      const focused = document.activeElement;
+      let usingKeyboard = false;
+      try {
+        usingKeyboard = Boolean(
+          focused && focused !== dialogRef.current && dialogRef.current?.contains(focused) && focused.matches(":focus-visible"),
+        );
+      } catch (_) {
+        // a browser without :focus-visible: the details simply hide on time
+      }
+      if (usingKeyboard) hideTimer.current = setTimeout(tick, autoHideMs);
+      else setChromeHidden(true);
+    };
+    hideTimer.current = setTimeout(tick, autoHideMs);
+  }, [autoHideMs]);
+  useEffect(() => {
+    if (videoOnScreen && !mustStay && !chromeHidden) armHide();
+    else clearTimeout(hideTimer.current);
+    return () => clearTimeout(hideTimer.current);
+  }, [videoOnScreen, mustStay, chromeHidden, armHide]);
+  // A call that is not a video picture (or is over) always shows everything.
+  useEffect(() => {
+    if (!videoOnScreen) setChromeHidden(false);
+  }, [videoOnScreen]);
+  const wake = useCallback(() => {
+    setChromeHidden(false);
+    if (videoOnScreen && !mustStay) armHide();
+  }, [videoOnScreen, mustStay, armHide]);
+  // The hidden buttons cannot be focused, so whatever had focus loses it and
+  // key presses would go to the page behind. Keep them on the call: the dialog
+  // takes the focus, and any key brings the details back.
+  useEffect(() => {
+    if (!hideChrome) return undefined;
+    const dialog = dialogRef.current;
+    if (dialog && dialog.contains(document.activeElement) && document.activeElement !== dialog) dialog.focus({ preventScroll: true });
+    const onKey = () => {
+      if (dialog && !dialog.contains(document.activeElement)) dialog.focus({ preventScroll: true });
+      wake();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [hideChrome, wake]);
+  const onStageClick = (event) => {
+    // While the settings or the safety number are open, a tap belongs to them.
+    if (!videoOnScreen || settingsOpen || safetyOpen) return;
+    const target = event.target;
+    // The small picture swaps and the buttons do their job: neither hides anything.
+    if (target?.closest?.("[data-keep-chrome]")) return;
+    if (target?.closest?.("button, a, input, summary, [role='radio'], [role='switch']")) {
+      wake();
+      return;
+    }
+    // A mouse already shows the details by moving and hides them by resting;
+    // only a tap (touch or pen) toggles them.
+    if (lastPointer.current === "mouse") {
+      wake();
+      return;
+    }
+    setChromeHidden((hidden) => !hidden);
+  };
 
   useEffect(() => {
     if (!active) setSafetyOpen(false);
@@ -196,7 +376,7 @@ export default function CallOverlay({ user }) {
 
   const sink = (
     // Remote audio keeps playing when the call UI is minimised.
-    <audio ref={remoteAudioRef} autoPlay playsInline />
+    <audio ref={attachAudio} autoPlay playsInline />
   );
 
   if (minimized) {
@@ -247,21 +427,36 @@ export default function CallOverlay({ user }) {
         tabIndex={-1}
         role="dialog"
         aria-label={`${statusText} with ${peerName}`}
+        onClick={onStageClick}
+        onPointerDown={(event) => {
+          lastPointer.current = event.pointerType;
+        }}
+        onKeyDown={wake}
+        onPointerMove={(event) => event.pointerType === "mouse" && wake()}
         className={`fixed inset-0 z-[340] flex flex-col overflow-hidden ${videoStage ? "bg-black" : "bg-slate-950"} text-slate-50 outline-none md:inset-auto md:bottom-6 md:right-6 md:h-[560px] md:w-[360px] md:rounded-3xl md:border md:border-emerald-500/30 md:shadow-2xl md:shadow-emerald-500/20`}
       >
         {showRemoteVideo ? (
           <video
             ref={remoteVideoRef}
+            data-view="remote"
+            data-slot={swappedView ? "tile" : "main"}
+            data-fit={swappedView ? undefined : mainFit}
             autoPlay
             playsInline
             muted
-            className="absolute inset-0 h-full w-full object-cover"
+            className={swappedView ? TILE_PICTURE : mainPicture}
+            style={swappedView ? TILE_TOP : undefined}
           />
         ) : null}
-        <div className="absolute inset-0 bg-linear-to-b from-slate-950/70 via-transparent to-slate-950/80" />
+        <div
+          data-chrome="shade"
+          className={`absolute inset-0 z-[5] bg-linear-to-b from-slate-950/70 via-transparent to-slate-950/80 ${chromeClass(hideChrome)}`}
+        />
 
         <div
-          className="relative z-10 flex items-start justify-between gap-2 px-4"
+          data-chrome="header"
+          inert={hideChrome}
+          className={`relative z-10 flex items-start justify-between gap-2 px-4 ${chromeClass(hideChrome)}`}
           style={{ paddingTop: "max(1rem, env(safe-area-inset-top))" }}
         >
           <button
@@ -286,7 +481,11 @@ export default function CallOverlay({ user }) {
         </div>
 
         {trustWarning ? (
-          <p className="relative z-10 mx-4 mt-3 flex items-start gap-2 rounded-xl border border-amber-400/40 bg-amber-500/15 px-3 py-2 text-xs text-amber-100">
+          <p
+            data-chrome="warning"
+            inert={hideChrome}
+            className={`relative z-10 mx-4 mt-3 flex items-start gap-2 rounded-xl border border-amber-400/40 bg-amber-500/15 px-3 py-2 text-xs text-amber-100 ${chromeClass(hideChrome)}`}
+          >
             <ShieldOff size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
             <span className="min-w-0 flex-1">{trustWarning}</span>
             {trust?.status === TRUST.DEVICES_ADDED ? (
@@ -302,7 +501,11 @@ export default function CallOverlay({ user }) {
         ) : null}
 
         {/* The middle scrolls when there is more than fits (a long report, a short screen), so the buttons below stay on the card. */}
-        <div className="relative z-10 flex min-h-0 flex-1 flex-col items-center justify-center-safe gap-3 overflow-y-auto px-6 text-center">
+        <div
+          data-chrome="status"
+          inert={hideChrome}
+          className={`relative z-10 flex min-h-0 flex-1 flex-col items-center justify-center-safe gap-3 overflow-y-auto px-6 text-center ${chromeClass(hideChrome)}`}
+        >
           {!showRemoteVideo && !videoStage ? (
             <Avatar
               src={peer?.avatarUrl || peer?.avatar_url}
@@ -390,29 +593,79 @@ export default function CallOverlay({ user }) {
           ) : null}
         </div>
 
+        {/* The small tile. It is you; after a swap it is the other person. */}
         {videoStage && !cameraOn && !minimized ? (
           <div
             className="absolute right-4 z-20 flex h-32 w-24 items-center justify-center rounded-2xl border border-white/10 bg-black text-slate-500 shadow-lg md:h-28 md:w-20"
-            style={{ top: "calc(max(1rem, env(safe-area-inset-top)) + 3.5rem)" }}
+            style={TILE_TOP}
             aria-label="Your camera is off"
             role="img"
           >
             <VideoOff size={22} aria-hidden="true" />
           </div>
         ) : null}
+        {swappedView && !showRemoteVideo ? (
+          <div
+            className="absolute right-4 z-20 flex h-32 w-24 items-center justify-center rounded-2xl border border-white/10 bg-black text-slate-500 shadow-lg md:h-28 md:w-20"
+            style={TILE_TOP}
+            aria-label="Their camera is off"
+            role="img"
+          >
+            <VideoOff size={22} aria-hidden="true" />
+          </div>
+        ) : null}
         {showLocalVideo ? (
-          <video
-            ref={localVideoRef}
-            autoPlay
-            playsInline
-            muted
-            className="absolute right-4 z-20 h-32 w-24 -scale-x-100 rounded-2xl border border-white/20 object-cover shadow-lg md:h-28 md:w-20"
-            style={{ top: "calc(max(1rem, env(safe-area-inset-top)) + 3.5rem)" }}
-          />
+          <>
+            <video
+              ref={localVideoRef}
+              data-view="local"
+              data-slot={swappedView ? "main" : "tile"}
+              data-fit={swappedView ? mainFit : undefined}
+              autoPlay
+              playsInline
+              muted
+              className={`${swappedView ? mainPicture : TILE_PICTURE} -scale-x-100`}
+              style={swappedView ? undefined : TILE_TOP}
+            />
+            {canSwap ? (
+              <button
+                type="button"
+                data-keep-chrome
+                onClick={() => setSwapped(!swappedView)}
+                aria-label={swappedView ? "Show their picture full screen" : "Show your picture full screen"}
+                className="absolute right-4 z-30 h-32 w-24 rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 md:h-28 md:w-20"
+                style={TILE_TOP}
+              />
+            ) : null}
+          </>
         ) : null}
 
+        <CallSettingsMenu
+          open={settingsOpen && inCallScreen}
+          onClose={closeSettings}
+          audio={{
+            model: audioDevices.model,
+            routeKind: currentRoute?.kind,
+            inputId: state.microphoneId || "default",
+            outputId: audioDevices.outputId,
+            outputError: audioDevices.outputError,
+            deviceError: state.audioDeviceError,
+          }}
+          onPickRoute={(route) => setMicrophone(route.id)}
+          onPickInput={(id) => setMicrophone(id)}
+          onPickOutput={audioDevices.chooseOutput}
+          showQuality={kind === "video"}
+          quality={state.quality || "auto"}
+          onQuality={setQuality}
+          videoStats={state.videoStats}
+          fit={fit}
+          onFit={chooseFit}
+        />
+
         <div
-          className="relative z-10 flex items-center justify-center gap-5 px-6 pt-4"
+          data-chrome="controls"
+          inert={hideChrome}
+          className={`relative z-10 flex items-center justify-center gap-3 px-6 pt-4 ${chromeClass(hideChrome)}`}
           style={{ paddingBottom: "max(1.5rem, env(safe-area-inset-bottom))" }}
         >
           {ended ? (
@@ -438,16 +691,40 @@ export default function CallOverlay({ user }) {
             </>
           ) : (
             <>
-              <RoundButton label={muted ? "Unmute microphone" : "Mute microphone"} active={muted} onClick={() => setMuted(!muted)}>
+              <RoundButton size="h-12 w-12" label={muted ? "Unmute microphone" : "Mute microphone"} active={muted} onClick={() => setMuted(!muted)}>
                 {muted ? <MicOff size={22} /> : <Mic size={22} />}
               </RoundButton>
               {kind === "video" ? (
                 <RoundButton
+                  size="h-12 w-12"
                   label={cameraOn ? "Turn camera off" : "Turn camera on"}
                   active={!cameraOn}
                   onClick={() => setCameraEnabled(!cameraOn)}
                 >
                   {cameraOn ? <Video size={22} /> : <VideoOff size={22} />}
+                </RoundButton>
+              ) : null}
+              {quickRoute && inCallScreen ? (
+                // Like a phone call: the loudspeaker on or off (the earpiece is the other way).
+                <RoundButton
+                  size="h-12 w-12"
+                  label={currentRoute?.kind === "speaker" ? "Switch to phone earpiece" : "Switch to speaker"}
+                  active={currentRoute?.kind === "speaker"}
+                  onClick={() => setMicrophone(quickRoute.id)}
+                >
+                  <Volume2 size={22} />
+                </RoundButton>
+              ) : null}
+              {showSettingsButton ? (
+                <RoundButton
+                  size="h-12 w-12"
+                  buttonRef={settingsButtonRef}
+                  label="Call settings"
+                  active={settingsOpen}
+                  expanded={settingsOpen}
+                  onClick={() => setSettingsOpen(!settingsOpen)}
+                >
+                  <SlidersHorizontal size={22} />
                 </RoundButton>
               ) : null}
               <RoundButton label={phase === CALL_PHASE.OUTGOING ? "Cancel call" : "End call"} danger onClick={hangup}>

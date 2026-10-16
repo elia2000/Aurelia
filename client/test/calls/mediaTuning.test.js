@@ -1,12 +1,18 @@
 import { describe, test, expect } from "vitest";
 import {
+  CAPTURE_CONSTRAINTS,
+  DEFAULT_FIXED_LEVEL,
+  FIXED_LEVELS,
+  QUALITY_CHOICES,
+  VIDEO_TIERS,
+  captureVideoConstraints,
   encodingForTier,
   initialAdaptation,
+  isQualityChoice,
   nextVideoTier,
   orderVideoCodecs,
   summarizeStats,
   tuneOpusSdp,
-  VIDEO_TIERS,
 } from "../../src/calls/mediaTuning.js";
 
 const SDP = [
@@ -189,7 +195,114 @@ describe("encodingForTier", () => {
   test("every tier lowers cost monotonically", () => {
     const rates = VIDEO_TIERS.map((t) => t.maxBitrate);
     expect([...rates].sort((a, b) => a - b)).toEqual(rates);
+    expect(VIDEO_TIERS.map((t) => t.id)).toEqual(["off", "low", "mid", "high", "hd", "fhd"]);
     expect(encodingForTier("off").active).toBe(false);
-    expect(encodingForTier("high")).toMatchObject({ maxBitrate: 600000, active: true });
+    expect(encodingForTier("high")).toMatchObject({ maxBitrate: 800_000, maxFramerate: 30, active: true });
+    expect(encodingForTier("fhd")).toMatchObject({ maxBitrate: 4_000_000, active: true });
+  });
+
+  test("a phone held upright sends a tall picture: the tier's size is its shorter side, so 720p is 720 wide", () => {
+    // 720 x 1280 from the camera is "720p" in portrait.
+    expect(encodingForTier("hd", { width: 720, height: 1280 }).scaleResolutionDownBy).toBe(1);
+    expect(encodingForTier("mid", { width: 720, height: 1280 }).scaleResolutionDownBy).toBe(2);
+    expect(encodingForTier("fhd", { width: 1080, height: 1920 }).scaleResolutionDownBy).toBe(1);
+    expect(encodingForTier("hd", { width: 1080, height: 1920 }).scaleResolutionDownBy).toBe(1.5);
+    // The same camera held sideways.
+    expect(encodingForTier("hd", { width: 1280, height: 720 }).scaleResolutionDownBy).toBe(1);
+  });
+
+  test("scales the picture the camera delivers down to the height of the tier, never up", () => {
+    expect(encodingForTier("hd", { width: 1280, height: 720 }).scaleResolutionDownBy).toBe(1);
+    expect(encodingForTier("mid", { width: 1280, height: 720 }).scaleResolutionDownBy).toBe(2);
+    expect(encodingForTier("low", { width: 1280, height: 720 }).scaleResolutionDownBy).toBe(3);
+    expect(encodingForTier("high", { width: 1280, height: 720 }).scaleResolutionDownBy).toBe(1.5);
+    expect(encodingForTier("fhd", { width: 1280, height: 720 }).scaleResolutionDownBy).toBe(1); // a 720p camera is not stretched
+    expect(encodingForTier("hd", { width: 1920, height: 1080 }).scaleResolutionDownBy).toBe(1.5);
+    expect(encodingForTier("mid", { width: 1920, height: 1080 }).scaleResolutionDownBy).toBe(3);
+  });
+});
+
+describe("the quality slider", () => {
+  test("has five stops, lowest first, each with a short name for under the slider", () => {
+    expect(FIXED_LEVELS.map((l) => l.id)).toEqual(["low", "mid", "high", "hd", "fhd"]);
+    expect(FIXED_LEVELS.map((l) => l.short)).toEqual(["240p", "360p", "480p", "720p", "1080p"]);
+    expect(DEFAULT_FIXED_LEVEL).toBe("hd");
+    expect(FIXED_LEVELS.some((l) => l.id === "off")).toBe(false);
+  });
+});
+
+describe("what to ask the camera for", () => {
+  test("Auto and unknown ask for 720p at 30 frames", () => {
+    expect(captureVideoConstraints("auto")).toBe(CAPTURE_CONSTRAINTS.video);
+    expect(captureVideoConstraints("nonsense")).toBe(CAPTURE_CONSTRAINTS.video);
+    expect(CAPTURE_CONSTRAINTS.video.height.ideal).toBe(720);
+  });
+  test("the top level asks for 1080p and the lowest ones do not wake a big sensor", () => {
+    expect(captureVideoConstraints("fhd")).toMatchObject({ width: { ideal: 1920 }, height: { ideal: 1080 } });
+    expect(captureVideoConstraints("hd").height.ideal).toBe(720);
+    expect(captureVideoConstraints("low").height.ideal).toBe(360);
+    expect(captureVideoConstraints("low").frameRate.ideal).toBe(15);
+  });
+});
+
+describe("quality choices", () => {
+  test("Auto first, then the fixed levels from the highest down; audio-only is not a choice", () => {
+    expect(QUALITY_CHOICES.map((q) => q.id)).toEqual(["auto", "fhd", "hd", "high", "mid", "low"]);
+    expect(QUALITY_CHOICES.find((q) => q.id === "fhd").label).toBe("1080p Full HD");
+    expect(isQualityChoice("auto")).toBe(true);
+    expect(isQualityChoice("hd")).toBe(true);
+    expect(isQualityChoice("off")).toBe(false);
+    expect(isQualityChoice("__proto__")).toBe(false);
+    expect(isQualityChoice(undefined)).toBe(false);
+  });
+});
+
+describe("Auto climbing higher", () => {
+  const good = { lossPct: 0.2, rttMs: 60 };
+  const climb = (start, sample, count, maxId) => {
+    let tier = start;
+    let state = initialAdaptation();
+    for (let i = 0; i < count; i += 1) ({ tier, state } = nextVideoTier(tier, sample, state, maxId));
+    return tier;
+  };
+
+  test("a healthy connection takes Auto up to 720p and no further", () => {
+    expect(climb("mid", good, 4)).toBe("high");
+    expect(climb("mid", good, 8)).toBe("hd");
+    expect(climb("mid", good, 40)).toBe("hd");
+  });
+
+  test("a different ceiling is respected", () => {
+    expect(climb("mid", good, 40, "high")).toBe("high");
+    expect(climb("mid", good, 40, "fhd")).toBe("fhd");
+  });
+
+  test("it only climbs while the connection says there is room for the next level", () => {
+    const narrow = { ...good, availableKbps: 700 }; // < 1.3 x 800 kbps for 480p
+    expect(climb("mid", narrow, 40)).toBe("mid");
+    const roomy = { ...good, availableKbps: 1100 }; // enough for 480p, not for 720p
+    expect(climb("mid", roomy, 40)).toBe("high");
+    expect(climb("mid", { ...good, availableKbps: 5000 }, 40)).toBe("hd");
+  });
+
+  test("a level above the ceiling is brought down to it", () => {
+    expect(nextVideoTier("fhd", good, initialAdaptation(), "hd").tier).toBe("hd");
+  });
+
+  test("a bad sample still steps down from the top", () => {
+    expect(nextVideoTier("hd", { lossPct: 12, rttMs: 90 }).tier).toBe("high");
+  });
+});
+
+describe("the picture that arrives", () => {
+  test("is read from the incoming video stream", () => {
+    const sample = summarizeStats([
+      { id: "a", type: "inbound-rtp", kind: "audio" },
+      { id: "v", type: "inbound-rtp", kind: "video", frameWidth: 1280, frameHeight: 720, framesPerSecond: 29.6 },
+    ]);
+    expect(sample.incoming).toEqual({ width: 1280, height: 720, fps: 30 });
+  });
+  test("is absent while no picture arrives", () => {
+    expect(summarizeStats([{ id: "v", type: "inbound-rtp", kind: "video", frameWidth: 0, frameHeight: 0 }])).not.toHaveProperty("incoming");
   });
 });

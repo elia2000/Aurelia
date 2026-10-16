@@ -24,6 +24,8 @@ const fallback = Object.freeze({
   hangup: () => {},
   setMuted: () => {},
   setCameraEnabled: () => {},
+  setQuality: () => {},
+  setMicrophone: async () => false,
   inCall: false,
 });
 

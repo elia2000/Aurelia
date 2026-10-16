@@ -20,12 +20,14 @@ export async function waitFor(predicate, { timeout = 3000, label = "condition" }
 
 // ── media ────────────────────────────────────────────────────────────────────
 export class FakeTrack {
-  constructor(kind) {
+  constructor(kind, deviceId = "default") {
     this.kind = kind;
+    this.deviceId = deviceId;
     this.enabled = true;
     this.readyState = "live";
     this.stopped = false;
   }
+  getSettings() { return { deviceId: this.deviceId }; }
   stop() {
     this.stopped = true;
     this.readyState = "ended";
@@ -49,7 +51,7 @@ export function makeGetUserMedia({ deny = null } = {}) {
     calls.push(constraints);
     if (deny) throw Object.assign(new Error(deny), { name: deny });
     const tracks = [];
-    if (constraints.audio) tracks.push(new FakeTrack("audio"));
+    if (constraints.audio) tracks.push(new FakeTrack("audio", constraints.audio.deviceId?.exact || "default"));
     if (constraints.video) tracks.push(new FakeTrack("video"));
     return new FakeStream(tracks);
   });

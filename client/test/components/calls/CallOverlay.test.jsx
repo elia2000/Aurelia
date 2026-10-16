@@ -1,6 +1,6 @@
-import { describe, test, expect, vi } from "vitest";
+import { describe, test, expect, vi, beforeEach } from "vitest";
 import { render } from "vitest-browser-react";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 const e2ee = vi.hoisted(() => ({
   services: {
     api: { listMyDevices: async () => ({ devices: [] }) },
@@ -14,6 +14,8 @@ import CallOverlay from "../../../src/components/calls/CallOverlay.jsx";
 import CallButtons from "../../../src/components/calls/CallButtons.jsx";
 import { CallContext } from "../../../src/calls/callContext.js";
 import { CHAT_PAGE_CONFIG } from "../../../src/settings/chatPageConfig.js";
+
+beforeEach(() => localStorage.clear());
 
 const peer = { userId: "u-bob", username: "bob", nickname: "Bob", avatarUrl: "", color: "#10b981" };
 
@@ -37,11 +39,11 @@ function withCalls(state, overrides = {}) {
   return value;
 }
 
-const renderOverlay = (state, overrides) => {
+const renderOverlay = (state, overrides, props = {}) => {
   const value = withCalls(state, overrides);
   render(
     <CallContext.Provider value={value}>
-      <CallOverlay user={{ id: "u-alice", username: "alice" }} />
+      <CallOverlay user={{ id: "u-alice", username: "alice" }} {...props} />
     </CallContext.Provider>,
   );
   return value;
@@ -208,6 +210,377 @@ describe("CallOverlay", () => {
     expect(text).toContain("Result: connect_failed_relay_unreachable");
     expect(text).toContain("Relay candidates: 0\nRole: caller");
     await expect.element(page.getByRole("button", { name: "Copied" })).toBeVisible();
+  });
+
+  describe("swapping the two pictures", () => {
+    const videoCall = (extra = {}) => ({
+      phase: "connected", kind: "video", peer, cameraOn: true, remoteCameraOn: true, connectedAt: Date.now(), ...extra,
+    });
+    const slot = (who) => document.querySelector(`video[data-view="${who}"]`)?.dataset.slot;
+
+    test("the other person fills the screen and you are the small picture", async () => {
+      renderOverlay(videoCall());
+      await expect.element(page.getByRole("button", { name: "Show your picture full screen" })).toBeInTheDocument();
+      expect(slot("remote")).toBe("main");
+      expect(slot("local")).toBe("tile");
+    });
+
+    test("tapping your own picture swaps the two, and tapping again swaps back", async () => {
+      renderOverlay(videoCall());
+      await page.getByRole("button", { name: "Show your picture full screen" }).click();
+      expect(slot("remote")).toBe("tile");
+      expect(slot("local")).toBe("main");
+      await page.getByRole("button", { name: "Show their picture full screen" }).click();
+      expect(slot("remote")).toBe("main");
+      expect(slot("local")).toBe("tile");
+    });
+
+    test("with their camera off the small picture says so after a swap", async () => {
+      renderOverlay(videoCall({ remoteCameraOn: false }));
+      expect(document.querySelector('video[data-view="remote"]')).toBeNull();
+      await page.getByRole("button", { name: "Show your picture full screen" }).click();
+      expect(slot("local")).toBe("main");
+      await expect.element(page.getByRole("img", { name: "Their camera is off" })).toBeInTheDocument();
+    });
+
+    test("with your own camera off there is nothing to swap", async () => {
+      renderOverlay(videoCall({ cameraOn: false }));
+      await expect.element(page.getByRole("img", { name: "Your camera is off" })).toBeInTheDocument();
+      expect(page.getByRole("button", { name: /full screen/ }).elements()).toHaveLength(0);
+      expect(document.querySelector("video[data-view='local']")).toBeNull();
+    });
+
+    test("while the call is still being set up there is nothing to swap, only your own small picture", async () => {
+      renderOverlay(videoCall({ phase: "outgoing", remoteCameraOn: false, connectedAt: null }));
+      await expect.element(page.getByRole("dialog")).toBeInTheDocument();
+      expect(slot("local")).toBe("tile");
+      expect(page.getByRole("button", { name: /full screen/ }).elements()).toHaveLength(0);
+    });
+
+    test("the swap is still there after the call was minimised and opened again", async () => {
+      const value = withCalls(videoCall());
+      const ui = (v) => (
+        <CallContext.Provider value={v}>
+          <CallOverlay user={{ id: "u-alice", username: "alice" }} />
+        </CallContext.Provider>
+      );
+      const { rerender } = await render(ui(value));
+      await page.getByRole("button", { name: "Show your picture full screen" }).click();
+      expect(slot("local")).toBe("main");
+      await rerender(ui({ ...value, minimized: true }));
+      expect(document.querySelector("video")).toBeNull();
+      await rerender(ui({ ...value, minimized: false }));
+      expect(slot("local")).toBe("main");
+      expect(slot("remote")).toBe("tile");
+    });
+
+    test("the swap is forgotten once your own camera is turned off", async () => {
+      const value = withCalls(videoCall());
+      const ui = (v) => (
+        <CallContext.Provider value={v}>
+          <CallOverlay user={{ id: "u-alice", username: "alice" }} />
+        </CallContext.Provider>
+      );
+      const { rerender } = await render(ui(value));
+      await page.getByRole("button", { name: "Show your picture full screen" }).click();
+      await rerender(ui({ ...value, state: { ...value.state, cameraOn: false } }));
+      expect(slot("remote")).toBe("main");
+      await rerender(ui({ ...value, state: { ...value.state, cameraOn: true } }));
+      expect(slot("remote")).toBe("main");
+      expect(slot("local")).toBe("tile");
+    });
+  });
+
+  describe("call settings", () => {
+    const connected = (extra = {}) => ({
+      phase: "connected", kind: "audio", peer, connectedAt: Date.now(), microphoneId: "default", ...extra,
+    });
+    const device = (kind, deviceId, label) => ({ kind, deviceId, label });
+    const withDevices = (list) => {
+      Object.defineProperty(navigator.mediaDevices, "enumerateDevices", { value: async () => list, configurable: true });
+    };
+
+    test("a computer with one microphone and no choice of speaker has no settings button for a voice call", async () => {
+      withDevices([device("audioinput", "default", "Microphone"), device("audiooutput", "default", "Speakers")]);
+      renderOverlay(connected());
+      await expect.element(page.getByRole("button", { name: "Mute microphone" })).toBeInTheDocument();
+      expect(document.querySelector('[aria-label="Call settings"]')).toBeNull();
+      expect(document.body.textContent).not.toContain("Switch to");
+      expect(page.getByRole("button", { name: "Call settings" }).elements()).toHaveLength(0);
+    });
+
+    test("with several microphones the settings list them and a click switches the call to that one", async () => {
+      withDevices([
+        device("audioinput", "default", "Default - Built-in"),
+        device("audioinput", "usb", "USB Headset"),
+      ]);
+      const value = renderOverlay(connected(), { setMicrophone: vi.fn(async () => true) });
+      await page.getByRole("button", { name: "Call settings" }).click();
+      await expect.element(page.getByRole("radiogroup", { name: "Microphone" })).toBeInTheDocument();
+      await expect.element(page.getByRole("radio", { name: "Default - Built-in" })).toHaveAttribute("aria-checked", "true");
+      await page.getByRole("radio", { name: "USB Headset" }).click();
+      expect(value.setMicrophone).toHaveBeenCalledWith("usb");
+    });
+
+    test("on a phone the routes are listed and a quick button flips between speaker and earpiece", async () => {
+      withDevices([
+        device("audioinput", "default", "Default"),
+        device("audioinput", "r-spk", "Speakerphone"),
+        device("audioinput", "r-ear", "Headset earpiece"),
+      ]);
+      const value = renderOverlay(connected({ microphoneId: "r-spk" }), { setMicrophone: vi.fn(async () => true) });
+      // The speaker is on: the button offers the earpiece.
+      const quick = page.getByRole("button", { name: "Switch to phone earpiece" });
+      await expect.element(quick).toHaveAttribute("aria-pressed", "true");
+      await quick.click();
+      expect(value.setMicrophone).toHaveBeenCalledWith("r-ear");
+
+      await page.getByRole("button", { name: "Call settings" }).click();
+      await expect.element(page.getByRole("radiogroup", { name: "Sound" })).toBeInTheDocument();
+      await expect.element(page.getByRole("radio", { name: "Speaker" })).toHaveAttribute("aria-checked", "true");
+      await page.getByRole("radio", { name: "Phone earpiece" }).click();
+      expect(value.setMicrophone).toHaveBeenLastCalledWith("r-ear");
+    });
+
+    test("on the earpiece the quick button goes back to the speaker", async () => {
+      withDevices([
+        device("audioinput", "default", "Default"),
+        device("audioinput", "r-spk", "Speakerphone"),
+        device("audioinput", "r-ear", "Headset earpiece"),
+      ]);
+      const value = renderOverlay(connected({ microphoneId: "r-ear" }), { setMicrophone: vi.fn(async () => true) });
+      const quick = page.getByRole("button", { name: "Switch to speaker" });
+      await expect.element(quick).not.toHaveAttribute("aria-pressed", "true");
+      await quick.click();
+      expect(value.setMicrophone).toHaveBeenCalledWith("r-spk");
+    });
+
+    test("a video call has a quality slider with Auto on top, and the picture that arrives is shown", async () => {
+      withDevices([device("audioinput", "default", "Microphone")]);
+      const value = renderOverlay(
+        connected({ kind: "video", cameraOn: true, remoteCameraOn: true, quality: "auto", videoStats: { width: 1280, height: 720, fps: 30 } }),
+        { setQuality: vi.fn() },
+      );
+      await page.getByRole("button", { name: "Call settings" }).click();
+      const auto = page.getByRole("switch", { name: /Auto/ });
+      await expect.element(auto).toHaveAttribute("aria-checked", "true");
+      // Auto is on: the slider waits.
+      await expect.element(page.getByRole("slider", { name: "Video quality" })).toBeDisabled();
+      await expect.element(page.getByText("Receiving 1280×720 · 30 fps")).toBeInTheDocument();
+      // Turning Auto off lets the person pick a level; it starts at a good one.
+      await auto.click();
+      expect(value.setQuality).toHaveBeenLastCalledWith("hd");
+    });
+
+    test("with a fixed level the slider shows it, moves through the levels and Auto can be switched back on", async () => {
+      withDevices([device("audioinput", "default", "Microphone")]);
+      const value = renderOverlay(
+        connected({ kind: "video", cameraOn: true, remoteCameraOn: true, quality: "high" }),
+        { setQuality: vi.fn() },
+      );
+      await page.getByRole("button", { name: "Call settings" }).click();
+      const slider = page.getByRole("slider", { name: "Video quality" });
+      await expect.element(slider).toBeEnabled();
+      await expect.element(slider).toHaveAttribute("aria-valuetext", "480p");
+      await expect.element(page.getByRole("switch", { name: /Auto/ })).toHaveAttribute("aria-checked", "false");
+      await slider.fill("4");
+      expect(value.setQuality).toHaveBeenLastCalledWith("fhd");
+      await slider.fill("0");
+      expect(value.setQuality).toHaveBeenLastCalledWith("low");
+      await page.getByRole("switch", { name: /Auto/ }).click();
+      expect(value.setQuality).toHaveBeenLastCalledWith("auto");
+    });
+
+    test("the levels are named under the slider", async () => {
+      withDevices([device("audioinput", "default", "Microphone")]);
+      renderOverlay(connected({ kind: "video", cameraOn: true, remoteCameraOn: true, quality: "hd" }));
+      await page.getByRole("button", { name: "Call settings" }).click();
+      for (const label of ["240p", "360p", "480p", "720p", "1080p"]) {
+        await expect.element(page.getByText(label, { exact: true }).first()).toBeInTheDocument();
+      }
+    });
+
+    test("a video call can choose how the picture sits on the screen", async () => {
+      withDevices([device("audioinput", "default", "Microphone")]);
+      renderOverlay(connected({ kind: "video", cameraOn: true, remoteCameraOn: true, quality: "auto" }));
+      const mainFit = () => document.querySelector('video[data-slot="main"]')?.dataset.fit;
+      await page.getByRole("button", { name: "Call settings" }).click();
+      await expect.element(page.getByRole("radiogroup", { name: "Picture" })).toBeInTheDocument();
+      await page.getByRole("radio", { name: /Show the whole picture/ }).click();
+      expect(mainFit()).toBe("contain");
+      await page.getByRole("radio", { name: /Fill the screen/ }).click();
+      expect(mainFit()).toBe("cover");
+      expect(localStorage.getItem("aurelle-call-fit")).toBe("fill");
+    });
+
+    test("the settings close with Escape, and leave the call on screen", async () => {
+      withDevices([device("audioinput", "default", "Microphone")]);
+      renderOverlay(connected({ kind: "video", cameraOn: true, remoteCameraOn: true, quality: "auto" }));
+      await page.getByRole("button", { name: "Call settings" }).click();
+      await expect.element(page.getByRole("group", { name: "Call settings" })).toBeInTheDocument();
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await expect.poll(() => document.querySelector('[role="group"][aria-label="Call settings"]')).toBeNull();
+      expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    });
+
+    test("Escape pressed in a window on top of the call is left to that window", async () => {
+      withDevices([device("audioinput", "default", "Microphone")]);
+      renderOverlay(connected({ kind: "video", cameraOn: true, remoteCameraOn: true, quality: "auto" }));
+      await page.getByRole("button", { name: "Call settings" }).click();
+      const other = document.createElement("div");
+      document.body.appendChild(other);
+      const seen = vi.fn();
+      window.addEventListener("keydown", seen);
+      try {
+        other.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        expect(seen).toHaveBeenCalled();
+        expect(document.querySelector('[role="group"][aria-label="Call settings"]')).not.toBeNull();
+      } finally {
+        window.removeEventListener("keydown", seen);
+        other.remove();
+      }
+    });
+
+    test("the settings button says whether the settings are open", async () => {
+      withDevices([device("audioinput", "default", "Microphone")]);
+      renderOverlay(connected({ kind: "video", cameraOn: true, remoteCameraOn: true, quality: "auto" }));
+      const button = page.getByRole("button", { name: "Call settings", expanded: false });
+      await button.click();
+      await expect.element(page.getByRole("button", { name: "Call settings", expanded: true })).toBeInTheDocument();
+    });
+
+    test("a microphone that could not be opened is explained", async () => {
+      withDevices([device("audioinput", "default", "A"), device("audioinput", "b", "B")]);
+      renderOverlay(connected({ audioDeviceError: "no_device" }));
+      await page.getByRole("button", { name: "Call settings" }).click();
+      await expect.element(page.getByText("That microphone is not available any more.")).toBeInTheDocument();
+    });
+  });
+
+  describe("tapping the picture hides the details", () => {
+    const videoCall = (extra = {}) => ({
+      phase: "connected", kind: "video", peer, cameraOn: true, remoteCameraOn: true, connectedAt: Date.now(), trust: { status: "ok" }, ...extra,
+    });
+    const hidden = (what) => document.querySelector(`[data-chrome="${what}"]`)?.hasAttribute("inert");
+    // A tap on the picture itself (not on a button): the click lands on the dialog.
+    const tapPicture = () => document.querySelector('[role="dialog"]').click();
+
+    test("a tap on the picture hides the name, the encryption chip and the buttons, and another brings them back", async () => {
+      renderOverlay(videoCall());
+      await expect.element(page.getByRole("dialog")).toBeInTheDocument();
+      expect(hidden("header")).toBe(false);
+      tapPicture();
+      await expect.poll(() => hidden("header")).toBe(true);
+      expect(hidden("status")).toBe(true);
+      expect(hidden("controls")).toBe(true);
+      // The small picture of yourself stays, so a tap on it still swaps.
+      await expect.element(page.getByRole("button", { name: "Show your picture full screen" })).toBeInTheDocument();
+      tapPicture();
+      await expect.poll(() => hidden("header")).toBe(false);
+      expect(hidden("controls")).toBe(false);
+    });
+
+    test("with a mouse the details show when it moves and hide when it rests: a click does not hide them", async () => {
+      renderOverlay(videoCall(), undefined, { autoHideMs: 100 });
+      const dialog = document.querySelector('[role="dialog"]') || (await expect.element(page.getByRole("dialog")).toBeInTheDocument(), document.querySelector('[role="dialog"]'));
+      await expect.poll(() => hidden("controls")).toBe(true); // rested: hidden
+      dialog.dispatchEvent(new PointerEvent("pointermove", { pointerType: "mouse", bubbles: true }));
+      await expect.poll(() => hidden("controls")).toBe(false);
+      // A mouse press and click on the picture right after the move: still showing.
+      dialog.dispatchEvent(new PointerEvent("pointerdown", { pointerType: "mouse", bubbles: true }));
+      dialog.click();
+      await new Promise((r) => setTimeout(r, 30));
+      expect(hidden("controls")).toBe(false);
+    });
+
+    test("a tap on a button does its job and does not hide anything", async () => {
+      const value = renderOverlay(videoCall());
+      await page.getByRole("button", { name: "Mute microphone" }).click();
+      expect(hidden("controls")).toBe(false);
+      expect(value.setMuted).toHaveBeenCalled();
+    });
+
+    test("they hide by themselves after a few seconds without a touch, and a key press shows them again", async () => {
+      renderOverlay(videoCall(), undefined, { autoHideMs: 150 });
+      await expect.poll(() => hidden("controls")).toBe(true);
+      document.querySelector('[role="dialog"]').dispatchEvent(new KeyboardEvent("keydown", { key: "Shift", bubbles: true }));
+      await expect.poll(() => hidden("controls")).toBe(false);
+    });
+
+    test("a voice call keeps its details on screen", async () => {
+      renderOverlay({ phase: "connected", kind: "audio", peer, connectedAt: Date.now() }, undefined, { autoHideMs: 100 });
+      await new Promise((r) => setTimeout(r, 400));
+      tapPicture();
+      expect(hidden("header")).toBe(false);
+      expect(hidden("controls")).toBe(false);
+    });
+
+    test("they stay while a warning about a new device is on screen, and while the settings are open", async () => {
+      renderOverlay(videoCall({ trust: { status: "devices_added", verified: false, added: ["d"] } }), undefined, { autoHideMs: 100 });
+      await new Promise((r) => setTimeout(r, 400));
+      expect(hidden("header")).toBe(false);
+      expect(hidden("controls")).toBe(false);
+    });
+
+    const press = (el) => {
+      el.dispatchEvent(new PointerEvent("pointerdown", { pointerType: "touch", bubbles: true }));
+      el.click();
+    };
+
+    test("a tap outside the open settings closes them and does not hide the details", async () => {
+      renderOverlay(videoCall({ quality: "auto" }));
+      await page.getByRole("button", { name: "Call settings" }).click();
+      const menu = document.querySelector('[role="group"][aria-label="Call settings"]');
+      press(menu.previousElementSibling); // the layer behind the menu
+      await expect.poll(() => document.querySelector('[role="group"][aria-label="Call settings"]')).toBeNull();
+      expect(hidden("controls")).toBe(false);
+      expect(hidden("header")).toBe(false);
+    });
+
+    test("a tap on plain text inside the settings does not hide the details behind them", async () => {
+      renderOverlay(videoCall({ quality: "auto" }));
+      await page.getByRole("button", { name: "Call settings" }).click();
+      const menu = document.querySelector('[role="group"][aria-label="Call settings"]');
+      press(menu.querySelector("p"));
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await expect.poll(() => document.querySelector('[role="group"][aria-label="Call settings"]')).toBeNull();
+      expect(hidden("controls")).toBe(false);
+    });
+
+    test("with no picture on the screen the details stay, so there is something to read", async () => {
+      renderOverlay(videoCall({ remoteCameraOn: false }), undefined, { autoHideMs: 100 });
+      await new Promise((r) => setTimeout(r, 400));
+      expect(hidden("header")).toBe(false);
+      expect(hidden("controls")).toBe(false);
+      await expect.element(page.getByText("Camera off")).toBeVisible();
+    });
+
+    test("while a button has keyboard focus the details stay, and they go once it lets go", async () => {
+      renderOverlay(videoCall(), undefined, { autoHideMs: 120 });
+      await expect.element(page.getByRole("dialog")).toBeInTheDocument();
+      await userEvent.tab();
+      const focused = document.activeElement;
+      expect(document.querySelector('[role="dialog"]').contains(focused)).toBe(true);
+      await new Promise((r) => setTimeout(r, 500));
+      expect(hidden("controls")).toBe(false);
+      focused.blur();
+      await expect.poll(() => hidden("controls")).toBe(true);
+    });
+
+    test("when they hide the keyboard still reaches the call: a key brings them back", async () => {
+      renderOverlay(videoCall(), undefined, { autoHideMs: 100 });
+      await expect.poll(() => hidden("controls")).toBe(true);
+      // Nothing has focus any more (the hidden buttons are inert): the key goes to the page.
+      document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+      await expect.poll(() => hidden("controls")).toBe(false);
+    });
+
+    test("a call that has ended always shows its card", async () => {
+      renderOverlay({ phase: "ended", kind: "video", endReason: "hangup", peer });
+      await expect.element(page.getByRole("dialog")).toBeInTheDocument();
+      tapPicture();
+      expect(hidden("header")).toBe(false);
+    });
   });
 
   test("a call that ended normally has no technical details", async () => {

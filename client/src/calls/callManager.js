@@ -30,7 +30,11 @@ import {
   orderVideoCodecs,
   summarizeStats,
   tuneOpusSdp,
+  AUTO_MAX_TIER,
+  captureVideoConstraints,
+  isQualityChoice,
 } from "./mediaTuning.js";
+import { loadQuality, saveQuality } from "./callQuality.js";
 
 export const CALL_PHASE = Object.freeze({
   IDLE: "idle",
@@ -53,11 +57,23 @@ const FAILED_LINGER_MS = 10_000;
 const DETAILS_LINGER_MS = 20_000;
 const CONNECT_TIMEOUT_MS = 45_000;
 const MAX_REPORTED_PAIRS = 6;
+const MAX_MIC_RECOVERIES = 3;
+const MIC_RECOVERY_WINDOW_MS = 60_000;
+const AUDIO_ERROR_SHOWN_MS = 8_000;
 
 const MAX_ICE_RESTARTS = 3;
 const MAX_SIGNAL_AUTH_FAILURES = 3;
 const SLOW_CONNECT_MS = 10_000;
 const RINGING_REPORT_RETRY_MS = [1_000, 3_000];
+
+
+/** What went wrong opening a device, as a short word the screen can explain. */
+function mediaErrorReason(error) {
+  const name = String(error?.name || "");
+  if (name === "NotAllowedError" || name === "SecurityError") return "permission_denied";
+  if (name === "NotFoundError" || name === "OverconstrainedError") return "no_device";
+  return "failed";
+}
 
 const idleState = () => ({
   phase: CALL_PHASE.IDLE,
@@ -78,7 +94,11 @@ const idleState = () => ({
   connectingSlow: false,
   relayCheck: null, // null (no relay in use) | "pending" | "ok" | "unreachable" | "refused" | "proxied"
   connectionDetails: null, // lines for the "technical details" of a call that failed to connect
-  videoTier: DEFAULT_VIDEO_TIER,
+  videoTier: DEFAULT_VIDEO_TIER, // the level this device sends at
+  microphoneId: null, // the device id of the microphone in use
+  audioDeviceError: null, // why the last microphone switch did not work
+  quality: "auto", // what this person asked to watch: "auto" or one level
+  videoStats: null, // {width, height, fps} of the picture that arrives
   networkPaused: false,
   relayed: false,
   localStream: null,
@@ -166,9 +186,26 @@ export class CallManager {
       // "Ringing" is only reported to the caller while this screen can really
       // show the call (not in the background, not with the screen off).
       isPageVisible: () => typeof document === "undefined" || !document.hidden,
+      loadQuality,
+      saveQuality,
       broadcast: null,
       ...opts,
     };
+    let remembered = "auto";
+    try {
+      remembered = this.#opts.loadQuality?.();
+    } catch (_) {
+      // storage that cannot be read: start on Auto
+    }
+    this.#quality = isQualityChoice(remembered) ? remembered : "auto";
+    this.#state = this.#idle();
+  }
+
+  // What this person asked to watch ("auto" or one level), kept between calls.
+  #quality = "auto";
+
+  #idle() {
+    return { ...idleState(), quality: this.#quality };
   }
 
   // ── state ────────────────────────────────────────────────────────────────
@@ -752,6 +789,7 @@ export class CallManager {
     call.localStream.getTracks().forEach((track) => {
       const sender = pc.addTrack(track, call.localStream);
       if (track.kind === "video") call.videoSender = sender;
+      else if (track.kind === "audio") call.audioSender = sender;
     });
     if (call.kind === "video" && !call.videoSender && call.direction === "outgoing") {
       // Camera off (chosen or unavailable): still send and receive video, just
@@ -1108,11 +1146,15 @@ export class CallManager {
       hidden: Boolean(call.pageHidden),
       network: false,
     };
+    const firstMicrophone = stream.getAudioTracks()[0];
+    if (firstMicrophone) this.#watchMicrophone(call, firstMicrophone);
     this.#set({
       localStream: stream,
       cameraOn: stream.getVideoTracks().length > 0,
       cameraBlocked: call.cameraBlocked || null,
       muted: false,
+      microphoneId: stream.getAudioTracks()[0]?.getSettings?.().deviceId ?? null,
+      audioDeviceError: null,
     });
     if (call.kind === "video" && call.pageHidden) this.#reconcileCamera(call);
   }
@@ -1134,6 +1176,126 @@ export class CallManager {
     this.#set({ muted: Boolean(muted) });
     this.#sendMediaState(call);
   }
+
+  /**
+   * Switches the microphone during a call (a headset, a USB microphone, or on a
+   * phone the route: speakerphone, earpiece, Bluetooth). The new one takes the
+   * old one's place on the sender, so nothing is renegotiated.
+   * @returns {Promise<boolean>} whether the call is now using it
+   */
+  setMicrophone(deviceId) {
+    const call = this.#call;
+    if (!call || this.#isStale(call) || !call.localStream || typeof deviceId !== "string" || !deviceId) {
+      return Promise.resolve(false);
+    }
+    call.audioChain = (call.audioChain || Promise.resolve())
+      .then(() => this.#switchMicrophone(call, deviceId))
+      .catch(() => false);
+    return call.audioChain;
+  }
+
+  async #switchMicrophone(call, deviceId) {
+    if (this.#isStale(call)) return false;
+    const stream = call.localStream;
+    const current = stream.getAudioTracks()[0] || null;
+    if (current && current.readyState !== "ended" && current.getSettings?.().deviceId === deviceId) {
+      this.#set({ microphoneId: deviceId, audioDeviceError: null });
+      return true;
+    }
+    let fresh;
+    try {
+      fresh = await this.#opts.getUserMedia({
+        audio: { ...CAPTURE_CONSTRAINTS.audio, deviceId: { exact: deviceId } },
+        video: false,
+      });
+    } catch (error) {
+      if (!this.#isStale(call)) this.#noteAudioDeviceError(mediaErrorReason(error));
+      return false;
+    }
+    const track = fresh.getAudioTracks()[0];
+    if (!track || this.#isStale(call)) {
+      this.#stopStream(fresh);
+      return false;
+    }
+    call.micRecoveries = []; // a choice of the person starts the allowance afresh
+    return this.#useMicrophoneTrack(call, track, deviceId);
+  }
+
+  /** Puts a freshly opened microphone in the place of the one the call has now. */
+  async #useMicrophoneTrack(call, track, requestedId) {
+    const stream = call.localStream;
+    const current = stream.getAudioTracks()[0] || null;
+    // A muted call stays muted on the new device.
+    track.enabled = !this.#state.muted;
+    try {
+      if (call.audioSender) await call.audioSender.replaceTrack(track);
+    } catch (_) {
+      track.stop();
+      if (!this.#isStale(call)) this.#noteAudioDeviceError("failed");
+      return false;
+    }
+    if (this.#isStale(call)) {
+      track.stop();
+      return false;
+    }
+    // Muted while the swap was under way: the new microphone follows.
+    track.enabled = !this.#state.muted;
+    if (current) {
+      stream.removeTrack(current);
+      current.onended = null;
+      current.stop(); // lets go of the old device
+    }
+    stream.addTrack(track);
+    this.#watchMicrophone(call, track);
+    this.#set({ microphoneId: track.getSettings?.().deviceId || requestedId, audioDeviceError: null });
+    return true;
+  }
+
+  /** A microphone that goes away on its own (unplugged) is replaced by whatever the system uses now. */
+  #watchMicrophone(call, track) {
+    track.onended = () => {
+      // Only the microphone the call is using, and not one we let go of ourselves.
+      if (this.#isStale(call) || call.localStream?.getAudioTracks()[0] !== track) return;
+      call.audioChain = (call.audioChain || Promise.resolve()).then(() => this.#recoverMicrophone(call, track)).catch(() => false);
+    };
+  }
+
+  async #recoverMicrophone(call, dead) {
+    if (this.#isStale(call)) return false;
+    // Something else (a choice of the person) has replaced it while this waited.
+    if (call.localStream?.getAudioTracks()[0] !== dead) return false;
+    // A device that keeps dropping out is not chased for ever: a few replacements a minute.
+    const now = Date.now();
+    call.micRecoveries = (call.micRecoveries || []).filter((at) => now - at < MIC_RECOVERY_WINDOW_MS);
+    if (call.micRecoveries.length >= MAX_MIC_RECOVERIES) {
+      this.#noteAudioDeviceError("failed");
+      return false;
+    }
+    try {
+      const fresh = await this.#opts.getUserMedia({ audio: CAPTURE_CONSTRAINTS.audio, video: false });
+      const track = fresh.getAudioTracks()[0];
+      if (!track || this.#isStale(call) || call.localStream?.getAudioTracks()[0] !== dead) {
+        this.#stopStream(fresh);
+        return false;
+      }
+      call.micRecoveries.push(now);
+      return this.#useMicrophoneTrack(call, track, "default");
+    } catch (error) {
+      if (!this.#isStale(call)) this.#noteAudioDeviceError(mediaErrorReason(error));
+      return false;
+    }
+  }
+
+  /** Says why the microphone could not be switched, for a few seconds. */
+  #noteAudioDeviceError(reason) {
+    this.#set({ audioDeviceError: reason });
+    clearTimeout(this.#audioErrorTimer);
+    this.#audioErrorTimer = setTimeout(() => {
+      if (this.#state.audioDeviceError === reason) this.#set({ audioDeviceError: null });
+    }, AUDIO_ERROR_SHOWN_MS);
+  }
+
+  #audioErrorTimer = null;
 
   setCameraEnabled(enabled) {
     const call = this.#call;
@@ -1172,7 +1334,9 @@ export class CallManager {
     const current = stream.getVideoTracks()[0] || null;
     try {
       if (wanted() && !current) {
-        const fresh = await this.#opts.getUserMedia({ audio: false, video: CAPTURE_CONSTRAINTS.video });
+        const profile = call.peerQuality;
+        const fresh = await this.#opts.getUserMedia({ audio: false, video: captureVideoConstraints(profile) });
+        call.captureProfile = profile;
         if (this.#isStale(call) || !wanted()) {
           this.#stopStream(fresh);
         } else {
@@ -1180,6 +1344,8 @@ export class CallManager {
           stream.addTrack(track);
           if (call.videoSender) await call.videoSender.replaceTrack(track);
           call.cameraBlocked = null;
+          // The viewer may have asked for something else while the camera was starting.
+          if (call.peerQuality !== profile) await this.#applyCapture(call);
           await this.#applyVideoTier(call);
         }
       } else if (!wanted() && current) {
@@ -1210,13 +1376,76 @@ export class CallManager {
     const sender = call.videoSender;
     if (!sender || !sender.track || typeof sender.getParameters !== "function") return;
     try {
+      // Smooth motion while Auto adapts; sharp detail when a level was asked for.
+      sender.track.contentHint = call.peerQuality === "auto" ? "motion" : "detail";
+    } catch (_) {}
+    try {
       const params = sender.getParameters();
-      const encoding = encodingForTier(this.#state.videoTier);
+      const settings = sender.track.getSettings?.() || {};
+      const encoding = encodingForTier(this.#state.videoTier, { width: settings.width, height: settings.height });
       params.encodings = [{ ...(params.encodings?.[0] || {}), ...encoding }];
       await sender.setParameters(params);
     } catch (_) {
       // Not all browsers accept every field; the defaults are still sane.
     }
+  }
+
+  /** Asks the camera for the picture size that suits what the other side wants to watch. */
+  async #applyCapture(call) {
+    const track = call.localStream?.getVideoTracks()[0];
+    // Read at the moment it is needed: the other side may have asked again meanwhile.
+    const profile = call.peerQuality;
+    if (!track || typeof track.applyConstraints !== "function" || call.captureProfile === profile) return;
+    try {
+      await track.applyConstraints(captureVideoConstraints(profile));
+      // Only the camera that is still in use remembers it (a restarted one has its own record).
+      if (call.localStream?.getVideoTracks()[0] === track) call.captureProfile = profile;
+    } catch (_) {
+      // The camera cannot do it: it keeps what it has, and the encoder works from that.
+    }
+  }
+
+  /** What the other person asked to watch changed: send at that level, or adapt again. */
+  #onPeerQuality(call, quality) {
+    if (this.#isStale(call) || quality === call.peerQuality) return;
+    call.peerQuality = quality;
+    call.adaptation = initialAdaptation();
+    if (quality === "auto") {
+      // Back to adapting: a level above Auto's ceiling comes down to it.
+      if (this.#state.videoTier === "fhd") this.#set({ videoTier: AUTO_MAX_TIER });
+    } else {
+      this.#set({ videoTier: quality });
+    }
+    // The camera and the encoder follow one change at a time, always toward the latest ask.
+    call.qualityChain = (call.qualityChain || Promise.resolve())
+      .then(async () => {
+        if (this.#isStale(call)) return;
+        // A level that was asked for wins over a pause the network caused.
+        if (call.peerQuality !== "auto" && call.videoSuppressed.network) {
+          call.videoSuppressed.network = false;
+          await this.#reconcileCamera(call);
+        }
+        if (call.kind !== "video") return;
+        await this.#applyCapture(call);
+        await this.#applyVideoTier(call);
+      })
+      .catch(() => {});
+    return call.qualityChain;
+  }
+
+  /**
+   * What this person wants to watch: "auto" (the sender adapts to the network)
+   * or one fixed level. The other device is told and sends at that level.
+   */
+  setQuality(choice) {
+    if (!isQualityChoice(choice) || choice === this.#quality) return;
+    this.#quality = choice;
+    try {
+      this.#opts.saveQuality?.(choice);
+    } catch (_) {}
+    this.#set({ quality: choice });
+    const call = this.#call;
+    if (call && !this.#isStale(call)) this.#sendMediaState(call);
   }
 
   #sendMediaState(call) {
@@ -1228,6 +1457,7 @@ export class CallManager {
           t: "state",
           muted: this.#state.muted,
           video: call.localStream?.getVideoTracks().length > 0,
+          q: this.#quality,
         }),
       );
     } catch (_) {}
@@ -1239,6 +1469,8 @@ export class CallManager {
       const msg = JSON.parse(data);
       if (msg?.t === "state") {
         this.#set({ remoteMuted: msg.muted === true, remoteCameraOn: msg.video === true });
+        // Anything that is not a real level counts as Auto.
+        this.#onPeerQuality(call, isQualityChoice(msg.q) ? msg.q : "auto");
       }
     } catch (_) {}
   }
@@ -1251,9 +1483,21 @@ export class CallManager {
         const report = await call.pc.getStats();
         const sample = summarizeStats([...report.values()]);
         if (sample.relayed !== this.#state.relayed) this.#set({ relayed: sample.relayed });
+        // What is arriving, for the quality menu.
+        const seen = this.#state.remoteCameraOn ? sample.incoming || null : null;
+        const shown = this.#state.videoStats;
+        if (
+          seen?.width !== shown?.width ||
+          seen?.height !== shown?.height ||
+          seen?.fps !== shown?.fps
+        ) {
+          this.#set({ videoStats: seen });
+        }
         if (call.kind !== "video" || call.videoSuppressed.user || call.videoSuppressed.hidden) return;
+        // A level that was asked for is kept: only Auto adapts.
+        if (call.peerQuality !== "auto") return;
 
-        const { tier, state } = nextVideoTier(this.#state.videoTier, sample, call.adaptation);
+        const { tier, state } = nextVideoTier(this.#state.videoTier, sample, call.adaptation, AUTO_MAX_TIER);
         call.adaptation = state;
         if (tier !== this.#state.videoTier) {
           this.#set({ videoTier: tier });
@@ -1317,6 +1561,8 @@ export class CallManager {
       videoSender: null,
       videoSuppressed: { user: false, hidden: false, network: false },
       adaptation: initialAdaptation(),
+      peerQuality: "auto", // what the other person asked to watch: what this device sends
+      captureProfile: "auto", // what the camera was last asked for
       calleeDeviceId: null,
       queue: Promise.resolve(),
       sendSeq: {},
@@ -1337,7 +1583,7 @@ export class CallManager {
     };
     this.#call = call;
     this.#state = {
-      ...idleState(),
+      ...this.#idle(),
       callId: id,
       kind,
       direction,
@@ -1402,7 +1648,7 @@ export class CallManager {
     this.#lingerTimer = setTimeout(() => {
       if (this.#call === call) {
         this.#call = null;
-        this.#state = idleState();
+        this.#state = this.#idle();
         this.#set({});
       }
     }, connectionDetails?.length ? DETAILS_LINGER_MS : FAILURE_REASONS.has(reason) ? FAILED_LINGER_MS : ENDED_LINGER_MS);
@@ -1419,7 +1665,7 @@ export class CallManager {
     this.#teardown(call);
     clearTimeout(this.#lingerTimer);
     this.#call = null;
-    this.#state = idleState();
+    this.#state = this.#idle();
     this.#set({});
   }
 

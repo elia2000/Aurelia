@@ -9,6 +9,7 @@ import {
   FakeTrack,
   linkDataChannels,
   makeGetUserMedia,
+  tick,
   waitFor,
 } from "./fakes.js";
 
@@ -373,10 +374,11 @@ describe("mute and video", () => {
     expect(bob.manager.getState().remoteMuted).toBe(false);
   });
 
-  test("video calls capture a modest resolution and frame rate", async () => {
+  test("video calls start with a 720p picture at up to 30 frames, which the encoder scales down when needed", async () => {
     const { alice } = await connectedCall({ kind: "video" });
     const constraints = alice.getUserMedia.calls[0];
-    expect(constraints.video.width.ideal).toBeLessThanOrEqual(640);
+    expect(constraints.video.height.ideal).toBe(720);
+    expect(constraints.video.width.max).toBeLessThanOrEqual(1280);
     expect(constraints.video.frameRate.max).toBeLessThanOrEqual(30);
     expect(alice.manager.getState().cameraOn).toBe(true);
   });
@@ -489,6 +491,413 @@ describe("network adaptation", () => {
     pcA.statsReport = badStats;
     await vi.advanceTimersByTimeAsync(30_000);
     expect(alice.manager.getState().videoTier).toBe("mid");
+  });
+});
+
+describe("video quality", () => {
+  const videoCall = async (opts = {}) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    const ctx = await connectedCall({ kind: "video", ...opts });
+    linkDataChannels(ctx.pcA, ctx.pcB); // the in-band channel the two devices talk over
+    await vi.advanceTimersByTimeAsync(10);
+    return ctx;
+  };
+  const sentBy = (pc) => pc.senders.find((sender) => sender.track?.kind === "video");
+  const goodStats = [
+    { id: "p", type: "candidate-pair", nominated: true, currentRoundTripTime: 0.05, localCandidateId: "l", remoteCandidateId: "r" },
+    { id: "l", type: "local-candidate", candidateType: "host" },
+    { id: "r", type: "remote-candidate", candidateType: "host" },
+    { id: "x", type: "remote-inbound-rtp", fractionLost: 0 },
+  ];
+  const badStats = [
+    { id: "p", type: "candidate-pair", nominated: true, currentRoundTripTime: 0.9, localCandidateId: "l", remoteCandidateId: "r" },
+    { id: "l", type: "local-candidate", candidateType: "host" },
+    { id: "r", type: "remote-candidate", candidateType: "host" },
+    { id: "x", type: "remote-inbound-rtp", fractionLost: 0.2 },
+  ];
+  const settle = () => vi.advanceTimersByTimeAsync(50);
+
+  test("starts on Auto, or on what this device chose last time", async () => {
+    const { alice } = await videoCall();
+    expect(alice.manager.getState().quality).toBe("auto");
+    vi.useRealTimers();
+    const saved = await connectedCall({ kind: "video", aliceOpts: { loadQuality: () => "hd" } });
+    expect(saved.alice.manager.getState().quality).toBe("hd");
+  });
+
+  test("choosing a level is remembered and refused when it is not a level", async () => {
+    const saveQuality = vi.fn();
+    const { alice } = await videoCall({ aliceOpts: { saveQuality } });
+    alice.manager.setQuality("fhd");
+    expect(alice.manager.getState().quality).toBe("fhd");
+    expect(saveQuality).toHaveBeenCalledWith("fhd");
+    alice.manager.setQuality("off");
+    alice.manager.setQuality("__proto__");
+    alice.manager.setQuality(undefined);
+    expect(alice.manager.getState().quality).toBe("fhd");
+    expect(saveQuality).toHaveBeenCalledTimes(1);
+  });
+
+  test("what one person asks to watch sets what the other sends", async () => {
+    const { alice, bob, pcB } = await videoCall();
+    alice.manager.setQuality("hd");
+    await settle();
+    // Bob is the one sending to Alice: his picture now goes out at 720p.
+    expect(bob.manager.getState().videoTier).toBe("hd");
+    expect(sentBy(pcB).params.encodings[0]).toMatchObject({ maxBitrate: 1_800_000, maxFramerate: 30, active: true });
+    // Alice's own request does not change what she sends.
+    expect(alice.manager.getState().videoTier).toBe("mid");
+  });
+
+  test("a fixed level is kept even when the network looks bad, and the camera is not paused for it", async () => {
+    const { alice, bob, pcB } = await videoCall();
+    alice.manager.setQuality("fhd");
+    await settle();
+    pcB.statsReport = badStats;
+    for (let i = 0; i < 8; i += 1) await vi.advanceTimersByTimeAsync(5000);
+    expect(bob.manager.getState().videoTier).toBe("fhd");
+    expect(bob.manager.getState().cameraOn).toBe(true);
+    expect(bob.manager.getState().networkPaused).toBe(false);
+  });
+
+  test("asking for a fixed level brings back a picture that was paused for the network", async () => {
+    const { alice, bob, pcB } = await videoCall();
+    pcB.statsReport = badStats;
+    for (let i = 0; i < 6; i += 1) await vi.advanceTimersByTimeAsync(5000);
+    expect(bob.manager.getState().networkPaused).toBe(true);
+    alice.manager.setQuality("high");
+    await settle();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(bob.manager.getState().networkPaused).toBe(false);
+    expect(bob.manager.getState().cameraOn).toBe(true);
+    expect(bob.manager.getState().videoTier).toBe("high");
+  });
+
+  test("Auto climbs with a healthy network, up to 720p", async () => {
+    const { bob, pcB } = await videoCall();
+    pcB.statsReport = goodStats;
+    for (let i = 0; i < 12; i += 1) await vi.advanceTimersByTimeAsync(5000);
+    expect(bob.manager.getState().videoTier).toBe("hd");
+  });
+
+  test("going back to Auto from the top level comes down to 720p and adapts again", async () => {
+    const { alice, bob, pcB } = await videoCall();
+    alice.manager.setQuality("fhd");
+    await settle();
+    expect(bob.manager.getState().videoTier).toBe("fhd");
+    alice.manager.setQuality("auto");
+    await settle();
+    expect(bob.manager.getState().videoTier).toBe("hd");
+    pcB.statsReport = badStats;
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(bob.manager.getState().videoTier).toBe("high");
+  });
+
+  test("the camera is asked for a bigger picture when the other side wants the top level", async () => {
+    const { alice, bob } = await videoCall();
+    const track = bob.manager.getState().localStream.getVideoTracks()[0];
+    track.applyConstraints = vi.fn(async () => {});
+    alice.manager.setQuality("fhd");
+    await settle();
+    expect(track.applyConstraints).toHaveBeenCalledWith(expect.objectContaining({ height: { ideal: 1080, max: 1080 } }));
+    track.applyConstraints.mockClear();
+    alice.manager.setQuality("fhd"); // nothing new
+    await settle();
+    expect(track.applyConstraints).not.toHaveBeenCalled();
+  });
+
+  test("quick changes of what is asked for are applied to the camera one after the other, ending on the last", async () => {
+    const { alice, bob } = await videoCall();
+    const track = bob.manager.getState().localStream.getVideoTracks()[0];
+    const pending = [];
+    track.applyConstraints = vi.fn(() => new Promise((resolve) => pending.push(resolve)));
+    alice.manager.setQuality("fhd");
+    await settle();
+    expect(track.applyConstraints).toHaveBeenCalledTimes(1);
+    expect(track.applyConstraints.mock.calls[0][0].height.ideal).toBe(1080);
+    // Asked again while the camera is still being changed: it waits its turn.
+    alice.manager.setQuality("mid");
+    await settle();
+    expect(track.applyConstraints).toHaveBeenCalledTimes(1);
+    pending[0]();
+    await settle();
+    expect(track.applyConstraints).toHaveBeenCalledTimes(2);
+    expect(track.applyConstraints.mock.calls[1][0].height.ideal).toBe(360);
+    pending[1]();
+    await settle();
+    expect(bob.manager.getState().videoTier).toBe("mid");
+    // Asking for something and then changing mind before the camera got to it: only the last one is applied.
+    alice.manager.setQuality("high");
+    alice.manager.setQuality("hd");
+    await settle();
+    expect(track.applyConstraints).toHaveBeenCalledTimes(3);
+    expect(track.applyConstraints.mock.calls[2][0].height.ideal).toBe(720);
+    pending.splice(0).forEach((resolve) => resolve());
+    await settle();
+    expect(track.applyConstraints).toHaveBeenCalledTimes(3);
+    expect(bob.manager.getState().videoTier).toBe("hd");
+  });
+
+  test("a level asked for while the camera is starting is applied to the camera that arrives", async () => {
+    const { alice, bob } = await videoCall();
+    await bob.manager.setCameraEnabled(false);
+    await settle();
+    alice.manager.setQuality("low");
+    await settle();
+    // The camera starts slowly: the answer comes after the viewer changed their mind.
+    let release;
+    const held = new Promise((resolve) => (release = resolve));
+    const fresh = new FakeTrack("video");
+    fresh.applyConstraints = vi.fn(async () => {});
+    bob.getUserMedia.mockImplementationOnce(async () => {
+      await held;
+      return new FakeStream([fresh]);
+    });
+    const turnedOn = bob.manager.setCameraEnabled(true);
+    await settle();
+    alice.manager.setQuality("fhd");
+    await settle();
+    release();
+    await turnedOn;
+    await settle();
+    expect(bob.manager.getState().cameraOn).toBe(true);
+    expect(fresh.applyConstraints).toHaveBeenCalledTimes(1);
+    expect(fresh.applyConstraints.mock.calls[0][0].height.ideal).toBe(1080);
+  });
+
+  test("the picture of the other person is not reported once their camera is off", async () => {
+    const { alice, pcA, bob } = await videoCall();
+    pcA.statsReport = [...goodStats, { id: "v", type: "inbound-rtp", kind: "video", frameWidth: 1280, frameHeight: 720, framesPerSecond: 30 }];
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(alice.manager.getState().videoStats).toEqual({ width: 1280, height: 720, fps: 30 });
+    await bob.manager.setCameraEnabled(false);
+    await settle();
+    expect(alice.manager.getState().remoteCameraOn).toBe(false);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(alice.manager.getState().videoStats).toBeNull();
+  });
+
+  test("a request that is not a real level counts as Auto", async () => {
+    const { alice, bob, pcB } = await videoCall();
+    alice.manager.setQuality("hd");
+    await settle();
+    expect(bob.manager.getState().videoTier).toBe("hd");
+    // A misbehaving peer sends nonsense on the in-band channel.
+    pcB.dc.onmessage({ data: JSON.stringify({ t: "state", muted: false, video: true, q: "__proto__" }) });
+    await settle();
+    pcB.statsReport = badStats;
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(bob.manager.getState().videoTier).toBe("high"); // adapting again, from the 720p it was on
+  });
+
+  test("the picture that arrives is reported, and only when it changes", async () => {
+    const { alice, pcA } = await videoCall();
+    expect(alice.manager.getState().videoStats).toBeNull();
+    pcA.statsReport = [...goodStats, { id: "v", type: "inbound-rtp", kind: "video", frameWidth: 1280, frameHeight: 720, framesPerSecond: 30 }];
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(alice.manager.getState().videoStats).toEqual({ width: 1280, height: 720, fps: 30 });
+    const before = alice.manager.getState();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(alice.manager.getState().videoStats).toBe(before.videoStats);
+  });
+});
+
+describe("choosing the microphone", () => {
+  const audioSender = (pc) => pc.senders.find((sender) => sender.track?.kind === "audio");
+
+  test("a new microphone replaces the old one without a new negotiation, and the old one is released", async () => {
+    const { alice, pcA } = await connectedCall();
+    const before = alice.manager.getState().localStream.getAudioTracks()[0];
+    const offers = pcA.offerOptions.length;
+    expect(await alice.manager.setMicrophone("usb-mic")).toBe(true);
+    const after = alice.manager.getState().localStream.getAudioTracks();
+    expect(after).toHaveLength(1);
+    expect(after[0]).not.toBe(before);
+    expect(after[0].getSettings().deviceId).toBe("usb-mic");
+    expect(before.stopped).toBe(true);
+    expect(audioSender(pcA).track).toBe(after[0]);
+    expect(pcA.offerOptions.length).toBe(offers);
+    expect(alice.getUserMedia.calls.at(-1)).toMatchObject({ video: false, audio: { deviceId: { exact: "usb-mic" }, echoCancellation: true } });
+    expect(alice.manager.getState().microphoneId).toBe("usb-mic");
+  });
+
+  test("a muted call stays muted on the new microphone", async () => {
+    const { alice } = await connectedCall();
+    alice.manager.setMuted(true);
+    await alice.manager.setMicrophone("usb-mic");
+    expect(alice.manager.getState().localStream.getAudioTracks()[0].enabled).toBe(false);
+    expect(alice.manager.getState().muted).toBe(true);
+  });
+
+  test("a microphone that cannot be opened leaves the call on the old one and says so", async () => {
+    const calls = [];
+    const getUserMedia = vi.fn(async (constraints) => {
+      calls.push(constraints);
+      if (constraints.audio?.deviceId) throw Object.assign(new Error("gone"), { name: "NotFoundError" });
+      return new FakeStream([new FakeTrack("audio")]);
+    });
+    const { alice, pcA } = await connectedCall({ aliceOpts: { getUserMedia } });
+    const before = alice.manager.getState().localStream.getAudioTracks()[0];
+    expect(await alice.manager.setMicrophone("unplugged")).toBe(false);
+    expect(alice.manager.getState().localStream.getAudioTracks()[0]).toBe(before);
+    expect(before.stopped).toBe(false);
+    expect(audioSender(pcA).track).toBe(before);
+    expect(alice.manager.getState().audioDeviceError).toBe("no_device");
+    // The next try starts clean.
+    getUserMedia.mockImplementation(async () => new FakeStream([new FakeTrack("audio", "other")]));
+    expect(await alice.manager.setMicrophone("other")).toBe(true);
+    expect(alice.manager.getState().audioDeviceError).toBeNull();
+  });
+
+  test("asking for the same microphone again does nothing, and there is nothing to do outside a call", async () => {
+    const idle = new FakeServer();
+    const lonely = await idle.addUser("carol");
+    expect(await lonely.manager.setMicrophone("x")).toBe(false);
+
+    const { alice } = await connectedCall();
+    await alice.manager.setMicrophone("usb-mic");
+    const requests = alice.getUserMedia.calls.length;
+    expect(await alice.manager.setMicrophone("usb-mic")).toBe(true);
+    expect(alice.getUserMedia.calls.length).toBe(requests);
+  });
+
+  test("a microphone that is unplugged mid-call is replaced by the system default", async () => {
+    const { alice, pcA } = await connectedCall();
+    await alice.manager.setMicrophone("usb-mic");
+    const unplugged = alice.manager.getState().localStream.getAudioTracks()[0];
+    const requests = alice.getUserMedia.calls.length;
+    unplugged.readyState = "ended";
+    unplugged.onended?.();
+    await waitFor(() => alice.manager.getState().localStream.getAudioTracks()[0] !== unplugged, { label: "replaced" });
+    const next = alice.manager.getState().localStream.getAudioTracks();
+    expect(next).toHaveLength(1);
+    expect(audioSender(pcA).track).toBe(next[0]);
+    // It asked for whatever the system uses now, not for the device that went away.
+    expect(alice.getUserMedia.calls.length).toBe(requests + 1);
+    expect(alice.getUserMedia.calls.at(-1).audio.deviceId).toBeUndefined();
+    expect(alice.manager.getState().microphoneId).toBe("default");
+  });
+
+  test("a call whose first microphone is unplugged recovers the same way", async () => {
+    const { alice } = await connectedCall();
+    const first = alice.manager.getState().localStream.getAudioTracks()[0];
+    first.readyState = "ended";
+    first.onended?.();
+    await waitFor(() => alice.manager.getState().localStream.getAudioTracks()[0] !== first, { label: "replaced" });
+    expect(alice.manager.getState().localStream.getAudioTracks()).toHaveLength(1);
+  });
+
+  test("a microphone we replaced ourselves does not trigger a recovery, and recovery gives up after a few tries", async () => {
+    const { alice } = await connectedCall();
+    const before = alice.manager.getState().localStream.getAudioTracks()[0];
+    await alice.manager.setMicrophone("usb-mic");
+    const requests = alice.getUserMedia.calls.length;
+    before.onended?.(); // the old track, long gone from the call
+    await tick();
+    expect(alice.getUserMedia.calls.length).toBe(requests);
+
+    // A device that keeps dropping out is not chased for ever.
+    for (let i = 0; i < 6; i += 1) {
+      const current = alice.manager.getState().localStream.getAudioTracks()[0];
+      current.readyState = "ended";
+      current.onended?.();
+      await tick();
+      await tick();
+    }
+    expect(alice.getUserMedia.calls.length - requests).toBeLessThanOrEqual(3);
+  });
+
+  test("a microphone that went away is replaced even when its owner picks that same device again", async () => {
+    const { alice } = await connectedCall();
+    await alice.manager.setMicrophone("usb-mic");
+    const dead = alice.manager.getState().localStream.getAudioTracks()[0];
+    dead.readyState = "ended"; // gone, and no 'ended' event was seen
+    expect(await alice.manager.setMicrophone("usb-mic")).toBe(true);
+    const now = alice.manager.getState().localStream.getAudioTracks()[0];
+    expect(now).not.toBe(dead);
+    expect(now.readyState).toBe("live");
+  });
+
+  test("muting while the microphone is being swapped leaves the new one muted", async () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const { alice, pcA } = await connectedCall();
+    const sender = pcA.senders.find((x) => x.track?.kind === "audio");
+    const replace = sender.replaceTrack;
+    sender.replaceTrack = vi.fn(async (track) => { await gate; return replace(track); });
+    const swapping = alice.manager.setMicrophone("usb-mic");
+    await tick();
+    alice.manager.setMuted(true); // while the swap is waiting
+    release();
+    await swapping;
+    expect(alice.manager.getState().localStream.getAudioTracks()[0].enabled).toBe(false);
+    expect(alice.manager.getState().muted).toBe(true);
+  });
+
+  test("a recovery that was waiting is skipped when a microphone the person chose has taken over meanwhile", async () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const getUserMedia = vi.fn(async (constraints) => {
+      if (constraints.audio?.deviceId?.exact === "chosen") await gate;
+      return new FakeStream([new FakeTrack("audio", constraints.audio?.deviceId?.exact || "default")]);
+    });
+    const { alice } = await connectedCall({ aliceOpts: { getUserMedia } });
+    const first = alice.manager.getState().localStream.getAudioTracks()[0];
+    const choosing = alice.manager.setMicrophone("chosen"); // slow
+    await tick();
+    first.readyState = "ended";
+    first.onended?.(); // the old one drops out while the choice is still being made
+    release();
+    await choosing;
+    await tick();
+    await tick();
+    const tracks = alice.manager.getState().localStream.getAudioTracks();
+    expect(tracks).toHaveLength(1);
+    expect(tracks[0].getSettings().deviceId).toBe("chosen");
+    expect(getUserMedia.mock.calls.filter(([c]) => !c.audio?.deviceId).length).toBe(1); // only the call's own first one
+  });
+
+  test("when no microphone can be found again the person is told, and a later choice works", async () => {
+    const getUserMedia = vi.fn(async (constraints) => {
+      if (getUserMedia.broken) throw Object.assign(new Error("gone"), { name: "NotFoundError" });
+      return new FakeStream([new FakeTrack("audio", constraints.audio?.deviceId?.exact || "default")]);
+    });
+    const { alice } = await connectedCall({ aliceOpts: { getUserMedia } });
+    const first = alice.manager.getState().localStream.getAudioTracks()[0];
+    getUserMedia.broken = true;
+    first.readyState = "ended";
+    first.onended?.();
+    await waitFor(() => alice.manager.getState().audioDeviceError === "no_device", { label: "told" });
+    getUserMedia.broken = false;
+    expect(await alice.manager.setMicrophone("usb-mic")).toBe(true);
+    expect(alice.manager.getState().audioDeviceError).toBeNull();
+    // ... and the next drop-out is looked after again.
+    const second = alice.manager.getState().localStream.getAudioTracks()[0];
+    second.readyState = "ended";
+    second.onended?.();
+    await waitFor(() => alice.manager.getState().localStream.getAudioTracks()[0] !== second, { label: "recovered" });
+  });
+
+  test("the note about a microphone that could not be used goes away by itself", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    const getUserMedia = vi.fn(async (constraints) => {
+      if (constraints.audio?.deviceId) throw Object.assign(new Error("x"), { name: "NotFoundError" });
+      return new FakeStream([new FakeTrack("audio")]);
+    });
+    const { alice } = await connectedCall({ aliceOpts: { getUserMedia } });
+    await alice.manager.setMicrophone("gone");
+    expect(alice.manager.getState().audioDeviceError).toBe("no_device");
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(alice.manager.getState().audioDeviceError).toBeNull();
+  });
+
+  test("two quick choices end on the last one, with one microphone open", async () => {
+    const { alice } = await connectedCall();
+    await Promise.all([alice.manager.setMicrophone("first"), alice.manager.setMicrophone("second")]);
+    const tracks = alice.manager.getState().localStream.getAudioTracks();
+    expect(tracks).toHaveLength(1);
+    expect(tracks[0].getSettings().deviceId).toBe("second");
+    expect(alice.manager.getState().microphoneId).toBe("second");
   });
 });
 

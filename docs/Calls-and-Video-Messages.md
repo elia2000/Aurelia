@@ -57,6 +57,17 @@ Calls are one-to-one and happen in direct chats. You can minimise the call scree
 - In a video call the camera button turns your video on and off at any time. When someone's camera is off the other person sees a **black screen** that says *Camera off* (their name stays visible), and a small black tile stands in for your own picture.
 - On an incoming video call you can press **Answer with camera off** to join without showing yourself. You still see them, and you can switch your camera on later without reconnecting.
 - If the camera is blocked or missing, the call is **not** dropped: you join without video and the screen tells you why. Only a blocked or missing microphone ends a call.
+- **Swap the pictures.** The other person fills the screen and you are the small tile. Tap your own tile to put yourself full screen and the other person in the tile; tap again to swap back. The swap is there once the call is connected, and it stays if you minimise the call and open it again.
+- **A clear view.** Tap the picture to hide the name, the emoji code and the buttons; tap again to bring them back. They also hide by themselves after 5 seconds, come back when you move the mouse or press a key, and stay while a warning or the call settings are open, while you move through the buttons with the keyboard, or when there is no picture to look at.
+
+### Sound and video quality during a call
+
+The sliders button next to the microphone and camera buttons opens the call's settings. It only appears when there is something to choose.
+
+- **On a computer:** pick the *Speaker* and the *Microphone* when the computer has more than one. The speaker choice is remembered on that device. The speaker list appears only where the browser lets a page choose the speaker (Chrome and Edge do; other browsers vary), and the microphone list only when there is more than one.
+- **On an Android phone (Chrome):** the browser cannot pick a speaker like a computer, but it lists the phone's ways of playing a call: *Speaker*, *Phone earpiece*, *Bluetooth*, *Wired headset*. They appear as a *Sound* choice, and a speaker button next to the microphone button flips between the loudspeaker and the earpiece like in a phone call. Aurelle switches by opening the matching microphone entry, which is how Chrome routes a call's sound. This depends on the phone and browser: if they list fewer than two ways, no sound choice is shown. An iPhone or iPad with iOS 26 or newer lists its speakers the same way, if Safari allows it; on older ones use the system's audio output switcher. The call plays through the loudspeaker by default.
+- **Video quality** (video calls): *Auto* keeps the call smooth: it starts at 360p, climbs up to 720p while the connection is healthy, steps down when it is not and, in the worst case, pauses the picture to keep the voice going. Or pick one fixed level: 240p (saves data), 360p, 480p, 720p HD or 1080p Full HD. Your choice is what *you* watch: the other person's phone sends you that quality (it cannot exceed what their camera and connection can do). A fixed level is kept even when the network is poor, so choose *Auto* if the picture freezes. The menu shows the size and frame rate that is arriving. Your choice is remembered on that device.
+- **Picture.** Chooses how the picture sits on the screen: *Auto* fills the screen unless that would cut off a lot (a wide picture on an upright phone is shown whole), *Fill the screen* (the edges may be cut off) or *Show the whole picture* (with bars at the sides or at the top and bottom).
 
 ### Video messages
 

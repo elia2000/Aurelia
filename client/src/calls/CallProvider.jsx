@@ -178,6 +178,8 @@ export function CallProvider({ user, children }) {
       dismiss: () => manager?.dismiss(),
       setMuted: (muted) => manager?.setMuted(muted),
       setCameraEnabled: (enabled) => manager?.setCameraEnabled(enabled),
+      setQuality: (choice) => manager?.setQuality(choice),
+      setMicrophone: (deviceId) => manager?.setMicrophone(deviceId) ?? Promise.resolve(false),
       // A call that has just ended only lingers on screen; a new one may start.
       inCall: phase !== CALL_PHASE.IDLE && phase !== CALL_PHASE.ENDED,
     }),
