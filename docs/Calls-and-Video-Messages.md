@@ -136,7 +136,6 @@ denied-peer-ip=127.0.0.0-127.255.255.255
 denied-peer-ip=169.254.0.0-169.254.255.255
 denied-peer-ip=172.16.0.0-172.31.255.255
 denied-peer-ip=192.168.0.0-192.168.255.255
-denied-peer-ip=::-::
 denied-peer-ip=::1-::1
 denied-peer-ip=::ffff:0:0-::ffff:ffff:ffff
 denied-peer-ip=64:ff9b::-64:ff9b::ffff:ffff
@@ -166,6 +165,8 @@ When a call cannot connect, the *Couldn't reach this server's relay* card (and t
 | `Relay candidates: 1` or more (for example `tcp 1`) but the call still fails | This phone reaches the relay. The other person's phone is the one that cannot, so check their connection and VPN. |
 | *This server's relay is behind Cloudflare's proxy* | The relay's DNS record is proxied (orange cloud). Set it to **DNS only**, or use the server's IP address in `CALLS_TURN_URLS`. |
 | *This server's relay refused this device* (`error 401 Unauthorized`) | The relay was reached but refused the credentials: `CALLS_TURN_SECRET` differs from coturn's `static-auth-secret`, or the clocks of the app server and the relay differ. |
+
+The details also say which device this is (`Role: caller` or `callee`), which servers it was given (`Servers:`, without credentials), which kinds of address it found (`Candidates found here: host 2, relay 1`) and which kinds the other device sent (`Candidates from the other device`). `Pairs tried` lists how each pair of addresses fared (`host udp -> relay udp: failed, sent 7, answered 0`): a pair that was *sent* requests but never *answered* is a path that drops packets. **Copy report** puts all of this, with the app build and browser, on the clipboard so it can be pasted to whoever runs the server. It contains kinds of address only: no IP addresses and no credentials.
 
 ### Hide IP addresses (high-security mode)
 

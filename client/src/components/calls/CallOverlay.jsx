@@ -20,6 +20,8 @@ import { CALL_PHASE, isFailureReason } from "../../calls/callManager.js";
 import { useCalls } from "../../calls/callContext.js";
 import { TRUST } from "../../e2ee/trust.js";
 import { hasPersian } from "../../utils/fontUtils.js";
+import { CLIENT_BUILD_ID } from "../../buildInfo.js";
+import { buildCallReport, copyText } from "../../calls/report.js";
 
 const END_MESSAGES = {
   hangup: "Call ended",
@@ -104,12 +106,15 @@ function RoundButton({ label, onClick, active = false, danger = false, accept = 
 export default function CallOverlay({ user }) {
   const { state, minimized, setMinimized, accept, decline, hangup, dismiss, setMuted, setCameraEnabled } = useCalls();
   const [safetyOpen, setSafetyOpen] = useState(false);
+  const [copyState, setCopyState] = useState("idle"); // idle | copied | failed
   const remoteVideoRef = useRef(null);
   const remoteAudioRef = useRef(null);
   const localVideoRef = useRef(null);
   const dialogRef = useRef(null);
 
   const { phase, peer, kind, muted, cameraOn, remoteCameraOn, remoteMuted, sas, trust, relayed, networkPaused, cameraBlocked, connectingSlow, relayCheck, connectionDetails } = state;
+  // A new report starts with a fresh button.
+  useEffect(() => setCopyState("idle"), [connectionDetails]);
   const active = phase && phase !== CALL_PHASE.IDLE;
   const connected = phase === CALL_PHASE.CONNECTED;
   const elapsed = useElapsed(state.connectedAt, connected);
@@ -132,6 +137,17 @@ export default function CallOverlay({ user }) {
   // A call that fails explains why on its card, which a minimised pill is too
   // small to show: open the card so the reason can be read.
   const failedEnd = phase === CALL_PHASE.ENDED && isFailureReason(state.endReason);
+  const copyReport = async () => {
+    const copied = await copyText(
+      buildCallReport({
+        reason: state.endReason,
+        lines: connectionDetails || [],
+        buildId: CLIENT_BUILD_ID,
+        userAgent: typeof navigator === "undefined" ? "" : navigator.userAgent,
+      }),
+    );
+    setCopyState(copied ? "copied" : "failed");
+  };
   useEffect(() => {
     if (failedEnd && minimized) setMinimized(false);
   }, [failedEnd, minimized, setMinimized]);
@@ -311,9 +327,16 @@ export default function CallOverlay({ user }) {
               <summary className="cursor-pointer text-center">Technical details</summary>
               <ul className="mt-1 space-y-0.5 break-words font-mono text-[11px]">
                 {connectionDetails.map((line, index) => (
-                  <li key={index}>{line}</li>
+                  <li key={index} className="whitespace-pre-wrap">{line}</li>
                 ))}
               </ul>
+              <button
+                type="button"
+                onClick={copyReport}
+                className="mt-2 rounded-full border border-slate-600 px-3 py-1 text-xs text-slate-200 hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+              >
+                {copyState === "copied" ? "Copied" : copyState === "failed" ? "Couldn't copy" : "Copy report"}
+              </button>
             </details>
           ) : null}
           {/* Hints that appear while the call goes on are announced (the region

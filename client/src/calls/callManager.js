@@ -20,6 +20,7 @@ import {
   verifyInvite,
   verifyReveal,
 } from "./callCrypto.js";
+import { countCandidate, describeCandidate, formatCounts, newCandidateCounts, summariseServers } from "./connectionReport.js";
 import {
   CAPTURE_CONSTRAINTS,
   DEFAULT_VIDEO_TIER,
@@ -50,6 +51,9 @@ const ENDED_LINGER_MS = 2_500;
 // when there are technical details to open).
 const FAILED_LINGER_MS = 10_000;
 const DETAILS_LINGER_MS = 20_000;
+const CONNECT_TIMEOUT_MS = 45_000;
+const MAX_REPORTED_PAIRS = 6;
+
 const MAX_ICE_RESTARTS = 3;
 const MAX_SIGNAL_AUTH_FAILURES = 3;
 const SLOW_CONNECT_MS = 10_000;
@@ -672,6 +676,7 @@ export class CallManager {
         await this.#drainRemoteCandidates(call);
       } else if (kind === "ice" && Array.isArray(payload.candidates)) {
         for (const candidate of payload.candidates.slice(0, 64)) {
+          countCandidate(call.ice.remote, candidate?.candidate);
           if (call.pc.remoteDescription) {
             await call.pc.addIceCandidate(candidate).catch(() => {});
           } else {
@@ -738,7 +743,7 @@ export class CallManager {
     });
     call.pc = pc;
     // What ICE found, to tell "the relay cannot be reached" from other problems.
-    call.ice = { relay: {}, relayTotal: 0, errors: [], gathered: false };
+    call.ice = { relay: {}, relayTotal: 0, errors: [], gathered: false, local: newCandidateCounts(), remote: newCandidateCounts(), pairs: [], generation: 0 };
     call.remoteStream = this.#opts.createMediaStream();
     this.#set({ remoteStream: call.remoteStream });
 
@@ -863,6 +868,10 @@ export class CallManager {
       clearTimeout(call.connectWatchdog);
       clearTimeout(call.failTimer);
       clearTimeout(call.slowTimer);
+      (call.pairTimers || []).forEach(clearTimeout);
+      // What the set-up looked like is history now; a later loss gets its own picture.
+      call.ice.pairs = [];
+      call.ice.generation += 1;
       call.restarts = 0;
       if (this.#state.phase !== CALL_PHASE.CONNECTED) {
         this.#set({ phase: CALL_PHASE.CONNECTED, connectedAt: Date.now(), connectingSlow: false });
@@ -876,6 +885,7 @@ export class CallManager {
       call.disconnectTimer = setTimeout(() => this.#recoverConnection(call), DISCONNECT_GRACE_MS);
     } else if (state === "failed") {
       clearTimeout(call.disconnectTimer);
+      void this.#snapshotPairs(call);
       this.#recoverConnection(call);
     }
   }
@@ -909,15 +919,24 @@ export class CallManager {
         this.#set({ connectingSlow: true });
       }
     }, SLOW_CONNECT_MS);
+    // Two looks at how the address pairs are faring, for the report if the
+    // call is given up (the last one just before the watchdog below).
+    (call.pairTimers || []).forEach(clearTimeout);
+    call.pairTimers = [SLOW_CONNECT_MS, CONNECT_TIMEOUT_MS - 5_000].map((delay) =>
+      setTimeout(() => {
+        if (!this.#isStale(call)) void this.#snapshotPairs(call);
+      }, delay),
+    );
     call.connectWatchdog = setTimeout(() => {
       if (!this.#isStale(call) && this.#state.phase === CALL_PHASE.CONNECTING) {
         this.#finish(call, this.#connectFailureReason(call), { notifyServer: true });
       }
-    }, 45_000);
+    }, CONNECT_TIMEOUT_MS);
   }
 
   #noteCandidate(call, candidate, json) {
     const line = String(json?.candidate || candidate?.candidate || "");
+    countCandidate(call.ice.local, line);
     if (!/ typ relay\b/.test(line)) return;
     // The protocol the client used to reach the relay (not the relayed leg).
     const protocol = String(candidate?.relayProtocol || /transport=(\w+)/i.exec(candidate?.url || "")?.[1] || "udp").toLowerCase();
@@ -957,8 +976,53 @@ export class CallManager {
     const used = Object.entries(ice.relay).map(([protocol, n]) => `${protocol} ${n}`).join(", ");
     const lines = [`Relay candidates: ${ice.relayTotal}${used ? ` (${used})` : ""}`];
     ice.errors.forEach((e) => lines.push(`${e.url || "ICE"}: error ${e.code}${e.text ? ` ${e.text}` : ""}`));
+    lines.push(`Role: ${call.direction === "outgoing" ? "caller" : "callee"}`);
+    const servers = summariseServers(call.iceConfig?.iceServers);
+    lines.push(`Servers: ${servers.length ? servers.join(", ") : "none"}`);
+    lines.push(`Candidates found here: ${formatCounts(ice.local)}`);
+    lines.push(`Candidates from the other device: ${formatCounts(ice.remote)}`);
+    if (ice.pairs.length) {
+      lines.push("Pairs tried:");
+      ice.pairs.forEach((pair) => lines.push(`  ${pair}`));
+    }
     if (call.pc) lines.push(`Connection: ${call.pc.connectionState}, ICE: ${call.pc.iceConnectionState}`);
     return lines;
+  }
+
+  /**
+   * Which pairs of addresses ICE tried and how each fared, kept (as kinds, no
+   * addresses) for the report of a call that does not connect. The picture is
+   * taken while the call is still trying, since the connection is closed by
+   * the time the call is given up.
+   */
+  async #snapshotPairs(call) {
+    const pc = call.pc;
+    if (!pc || typeof pc.getStats !== "function" || call.done || pc.connectionState === "closed") return;
+    const generation = call.ice.generation;
+    try {
+      const report = await pc.getStats();
+      if (call.done || generation !== call.ice.generation) return; // the call moved on meanwhile
+      const candidates = new Map();
+      const pairs = [];
+      report.forEach((entry) => {
+        if (entry.type === "local-candidate" || entry.type === "remote-candidate") candidates.set(entry.id, entry);
+        else if (entry.type === "candidate-pair") pairs.push(entry);
+      });
+      if (!pairs.length || call.done) return;
+      const rank = (pair) => (pair.nominated ? 3 : pair.state === "succeeded" ? 2 : pair.responsesReceived > 0 ? 1 : 0);
+      const lines = pairs
+        .sort((a, b) => rank(b) - rank(a) || (b.requestsSent || 0) - (a.requestsSent || 0))
+        .map(
+          (pair) =>
+            `${describeCandidate(candidates.get(pair.localCandidateId))} -> ${describeCandidate(candidates.get(pair.remoteCandidateId))}: ` +
+            `${pair.state || "unknown"}, sent ${pair.requestsSent || 0}, answered ${pair.responsesReceived || 0}`,
+        );
+      call.ice.pairs = lines.length > MAX_REPORTED_PAIRS
+        ? [...lines.slice(0, MAX_REPORTED_PAIRS), `(+${lines.length - MAX_REPORTED_PAIRS} more)`]
+        : lines;
+    } catch (_) {
+      // The report simply has no pairs.
+    }
   }
 
   /**
@@ -1292,7 +1356,7 @@ export class CallManager {
 
   #teardown(call) {
     call.done = true;
-    [call.ringTimer, call.iceTimer, call.disconnectTimer, call.failTimer, call.connectWatchdog, call.slowTimer].forEach(clearTimeout);
+    [call.ringTimer, call.iceTimer, call.disconnectTimer, call.failTimer, call.connectWatchdog, call.slowTimer, ...(call.pairTimers || [])].forEach(clearTimeout);
     clearInterval(call.statsTimer);
     try {
       call.dc?.close();

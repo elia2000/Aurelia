@@ -140,7 +140,6 @@ denied-peer-ip=127.0.0.0-127.255.255.255
 denied-peer-ip=169.254.0.0-169.254.255.255
 denied-peer-ip=172.16.0.0-172.31.255.255
 denied-peer-ip=192.168.0.0-192.168.255.255
-denied-peer-ip=::-::
 denied-peer-ip=::1-::1
 denied-peer-ip=::ffff:0:0-::ffff:ffff:ffff
 denied-peer-ip=64:ff9b::-64:ff9b::ffff:ffff
@@ -166,6 +165,8 @@ denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
 | `Relay candidates: 1` یا بیشتر (مثلاً `tcp 1`) اما تماس باز هم شکست می‌خورد | این گوشی به رله می‌رسد. گوشی طرف مقابل است که نمی‌رسد؛ اتصال و VPN او را بررسی کنید. |
 | *This server's relay is behind Cloudflare's proxy* | رکورد DNS رله پراکسی شده است (ابر نارنجی). آن را روی **DNS only** بگذارید یا آدرس IP سرور را در `CALLS_TURN_URLS` بنویسید. |
 | *This server's relay refused this device* (`error 401 Unauthorized`) | به رله رسیده شد اما اعتبارنامه را رد کرد: `CALLS_TURN_SECRET` با `static-auth-secret` در coturn یکی نیست یا ساعت سرور برنامه و رله تفاوت دارد. |
+
+در جزئیات همچنین می‌بینید این دستگاه کدام نقش را داشت (`Role: caller` یا `callee`)، کدام سرورها به آن داده شد (`Servers:` بدون اعتبارنامه)، چه نوع آدرس‌هایی پیدا کرد (`Candidates found here: host 2, relay 1`) و دستگاه مقابل چه نوع آدرس‌هایی فرستاد (`Candidates from the other device`). بخش `Pairs tried` نشان می‌دهد هر جفت آدرس چه شد (`host udp -> relay udp: failed, sent 7, answered 0`): جفتی که درخواست *فرستاده* اما هیچ‌وقت *پاسخ* نگرفته مسیری است که بسته‌ها را دور می‌ریزد. دکمه‌ی **Copy report** همه‌ی این‌ها را به‌همراه نسخه‌ی برنامه و مرورگر در کلیپ‌بورد می‌گذارد تا برای مدیر سرور فرستاده شود. فقط نوع آدرس‌ها در آن است: نه آدرس IP و نه اعتبارنامه.
 
 ### پنهان کردن آدرس IP (حالت امنیت بالا)
 

@@ -1082,14 +1082,14 @@ describe("waiting versus ringing", () => {
 });
 
 describe("connections that do not come up", () => {
-  const stuckCall = async (hasRelay, { relayReachable = hasRelay } = {}) => {
+  const stuckCall = async (hasRelay, { relayReachable = hasRelay, iceServers = [] } = {}) => {
     FakePeerConnection.autoConnect = false;
     FakePeerConnection.relayCandidates = relayReachable;
     const server = new FakeServer();
     const alice = await server.addUser("alice");
     const bob = await server.addUser("bob");
     for (const who of [alice, bob]) {
-      who.api.fetchIceConfig.mockResolvedValue({ iceServers: [], hasRelay });
+      who.api.fetchIceConfig.mockResolvedValue({ iceServers, hasRelay });
     }
     await alice.manager.startCall({ chatId: "c", peer: peerOf(bob) });
     await waitFor(() => phase(CALL_PHASE.INCOMING)(bob));
@@ -1156,6 +1156,69 @@ describe("connections that do not come up", () => {
     expect(details).toContain("Relay candidates: 0");
     expect(details).toContain("turn:relay.example:3478?transport=tcp");
     expect(details).toContain("701");
+  });
+
+  test("the report says who called, what was found here, what the other device sent and how the pairs fared", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    FakePeerConnection.iceErrors = [{ url: "turn:relay.example:3478", errorCode: 701, errorText: "Cannot connect" }];
+    const iceServers = [
+      {
+        urls: ["stun:relay.example:3478", "turn:relay.example:3478?transport=udp", "turn:relay.example:3478?transport=tcp"],
+        username: "1700000000",
+        credential: "never-shown",
+      },
+    ];
+    const { alice, bob } = await stuckCall(true, { relayReachable: false, iceServers });
+    FakePeerConnection.instances.forEach((pc) => {
+      pc.statsReport = [
+        { id: "l1", type: "local-candidate", candidateType: "host", protocol: "udp", address: "192.168.1.5" },
+        { id: "l2", type: "local-candidate", candidateType: "relay", protocol: "udp", relayProtocol: "tcp" },
+        { id: "r1", type: "remote-candidate", candidateType: "relay", protocol: "udp", address: "203.0.113.9" },
+        { id: "p1", type: "candidate-pair", state: "failed", localCandidateId: "l1", remoteCandidateId: "r1", requestsSent: 7, responsesReceived: 0 },
+        { id: "p2", type: "candidate-pair", state: "waiting", localCandidateId: "l2", remoteCandidateId: "r1" },
+      ];
+    });
+    await vi.advanceTimersByTimeAsync(46_000);
+
+    const aliceDetails = alice.manager.getState().connectionDetails.join("\n");
+    const bobDetails = bob.manager.getState().connectionDetails.join("\n");
+    expect(aliceDetails).toContain("Role: caller");
+    expect(bobDetails).toContain("Role: callee");
+    expect(aliceDetails).toContain("Servers: stun:relay.example:3478, turn:relay.example:3478 (udp, tcp)");
+    expect(aliceDetails).toContain("Candidates found here: host 2");
+    expect(aliceDetails).toContain("Candidates from the other device: host 2");
+    expect(aliceDetails).toContain("host udp -> relay udp: failed, sent 7, answered 0");
+    expect(aliceDetails).toContain("relay via tcp -> relay udp: waiting, sent 0, answered 0");
+    // Nothing that identifies a network or grants access is in the report.
+    expect(aliceDetails).not.toContain("never-shown");
+    expect(aliceDetails).not.toContain("1700000000");
+    expect(aliceDetails).not.toContain("192.168.1.5");
+    expect(aliceDetails).not.toContain("203.0.113.9");
+  });
+
+  test("the set-up snapshot of the address pairs is not reported for a call that connected and was lost later", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    const { alice, bob } = await stuckCall(true, { relayReachable: false });
+    const setUpPairs = [
+      { id: "l1", type: "local-candidate", candidateType: "host", protocol: "udp" },
+      { id: "r1", type: "remote-candidate", candidateType: "host", protocol: "udp" },
+      { id: "p1", type: "candidate-pair", state: "in-progress", localCandidateId: "l1", remoteCandidateId: "r1", requestsSent: 3, responsesReceived: 0 },
+    ];
+    FakePeerConnection.instances.forEach((pc) => { pc.statsReport = setUpPairs; });
+    await vi.advanceTimersByTimeAsync(11_000); // the first look, while still connecting
+    FakePeerConnection.instances.forEach((pc) => pc.setState("connected"));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(alice.manager.getState().phase).toBe(CALL_PHASE.CONNECTED);
+
+    // Minutes later the network goes away and the call is given up.
+    FakePeerConnection.instances.forEach((pc) => { pc.statsReport = []; });
+    FakePeerConnection.instances.forEach((pc) => pc.setState("failed"));
+    await vi.advanceTimersByTimeAsync(16_000);
+    expect(alice.manager.getState().endReason).toBe("connection_lost");
+    const details = alice.manager.getState().connectionDetails.join("\n");
+    expect(details).not.toContain("Pairs tried");
+    expect(details).not.toContain("in-progress");
+    expect(bob.manager.getState().endReason).toBeTruthy();
   });
 
   test("a relay host behind Cloudflare's proxy is named at once, and again when the call fails", async () => {

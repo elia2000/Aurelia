@@ -191,6 +191,25 @@ describe("CallOverlay", () => {
     await expect.element(page.getByText(/error 701 Cannot connect/)).toBeVisible();
   });
 
+  test("the technical details can be copied as one report", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    renderOverlay({
+      phase: "ended",
+      endReason: "connect_failed_relay_unreachable",
+      peer,
+      connectionDetails: ["Relay candidates: 0", "Role: caller"],
+    });
+    await page.getByText("Technical details").click();
+    await page.getByRole("button", { name: "Copy report" }).click();
+    expect(writeText).toHaveBeenCalledTimes(1);
+    const text = writeText.mock.calls[0][0];
+    expect(text).toContain("Aurelle call report");
+    expect(text).toContain("Result: connect_failed_relay_unreachable");
+    expect(text).toContain("Relay candidates: 0\nRole: caller");
+    await expect.element(page.getByRole("button", { name: "Copied" })).toBeVisible();
+  });
+
   test("a call that ended normally has no technical details", async () => {
     renderOverlay({ phase: "ended", endReason: "hangup", peer, connectionDetails: null });
     await expect.element(page.getByText("Call ended")).toBeInTheDocument();
