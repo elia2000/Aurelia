@@ -30,6 +30,7 @@ beforeEach(() => {
   FakePeerConnection.instances = [];
   FakePeerConnection.autoConnect = true;
   FakePeerConnection.relayCandidates = false;
+  FakePeerConnection.relayOn = null;
   FakePeerConnection.iceErrors = [];
   FakePeerConnection.gatheringCompletes = true;
 });
@@ -79,6 +80,8 @@ describe("happy path", () => {
 
   test("ICE candidates are batched into few signals and arrive at the peer", async () => {
     const { server, pcA, pcB } = await connectedCall();
+    // The call can report "connected" a moment before the last batch has been handled.
+    await waitFor(() => pcA.addedCandidates.length >= 2 && pcB.addedCandidates.length >= 2, { label: "candidates arrived" });
     const iceSignals = server.log.filter((e) => e.op === "signal" && e.kind === "ice");
     expect(iceSignals.length).toBeLessThanOrEqual(2); // one batch per side, not one per candidate
     expect(pcA.addedCandidates.length).toBe(2);
@@ -1161,6 +1164,9 @@ describe("connections that do not come up", () => {
   test("the report says who called, what was found here, what the other device sent and how the pairs fared", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     FakePeerConnection.iceErrors = [{ url: "turn:relay.example:3478", errorCode: 701, errorText: "Cannot connect" }];
+    // Only the callee's device gets a relay address (its connection is the first one created,
+    // because the callee builds its connection when it answers), so the two sides differ.
+    FakePeerConnection.relayOn = (pc) => FakePeerConnection.instances.indexOf(pc) === 0;
     const iceServers = [
       {
         urls: ["stun:relay.example:3478", "turn:relay.example:3478?transport=udp", "turn:relay.example:3478?transport=tcp"],
@@ -1169,31 +1175,64 @@ describe("connections that do not come up", () => {
       },
     ];
     const { alice, bob } = await stuckCall(true, { relayReachable: false, iceServers });
+    const pair = (id, state, sent, answered, local = "l1", remote = "r1") => ({
+      id, type: "candidate-pair", state, localCandidateId: local, remoteCandidateId: remote, requestsSent: sent, responsesReceived: answered,
+    });
     FakePeerConnection.instances.forEach((pc) => {
       pc.statsReport = [
         { id: "l1", type: "local-candidate", candidateType: "host", protocol: "udp", address: "192.168.1.5" },
         { id: "l2", type: "local-candidate", candidateType: "relay", protocol: "udp", relayProtocol: "tcp" },
         { id: "r1", type: "remote-candidate", candidateType: "relay", protocol: "udp", address: "203.0.113.9" },
-        { id: "p1", type: "candidate-pair", state: "failed", localCandidateId: "l1", remoteCandidateId: "r1", requestsSent: 7, responsesReceived: 0 },
-        { id: "p2", type: "candidate-pair", state: "waiting", localCandidateId: "l2", remoteCandidateId: "r1" },
+        // Listed worst first: the report puts the pair that got answers on top.
+        pair("p1", "waiting", 0, 0, "l2"),
+        pair("p2", "failed", 7, 0),
+        pair("p3", "succeeded", 5, 4),
       ];
     });
     await vi.advanceTimersByTimeAsync(46_000);
 
-    const aliceDetails = alice.manager.getState().connectionDetails.join("\n");
-    const bobDetails = bob.manager.getState().connectionDetails.join("\n");
-    expect(aliceDetails).toContain("Role: caller");
-    expect(bobDetails).toContain("Role: callee");
-    expect(aliceDetails).toContain("Servers: stun:relay.example:3478, turn:relay.example:3478 (udp, tcp)");
-    expect(aliceDetails).toContain("Candidates found here: host 2");
-    expect(aliceDetails).toContain("Candidates from the other device: host 2");
-    expect(aliceDetails).toContain("host udp -> relay udp: failed, sent 7, answered 0");
-    expect(aliceDetails).toContain("relay via tcp -> relay udp: waiting, sent 0, answered 0");
+    const aliceLines = alice.manager.getState().connectionDetails;
+    const bobLines = bob.manager.getState().connectionDetails;
+    const aliceDetails = aliceLines.join("\n");
+    expect(aliceLines).toContain("Role: caller");
+    expect(bobLines).toContain("Role: callee");
+    expect(aliceLines).toContain("Servers: stun:relay.example:3478, turn:relay.example:3478 (udp, tcp)");
+    // Each side reports its own candidates and what the other one sent, not the other way round.
+    expect(aliceLines).toContain("Candidates found here: host 2");
+    expect(aliceLines).toContain("Candidates from the other device: host 2, relay 1");
+    expect(bobLines).toContain("Candidates found here: host 2, relay 1");
+    expect(bobLines).toContain("Candidates from the other device: host 2");
+    const pairs = aliceLines.slice(aliceLines.indexOf("Pairs tried:") + 1, aliceLines.indexOf("Pairs tried:") + 4);
+    expect(pairs).toEqual([
+      "  host udp -> relay udp: succeeded, sent 5, answered 4",
+      "  host udp -> relay udp: failed, sent 7, answered 0",
+      "  relay via tcp -> relay udp: waiting, sent 0, answered 0",
+    ]);
     // Nothing that identifies a network or grants access is in the report.
-    expect(aliceDetails).not.toContain("never-shown");
-    expect(aliceDetails).not.toContain("1700000000");
-    expect(aliceDetails).not.toContain("192.168.1.5");
-    expect(aliceDetails).not.toContain("203.0.113.9");
+    for (const secret of ["never-shown", "1700000000", "192.168.1.5", "203.0.113.9"]) {
+      expect(aliceDetails).not.toContain(secret);
+    }
+  });
+
+  test("a long list of pairs is cut after six", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    const { alice } = await stuckCall(true, { relayReachable: false });
+    FakePeerConnection.instances.forEach((pc) => {
+      pc.statsReport = [
+        { id: "l1", type: "local-candidate", candidateType: "host", protocol: "udp" },
+        { id: "r1", type: "remote-candidate", candidateType: "host", protocol: "udp" },
+        ...Array.from({ length: 8 }, (_, i) => ({
+          id: `p${i}`, type: "candidate-pair", state: "failed", localCandidateId: "l1", remoteCandidateId: "r1", requestsSent: 8 - i, responsesReceived: 0,
+        })),
+      ];
+    });
+    await vi.advanceTimersByTimeAsync(46_000);
+    const lines = alice.manager.getState().connectionDetails;
+    const start = lines.indexOf("Pairs tried:");
+    expect(lines.slice(start + 1, start + 8)).toEqual([
+      ...[8, 7, 6, 5, 4, 3].map((n) => `  host udp -> host udp: failed, sent ${n}, answered 0`),
+      "  (+2 more)",
+    ]);
   });
 
   test("the set-up snapshot of the address pairs is not reported for a call that connected and was lost later", async () => {

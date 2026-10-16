@@ -92,6 +92,8 @@ export class FakePeerConnection {
   static videoLineFromOffer = true;
   /** true: gathering also yields a relay candidate (the TURN server is reachable). */
   static relayCandidates = false;
+  /** Like relayCandidates, but decided per connection: (pc) => boolean. */
+  static relayOn = null;
   /** Events for onicecandidateerror during gathering, e.g. {url, errorCode, errorText}. */
   static iceErrors = [];
   /** false: gathering never reports that it is complete. */
@@ -148,7 +150,7 @@ export class FakePeerConnection {
       const make = (n) => ({ candidate: { toJSON: () => ({ candidate: `candidate:${n} 1 udp 1 10.0.0.${n} 9 typ host`, sdpMid: "0" }) } });
       this.onicecandidate?.(make(1));
       this.onicecandidate?.(make(2));
-      if (FakePeerConnection.relayCandidates) {
+      if (FakePeerConnection.relayCandidates || FakePeerConnection.relayOn?.(this)) {
         this.onicecandidate?.({
           candidate: {
             relayProtocol: "tcp",

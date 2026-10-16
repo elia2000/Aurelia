@@ -301,7 +301,8 @@ export default function CallOverlay({ user }) {
           </p>
         ) : null}
 
-        <div className="relative z-10 flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+        {/* The middle scrolls when there is more than fits (a long report, a short screen), so the buttons below stay on the card. */}
+        <div className="relative z-10 flex min-h-0 flex-1 flex-col items-center justify-center-safe gap-3 overflow-y-auto px-6 text-center">
           {!showRemoteVideo && !videoStage ? (
             <Avatar
               src={peer?.avatarUrl || peer?.avatar_url}
