@@ -1,5 +1,5 @@
 const helpText = `
-Songbird DB Commands
+Aurelle DB Commands
 
 Core:
   npm run db:help
@@ -27,12 +27,12 @@ Reset/Delete:
   npm run db:file:delete -- --all -y
 
 Users:
-  npm run db:user:create -- --nickname "Songbird Sage" --username songbird.sage --password "12345678"
-  npm run db:user:create -- --nickname "Songbird Sage" --username songbird.sage --password "12345678" --role admin
-  npm run db:user:create -- --nickname "Songbird Sage" --username songbird.sage --password "12345678" --role owner
-  npm run db:user:create -- "Songbird Sage" songbird.sage "12345678"
+  npm run db:user:create -- --nickname "Aurelle Sage" --username songbird.sage --password "12345678"
+  npm run db:user:create -- --nickname "Aurelle Sage" --username songbird.sage --password "12345678" --role admin
+  npm run db:user:create -- --nickname "Aurelle Sage" --username songbird.sage --password "12345678" --role owner
+  npm run db:user:create -- "Aurelle Sage" songbird.sage "12345678"
   npm run db:user:generate -- --count 50 --password "12345678" --nickname-prefix User --username-prefix user
-  npm run db:user:edit -- songbird.sage --nickname "Songbird Sage" --color "#ff6b6b"
+  npm run db:user:edit -- songbird.sage --nickname "Aurelle Sage" --color "#ff6b6b"
   npm run db:user:edit -- songbird.sage --role admin
   npm run db:user:edit -- songbird.sage --role owner
   npm run db:user:edit -- songbird.sage --role user
@@ -62,7 +62,7 @@ Notes:
   - db:user:create/edit accept --role user|admin|owner. Only one user can hold the owner role at a time. The owner cannot be demoted, banned, or deleted via the admin panel.
   - SQLite backup/restore use timestamped .db files in data/backups/.
   - PostgreSQL backup/restore use native .dump archives and require pg_dump/pg_restore in PATH.
-  - Stop Songbird before PostgreSQL db:restore, db:reset, or db:delete; those commands use native PostgreSQL tools.
+  - Stop Aurelle before PostgreSQL db:restore, db:reset, or db:delete; those commands use native PostgreSQL tools.
   - db:restore replaces the SQLite database with a given .db file and restarts the service if running as root.
 `;
 

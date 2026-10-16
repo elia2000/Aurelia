@@ -81,7 +81,7 @@ export default function AuthFormFields({
             pattern={USERNAME_INPUT_PATTERN}
             title="Use english letters, numbers, dot (.), and underscore (_)."
             autoCapitalize="none"
-            placeholder="songbird.sage"
+            placeholder="aurelle.sage"
             maxLength={USERNAME_MAX}
             onInput={(event) => {
               const value = String(event.currentTarget.value || "");

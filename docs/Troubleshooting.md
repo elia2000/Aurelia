@@ -39,7 +39,7 @@ The [deployment script](./Deployment-Script.md) has a built-in **View Logs** men
 
 ## Installation stuck downloading packages
 
-During installation Songbird needs to download system packages and dependencies: apt packages, Node.js (via NodeSource), npm packages, and, for Docker installs, Docker images and packages. On servers in highly restricted or filtered networks, these downloads can stall, time out, or fail outright.
+During installation Aurelle needs to download system packages and dependencies: apt packages, Node.js (via NodeSource), npm packages, and, for Docker installs, Docker images and packages. On servers in highly restricted or filtered networks, these downloads can stall, time out, or fail outright.
 
 Typical signs:
 
@@ -138,7 +138,7 @@ sudo systemctl reload nginx
 
 ## Real-time updates not arriving
 
-Songbird uses a persistent WebSocket for live messages, presence, and typing indicators, with Server-Sent Events (SSE) as a fallback stream. A user is shown as online while any realtime connection is open and goes offline when the last one closes. If messages only appear after a refresh, the SSE stream is likely being buffered by Nginx.
+Aurelle uses a persistent WebSocket for live messages, presence, and typing indicators, with Server-Sent Events (SSE) as a fallback stream. A user is shown as online while any realtime connection is open and goes offline when the last one closes. If messages only appear after a refresh, the SSE stream is likely being buffered by Nginx.
 
 - Ensure the `/api/events` location block is present and disables buffering (`proxy_buffering off;`, `add_header X-Accel-Buffering no;`). See [Configure Nginx](./Nginx-Configuration.md).
 - Confirm any upstream proxy or CDN is not buffering or timing out the connection.
@@ -181,15 +181,15 @@ After changing `.env`, apply the changes (see [Environment Variables](./Environm
 
 ## Video transcoding issues
 
-Songbird automatically optimizes and transcodes uploaded videos to web-ready H.264/AAC MP4 when `FILE_UPLOAD_TRANSCODE_VIDEOS=true`.
+Aurelle automatically optimizes and transcodes uploaded videos to web-ready H.264/AAC MP4 when `FILE_UPLOAD_TRANSCODE_VIDEOS=true`.
 
 - **Check Media Worker Health**: If using the standalone Media Worker, verify its health status via `curl http://localhost:8080/health` (or using the configured `WORKER_PORT` / `WORKER_URL/health`). The response should return `{"status": "ok", ...}`. See [Media Worker](./Media-Worker.md) for full configuration details.
-- **Verify Webhook Secret Synchronization**: Ensure the `WEBHOOK_SECRET` in the Songbird server configuration matches the `WEBHOOK_SECRET` configured in the Media Worker. If secrets mismatch, dispatch or callback requests will fail with `401 Unauthorized`.
-- **Verify Webhook Callback Reachability**: The Media Worker must be able to reach Songbird's callback endpoint (`POST /api/uploads/webhook/processed`). If Songbird is behind a reverse proxy, set `WEBHOOK_URL` (or fallback `WEBHOOK_CALLBACK_URL`) or ensure internal DNS/network routing allows worker-to-server HTTP requests.
+- **Verify Webhook Secret Synchronization**: Ensure the `WEBHOOK_SECRET` in the Aurelle server configuration matches the `WEBHOOK_SECRET` configured in the Media Worker. If secrets mismatch, dispatch or callback requests will fail with `401 Unauthorized`.
+- **Verify Webhook Callback Reachability**: The Media Worker must be able to reach Aurelle's callback endpoint (`POST /api/uploads/webhook/processed`). If Aurelle is behind a reverse proxy, set `WEBHOOK_URL` (or fallback `WEBHOOK_CALLBACK_URL`) or ensure internal DNS/network routing allows worker-to-server HTTP requests.
 - **Verify FFmpeg Installation**: If running in `local` processing mode or running the worker directly from source, ensure `ffmpeg` and `ffprobe` are installed on the system (`ffmpeg -version`).
 - **Temporary Disk Space**: Ensure the worker node has sufficient temporary disk space (`/tmp` or system temp directory) for staging, transcoding, and thumbnail generation.
 - **Check Service & Worker Logs**: Look for `[worker]` or `[app-debug]` log messages in server or worker logs.
-- **Enable Debug Logging**: Set `APP_DEBUG=true` in Songbird's `.env` to receive verbose terminal logs for upload dispatch, transcode status, and real-time event broadcasts.
+- **Enable Debug Logging**: Set `APP_DEBUG=true` in Aurelle's `.env` to receive verbose terminal logs for upload dispatch, transcode status, and real-time event broadcasts.
 
 ## Docker build issues
 
@@ -217,7 +217,7 @@ See [SSL Certificates](./SSL-Certificates.md) for the full setup options.
 
 ## PostgreSQL SSL & CA certificate errors
 
-When connecting Songbird to managed cloud PostgreSQL databases (such as **Aiven**, **AWS RDS**, **DigitalOcean**, **Supabase**, or **Neon**), the connection may fail on startup or during database migrations.
+When connecting Aurelle to managed cloud PostgreSQL databases (such as **Aiven**, **AWS RDS**, **DigitalOcean**, **Supabase**, or **Neon**), the connection may fail on startup or during database migrations.
 
 ### `self-signed certificate in certificate chain` / `SELF_SIGNED_CERT_IN_CHAIN`
 
@@ -291,7 +291,7 @@ See [Remote Channel Setup](./Remote-Channel-Setup.md) for the complete configura
 
 ## Admin panel issues
 
-The admin panel's service control features (restart/stop) and system log viewing require specific permissions depending on how Songbird is deployed.
+The admin panel's service control features (restart/stop) and system log viewing require specific permissions depending on how Aurelle is deployed.
 
 :::tip
 
@@ -327,7 +327,7 @@ If you encounter any of the issues mentioned below, reinstalling the app via the
 **PM2 deployments:**
 
 - The process must have access to the PM2 runtime
-- Ensure PM2 is running as the same user that runs Songbird
+- Ensure PM2 is running as the same user that runs Aurelle
 - The user should have permission to execute `pm2 restart` and `pm2 stop`
 
 ### System logs not showing
@@ -360,4 +360,4 @@ If you encounter any of the issues mentioned below, reinstalling the app via the
 
 ## Still stuck?
 
-If none of the above resolves the issue, gather the relevant log output and open an issue at the [project repository](https://github.com/elia2000/Aurelle/issues).
+If none of the above resolves the issue, gather the relevant log output and open an issue at the [project repository](https://github.com/elia2000/Aurelia/issues).

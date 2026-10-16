@@ -47,7 +47,7 @@ volta install node@24.11.1 npm@11.6.4
 ```bash
 sudo mkdir -p /opt/songbird
 cd /opt/songbird
-git clone https://github.com/elia2000/Aurelle.git .
+git clone https://github.com/elia2000/Aurelia.git .
 ```
 
 :::info
@@ -78,7 +78,7 @@ Create `/etc/systemd/system/songbird.service` with the following:
 
 ```ini
 [Unit]
-Description=Songbird server
+Description=Aurelle server
 After=network.target
 
 [Service]
@@ -142,7 +142,7 @@ git config --global --add safe.directory /opt/songbird
 
 ```bash
 sudo tee /etc/sudoers.d/songbird > /dev/null <<'EOF'
-# Songbird — allow the service user to control its own unit
+# Aurelle — allow the service user to control its own unit
 # and read privileged logs without a password.
 songbird ALL=(root) NOPASSWD: /usr/bin/systemctl restart songbird.service
 songbird ALL=(root) NOPASSWD: /usr/bin/systemctl stop songbird.service

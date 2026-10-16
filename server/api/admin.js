@@ -1504,7 +1504,7 @@ function registerAdminRoutes(app, deps) {
         if (!chatId) {
           const row = adminGetRow(
             `SELECT id FROM chats WHERE name = ? ORDER BY id ASC LIMIT 1`,
-            ["Songbird Demo"],
+            ["Aurelle Demo"],
           );
           chatId = row?.id || null;
         }
@@ -1514,11 +1514,11 @@ function registerAdminRoutes(app, deps) {
           adminRun(
             `INSERT INTO chats (id, name, type, created_at)
              VALUES (?, ?, ?, datetime('now'))`,
-            [newChatId, "Songbird Demo", "group"],
+            [newChatId, "Aurelle Demo", "group"],
           );
 
           chatId = adminGetRow("SELECT id FROM chats WHERE name = ?", [
-              "Songbird Demo",
+              "Aurelle Demo",
             ])?.id || null;
         }
 

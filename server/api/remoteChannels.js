@@ -51,7 +51,7 @@ function registerRemoteChannelRoutes(app, deps) {
     }
   };
 
-  // Telegram requires API credentials; Songbird just needs the feature enabled.
+  // Telegram requires API credentials; Aurelle just needs the feature enabled.
   const isTelegramAvailable = () =>
     Boolean(REMOTE_CHANNELS?.enabled && REMOTE_CHANNELS?.telegramConfigured);
   const isSongbirdAvailable = () =>
@@ -318,7 +318,7 @@ function registerRemoteChannelRoutes(app, deps) {
         if (optionalNormalized.ok) normalized = optionalNormalized;
       }
       if (enabled && !normalized.sourceUrl) {
-        return res.status(400).json({ error: "Songbird source URL is required." });
+        return res.status(400).json({ error: "Aurelle source URL is required." });
       }
     }
 
@@ -345,7 +345,7 @@ function registerRemoteChannelRoutes(app, deps) {
       syncMetadata &&
       typeof remoteChannelManager?.syncSourceMetadata === "function"
     ) {
-      // Run metadata sync in the background — works for both Telegram and Songbird.
+      // Run metadata sync in the background — works for both Telegram and Aurelle.
       const sourceId = source?.id;
       remoteChannelManager.syncSourceMetadata(sourceId).catch(() => {
         // Errors are recorded on the source record by syncSourceMetadata itself.

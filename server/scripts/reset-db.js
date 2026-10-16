@@ -22,7 +22,7 @@ async function main() {
   });
   if (!confirmed) return console.log("Aborted.");
 
-  // When Songbird is running, reset through its authenticated loopback API.
+  // When Aurelle is running, reset through its authenticated loopback API.
   // This preserves schema/settings and uses PostgreSQL TRUNCATE when applicable.
   const remoteResult = await runAdminActionViaServer("reset_db");
   if (remoteResult) {

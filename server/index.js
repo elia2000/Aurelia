@@ -1465,7 +1465,7 @@ if (REMOTE_CHANNEL) {
 }
 
 const server = app.listen(port, bindAddress, () => {
-  console.log(`Songbird server running on http://${bindAddress}:${port}`);
+  console.log(`Aurelle server running on http://${bindAddress}:${port}`);
   console.log(
     `[server] Media worker webhook callback URL: ${apiDeps.webhookCallbackUrl}`,
   );

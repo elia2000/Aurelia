@@ -56,7 +56,7 @@ export function useMobileCacheOptimization() {
   useEffect(() => {
     if (isCacheDisabledForDevice()) {
       console.warn(
-        "[Songbird Cache] Cache disabled: device memory resource constraint or repeated errors",
+        "[Aurelle Cache] Cache disabled: device memory resource constraint or repeated errors",
       );
     }
   }, []);

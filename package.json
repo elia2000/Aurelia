@@ -4,12 +4,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/elia2000/Aurelle.git"
+    "url": "git+https://github.com/elia2000/Aurelia.git"
   },
   "bugs": {
-    "url": "https://github.com/elia2000/Aurelle/issues"
+    "url": "https://github.com/elia2000/Aurelia/issues"
   },
-  "homepage": "https://github.com/elia2000/Aurelle#readme",
+  "homepage": "https://github.com/elia2000/Aurelia#readme",
   "scripts": {
     "dev": "concurrently \"npm --prefix client run dev\" \"npm --prefix server run dev\" \"npm --prefix worker run dev\"",
     "test": "concurrently \"npm --prefix client run test\" \"npm --prefix server run test\" \"npm --prefix worker run test\"",

@@ -38,7 +38,7 @@ import {
   Video,
 } from "../../icons/lucide.js";
 import { copyTextToClipboard } from "../../utils/clipboard.js";
-import { TelegramIcon, SongbirdIcon } from "../../icons/BrandIcons.jsx";
+import { TelegramIcon, AurelleIcon } from "../../icons/BrandIcons.jsx";
 import { api, cardCls, btnPrimary, btnSecondary } from "./adminShared.js";
 import { SectionHeading } from "./AdminCommon.jsx";
 import ConfirmModal from "../modals/ConfirmModal.jsx";
@@ -96,7 +96,7 @@ const SETTING_ICONS = {
   REMOTE_CHANNEL_QUEUE_CONCURRENCY: SquareStack,
   REMOTE_CHANNEL_QUEUE_STALE_LOCK_MS: Lock,
   REMOTE_CHANNEL_TELEGRAM_PROXY_URL: TelegramIcon,
-  REMOTE_CHANNEL_SONGBIRD_PROXY_URL: SongbirdIcon,
+  REMOTE_CHANNEL_SONGBIRD_PROXY_URL: AurelleIcon,
   PUSH_PROXY_URL: Bell,
   STORAGE_EXPIRES_IN: Clock12,
   STORAGE_PROXY_URL: PackageOpen,

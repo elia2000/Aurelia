@@ -44,7 +44,7 @@ APP_NAME="songbird"
 INSTALL_DIR="/opt/songbird"
 LOG_FILE="/opt/songbird/logs/install.log"
 DATA_COMMAND_LAUNCHER="${DATA_COMMAND_LAUNCHER:-${INSTALL_DIR}/scripts/run-data-command.sh}"
-REPO_URL="${REPO_URL:-https://github.com/elia2000/Aurelle.git}"
+REPO_URL="${REPO_URL:-https://github.com/elia2000/Aurelia.git}"
 SERVICE_USER="songbird"
 SERVICE_GROUP="songbird"
 SERVICE_NAME="songbird"
@@ -67,14 +67,14 @@ DEFAULT_SIGN_UP="true"
 DEFAULT_CHAT_VOICE_WAVEFORM_MAX_DECODE_MB="5"
 DEFAULT_CHAT_VOICE_WAVEFORM_MAX_DECODE_SECONDS="480"
 NODE_MAJOR="24"
-SCRIPT_REMOTE_URL="${SCRIPT_REMOTE_URL:-https://raw.githubusercontent.com/elia2000/Aurelle/main/scripts/install.sh}"
+SCRIPT_REMOTE_URL="${SCRIPT_REMOTE_URL:-https://raw.githubusercontent.com/elia2000/Aurelia/main/scripts/install.sh}"
 LOG_LINES="${LOG_LINES:-100}"
 CERT_INSTALL_DIR="/etc/ssl/songbird"
 ACME_WEBROOT="/var/lib/songbird/certbot"
 LEGO_STATE_DIR="/var/lib/songbird/lego"
 LEGO_BIN="/usr/local/bin/lego"
 GLOBAL_COMMAND_PATH="/usr/local/bin/songbird-deploy"
-SONGBIRD_SOCIAL_GITHUB="https://github.com/elia2000/Aurelle"
+SONGBIRD_SOCIAL_GITHUB="https://github.com/elia2000/Aurelia"
 
 # Mirror URLs
 MIRROR_NODESOURCE="${MIRROR_NODESOURCE:-}"
@@ -377,8 +377,8 @@ show_deployment_success_frame() {
 
   case "$action" in
     install)
-      title="Songbird Installation Complete"
-      lines+=("Songbird has been installed successfully.")
+      title="Aurelle Installation Complete"
+      lines+=("Aurelle has been installed successfully.")
       lines+=("")
       lines+=("App:")
       if [[ "$CERT_MODE" == "http" ]]; then
@@ -421,12 +421,12 @@ show_deployment_success_frame() {
       fi
       ;;
     update)
-      title="Songbird Update Complete"
-      lines+=("Songbird has been updated successfully.")
+      title="Aurelle Update Complete"
+      lines+=("Aurelle has been updated successfully.")
       lines+=("Service restarted and nginx reloaded.")
       ;;
     *)
-      title="Songbird Success"
+      title="Aurelle Success"
       lines+=("Operation completed successfully.")
       ;;
   esac
@@ -1417,7 +1417,7 @@ ensure_service_user_exists() {
   # Install a passwordless sudoers drop-in so the service process can
   # control its own systemd unit and read nginx/service logs via sudo -n.
   local sudoers_drop_in="/etc/sudoers.d/songbird"
-  local sudoers_content="# Songbird — allow the service user to control its own unit
+  local sudoers_content="# Aurelle — allow the service user to control its own unit
 # and read privileged logs without a password.
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl restart ${SERVICE_NAME}
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl stop ${SERVICE_NAME}
@@ -1548,7 +1548,7 @@ clone_repo() {
     run_silent run_as_root mkdir -p "$INSTALL_DIR" || return 1
   fi
 
-  log "Cloning Songbird repository..."
+  log "Cloning Aurelle repository..."
   run_silent run_as_root git clone "$REPO_URL" "$INSTALL_DIR" || return 1
 }
 
@@ -1656,7 +1656,7 @@ extract_offline_source_zip() {
   local source_root
   source_root="$(resolve_offline_source_root "$tmp_dir")" || {
     run_silent run_as_root rm -rf "$tmp_dir"
-    warn "Source zip does not appear to contain Songbird (missing server/client/worker/package.json)."
+    warn "Source zip does not appear to contain Aurelle (missing server/client/worker/package.json)."
     return 1
   }
 
@@ -2633,7 +2633,7 @@ configure_systemd_service() {
   fi
   if ! run_silent run_as_root tee "$SERVICE_FILE" >/dev/null <<EOF
 [Unit]
-Description=Songbird server
+Description=Aurelle server
 After=network.target
 
 [Service]
@@ -2656,7 +2656,7 @@ EOF
   log "Creating worker systemd service at ${WORKER_SERVICE_FILE}..."
   if ! run_silent run_as_root tee "$WORKER_SERVICE_FILE" >/dev/null <<EOF
 [Unit]
-Description=Songbird media worker
+Description=Aurelle media worker
 After=network.target ${SERVICE_NAME}.service
 
 [Service]
@@ -3037,7 +3037,7 @@ configure_lego_renewal_timer() {
   log "Creating lego renewal service at ${LEGO_RENEW_SERVICE_FILE}..."
   if ! run_silent run_as_root tee "$LEGO_RENEW_SERVICE_FILE" >/dev/null <<EOF
 [Unit]
-Description=Renew Songbird IP certificate with lego
+Description=Renew Aurelle IP certificate with lego
 After=network-online.target nginx.service
 Wants=network-online.target
 
@@ -3058,7 +3058,7 @@ EOF
   log "Creating lego renewal timer at ${LEGO_RENEW_TIMER_FILE}..."
   if ! run_silent run_as_root tee "$LEGO_RENEW_TIMER_FILE" >/dev/null <<EOF
 [Unit]
-Description=Run Songbird lego renewal twice daily
+Description=Run Aurelle lego renewal twice daily
 
 [Timer]
 OnBootSec=10m
@@ -3299,23 +3299,23 @@ ensure_songbird_stopped_for_update() {
     port="$DEFAULT_SERVER_PORT"
   fi
 
-  log "Checking whether Songbird is running before update..."
+  log "Checking whether Aurelle is running before update..."
 
   if songbird_service_is_running; then
-    log "Songbird service is running. Stopping it before update..."
+    log "Aurelle service is running. Stopping it before update..."
     if ! run_as_root systemctl stop songbird.service; then
-      warn "Failed to stop Songbird service. Stop it manually before updating."
+      warn "Failed to stop Aurelle service. Stop it manually before updating."
       press_enter_to_continue
       return 1
     fi
     if have_cmd systemctl && systemctl is-active --quiet songbird-worker.service 2>/dev/null; then
       run_as_root systemctl stop songbird-worker.service || true
     fi
-    log "Songbird service stopped."
+    log "Aurelle service stopped."
   fi
 
   if songbird_healthcheck_responds "$port"; then
-    warn "Songbird is still running on port ${port}. Stop it before updating."
+    warn "Aurelle is still running on port ${port}. Stop it before updating."
     press_enter_to_continue
     return 1
   fi
@@ -3366,7 +3366,7 @@ rebuild_and_restart_after_settings_change() {
   log "Rebuilding client after settings change..."
   run_in_install_dir "npm --prefix client run build" || return 1
 
-  log "Restarting Songbird service..."
+  log "Restarting Aurelle service..."
   run_as_root systemctl restart songbird.service || return 1
   if have_cmd systemctl && systemctl list-unit-files | grep -q "^songbird-worker.service"; then
     run_as_root systemctl restart songbird-worker.service || true
@@ -3382,7 +3382,7 @@ rebuild_and_restart_after_settings_change() {
 
 update_songbird() {
   if [[ ! -d "$INSTALL_DIR" ]]; then
-    warn "No Songbird install found at ${INSTALL_DIR}."
+    warn "No Aurelle install found at ${INSTALL_DIR}."
     press_enter_to_continue
     return 0
   fi
@@ -3421,34 +3421,34 @@ update_songbird() {
 
     case "$version_rel" in
       newer)
-        log "Offline update available. Preparing to update Songbird..."
+        log "Offline update available. Preparing to update Aurelle..."
         ;;
       lower)
         local should_downgrade=""
         should_downgrade="$(prompt_yes_no "Local zip version (${source_ver}) is lower than installed version (${install_ver}). Do you want to downgrade to version ${source_ver}?" "no")"
         if [[ "$should_downgrade" != "yes" ]]; then
           run_silent run_as_root rm -rf "$tmp_dir"
-          log "Songbird is already up to date. No rebuild needed."
+          log "Aurelle is already up to date. No rebuild needed."
           press_enter_to_continue
           return 0
         fi
         is_downgrade="yes"
-        log "Offline downgrade requested. Preparing to downgrade Songbird to ${source_ver}..."
+        log "Offline downgrade requested. Preparing to downgrade Aurelle to ${source_ver}..."
         ;;
       same)
         local should_update=""
         should_update="$(prompt_yes_no "Local zip version (${source_ver}) is the same as installed version (${install_ver}). Do you want to update to version ${source_ver}?" "no")"
         if [[ "$should_update" != "yes" ]]; then
           run_silent run_as_root rm -rf "$tmp_dir"
-          log "Songbird is already up to date. No rebuild needed."
+          log "Aurelle is already up to date. No rebuild needed."
           press_enter_to_continue
           return 0
         fi
-        log "Offline update requested. Preparing to update Songbird to ${source_ver}..."
+        log "Offline update requested. Preparing to update Aurelle to ${source_ver}..."
         ;;
       *)
         run_silent run_as_root rm -rf "$tmp_dir"
-        log "Songbird is already up to date. No rebuild needed."
+        log "Aurelle is already up to date. No rebuild needed."
         press_enter_to_continue
         return 0
         ;;
@@ -3480,7 +3480,7 @@ update_songbird() {
       configure_systemd_service || true
     fi
 
-    log "Restarting Songbird service..."
+    log "Restarting Aurelle service..."
     run_as_root systemctl restart songbird.service || return 1
     if have_cmd systemctl && systemctl list-unit-files | grep -q "^songbird-worker.service"; then
       run_as_root systemctl restart songbird-worker.service || true
@@ -3525,7 +3525,7 @@ update_songbird() {
 
   # Check if update is available
   if [[ "$local_commit" == "$remote_commit" ]]; then
-    log "Songbird is already up to date."
+    log "Aurelle is already up to date."
     local should_downgrade=""
     should_downgrade="$(prompt_yes_no "Do you want to downgrade?" "no")"
     if [[ "$should_downgrade" != "yes" ]]; then
@@ -3554,7 +3554,7 @@ update_songbird() {
   fi
 
   if [[ "$is_downgrade" == "yes" ]]; then
-    log "Downgrade requested. Preparing to downgrade Songbird to ${target_version}..."
+    log "Downgrade requested. Preparing to downgrade Aurelle to ${target_version}..."
     preserve_backup_and_restore_data
 
     if ! run_in_install_dir "git checkout ${target_ref}"; then
@@ -3564,7 +3564,7 @@ update_songbird() {
     fi
   else
     # Update is available - proceed with safe update
-    log "Update available. Preparing to update Songbird..."
+    log "Update available. Preparing to update Aurelle..."
     preserve_backup_and_restore_data
 
     # Ensure we're on main branch and pull latest
@@ -3602,7 +3602,7 @@ update_songbird() {
     configure_systemd_service || true
   fi
 
-  log "Restarting Songbird service..."
+  log "Restarting Aurelle service..."
   run_as_root systemctl restart songbird.service || return 1
   if have_cmd systemctl && systemctl list-unit-files | grep -q "^songbird-worker.service"; then
     run_as_root systemctl restart songbird-worker.service || true
@@ -3614,14 +3614,14 @@ update_songbird() {
 }
 
 restart_songbird() {
-  log "Restarting Songbird service..."
+  log "Restarting Aurelle service..."
   run_as_root systemctl restart songbird.service || return 1
   if have_cmd systemctl && systemctl list-unit-files | grep -q "^songbird-worker.service"; then
     run_as_root systemctl restart songbird-worker.service || true
   fi
   run_as_root systemctl reload nginx || return 1
 
-  log "Songbird restarted successfully."
+  log "Aurelle restarted successfully."
   press_enter_to_continue
 }
 
@@ -3738,7 +3738,7 @@ remove_songbird() {
     return 0
   fi
 
-  if [[ "$(prompt_yes_no "This will remove Songbird from this server. Continue?" "no")" != "yes" ]]; then
+  if [[ "$(prompt_yes_no "This will remove Aurelle from this server. Continue?" "no")" != "yes" ]]; then
     log "Removal canceled."
     return 0
   fi
@@ -3777,7 +3777,7 @@ remove_songbird() {
     run_as_root userdel "$SERVICE_USER" || true
   fi
 
-  log "Songbird removed."
+  log "Aurelle removed."
 
   if [[ -f "$GLOBAL_COMMAND_PATH" ]]; then
     if [[ "$(prompt_yes_no "Remove global command (songbird-deploy) as well?" "no")" == "yes" ]]; then
@@ -3792,7 +3792,7 @@ remove_songbird() {
 configure_push_proxy() {
   local env_file="$INSTALL_DIR/.env"
   if [[ ! -f "$env_file" ]]; then
-    warn ".env file not found. Install Songbird first."
+    warn ".env file not found. Install Aurelle first."
     press_enter_to_continue
     return 1
   fi
@@ -3852,7 +3852,7 @@ configure_push_proxy() {
     return 1
   fi
   
-  log "Restarting Songbird service..."
+  log "Restarting Aurelle service..."
   if ! run_logged_quiet run_as_root systemctl restart songbird; then
     warn "Failed to restart service."
     press_enter_to_continue
@@ -4120,7 +4120,7 @@ show_service_logs() {
     printf "\n  Last %s lines of songbird service log:\n\n" "$LOG_LINES"
     run_as_root journalctl -u songbird --no-pager -n "$LOG_LINES"
   else
-    printf "\n  Songbird service not found.\n"
+    printf "\n  Aurelle service not found.\n"
   fi
   press_enter_to_continue
 }
@@ -4131,7 +4131,7 @@ show_worker_service_logs() {
     printf "\n  Last %s lines of songbird-worker service log:\n\n" "$LOG_LINES"
     run_as_root journalctl -u songbird-worker --no-pager -n "$LOG_LINES"
   else
-    printf "\n  Songbird worker service not found.\n"
+    printf "\n  Aurelle worker service not found.\n"
   fi
   press_enter_to_continue
 }
@@ -4164,7 +4164,7 @@ show_nginx_error_logs() {
 
 
 show_banner() {
-  printf '\033[1;38;2;42;186;130m'   # bold Songbird green (#2ABA82)
+  printf '\033[1;38;2;42;186;130m'   # bold Aurelle green (#2ABA82)
   cat << 'EOF'
 ╔═══════════════════════════════════════════════════════════════════════════╗
 ║                                                                           ║
@@ -4187,13 +4187,13 @@ show_menu() {
   clear
   show_banner
   printf "\n"
-  printf "Songbird Deploy Menu\n"
-  printf $'1) 📥  Install Songbird\n'
-  printf $'2) 🔄️  Update Songbird\n'
-  printf $'3) ♻️  Restart Songbird\n'
+  printf "Aurelle Deploy Menu\n"
+  printf $'1) 📥  Install Aurelle\n'
+  printf $'2) 🔄️  Update Aurelle\n'
+  printf $'3) ♻️  Restart Aurelle\n'
   printf $'4) ⚙️  Edit Settings (.env)\n'
   printf $'5) 🗃️  Manage Database\n'
-  printf $'6) 🗑️  Remove Songbird\n'
+  printf $'6) 🗑️  Remove Aurelle\n'
   printf $'7) 🔄️  Update menu\n'
   printf $'8) 🌐  Configure mirrors\n'
   printf $'9) 📋  View Logs\n'
@@ -4382,7 +4382,7 @@ create_owner_user() {
 
 print_db_script_help() {
   cat <<'EOF'
-Songbird Script Database Menu
+Aurelle Script Database Menu
 
 The installer collects every required value before running DB commands, then
 passes those values as CLI flags/arguments with stdin closed so the nested
@@ -4975,7 +4975,7 @@ db_remote_configure() {
   local args=()
 
   if [[ ! -d "${INSTALL_DIR}/server" ]]; then
-    warn "Songbird server directory not found at ${INSTALL_DIR}/server."
+    warn "Aurelle server directory not found at ${INSTALL_DIR}/server."
     press_enter_to_continue
     return 1
   fi

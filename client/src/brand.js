@@ -5,9 +5,9 @@
 export const BRAND = Object.freeze({
   name: "Aurelle",
   tagline: "Private self-hosted messaging with end-to-end encrypted calls and video messages",
-  repository: "https://github.com/elia2000/Aurelle",
+  repository: "https://github.com/elia2000/Aurelia",
   upstream: Object.freeze({
-    name: "Songbird",
+    name: "Aurelle",
     repository: "https://github.com/bllackbull/Songbird",
     license: "MIT",
   }),

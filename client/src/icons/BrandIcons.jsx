@@ -8,6 +8,17 @@ const baseProps = (size, className, viewBox = "0 0 512 512") => ({
   style: { overflow: "visible", flexShrink: 0 },
 });
 
+/** The Aurelle mark (the "A" of the logo) in the current text colour. */
+export function AurelleIcon({ size = 24, className = "" }) {
+  return (
+    <svg {...baseProps(size, className)}>
+      <path d="M148 400 L256 112 L364 400" fill="none" stroke="currentColor" strokeWidth="46" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M200 322 H312" fill="none" stroke="currentColor" strokeWidth="28" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** The mark of the upstream project this one is built on (credits only). */
 export function SongbirdIcon({ size = 24, className = "" }) {
   return (
     <svg {...baseProps(size, className)}>

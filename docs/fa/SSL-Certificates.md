@@ -47,7 +47,7 @@ ssl_certificate_key /path/to/privkey.pem;
 
 ## گزینه D: گواهی‌نامه self-signed (توصیه‌نشده برای محیط تولید)
 
-Songbird یک اسکریپت کمکی برای تولید گواهی‌نامه self-signed دارد:
+Aurelle یک اسکریپت کمکی برای تولید گواهی‌نامه self-signed دارد:
 
 ```bash
 bash scripts/gen-certs.sh

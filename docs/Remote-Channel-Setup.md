@@ -1,12 +1,12 @@
 # Remote Channel Setup
 
-Remote Channel lets a public Songbird channel mirror posts from a Telegram channel or another public Songbird channel. Only channel owners can configure a channel source, and only one source can be active per channel at a time.
+Remote Channel lets a public Aurelle channel mirror posts from a Telegram channel or another public Aurelle channel. Only channel owners can configure a channel source, and only one source can be active per channel at a time.
 
-On first enable, Songbird initializes the source at the latest post and does not import history. Posts published after that point are mirrored.
+On first enable, Aurelle initializes the source at the latest post and does not import history. Posts published after that point are mirrored.
 
 ## Source types at a glance
 
-| | Songbird source | Telegram source |
+| | Aurelle source | Telegram source |
 |---|---|---|
 | Credentials required | None | Telegram API ID, hash, session |
 | Server flag | `REMOTE_CHANNEL=true` | `REMOTE_CHANNEL=true` |
@@ -14,15 +14,15 @@ On first enable, Songbird initializes the source at the latest post and does not
 | Target restriction | Target must be a public channel on a server with `SIGN_UP=true` | Source must be a Telegram channel |
 | Optional proxy | `REMOTE_CHANNEL_SONGBIRD_PROXY_URL` | `REMOTE_CHANNEL_TELEGRAM_PROXY_URL` |
 
-## Songbird source
+## Aurelle source
 
-To mirror from another Songbird server, create or edit a **public channel**, enable **Remote Channel**, choose **Songbird**, and paste the public channel invite link from the target server (e.g. `https://other.server/invite/channelname`).
+To mirror from another Aurelle server, create or edit a **public channel**, enable **Remote Channel**, choose **Aurelle**, and paste the public channel invite link from the target server (e.g. `https://other.server/invite/channelname`).
 
 **Requirements:**
 
 - The target server must have `SIGN_UP=true` (public server).
 - The target channel must be public.
-- The target server must be running the same or a newer version of Songbird that includes the public channel polling endpoints.
+- The target server must be running the same or a newer version of Aurelle that includes the public channel polling endpoints.
 
 No extra credentials are needed. Set `REMOTE_CHANNEL=true` on this server and optionally `REMOTE_CHANNEL_SONGBIRD_PROXY_URL` if your server needs a proxy to reach the target.
 
@@ -69,19 +69,19 @@ touch .env
 docker compose run --rm -v "$PWD/.env:/app/.env" songbird npm --prefix /app/server run remote:configure
 ```
 
-Keep the generated session value private. It authorizes Songbird to read Telegram channels that the logged-in Telegram account can access.
+Keep the generated session value private. It authorizes Aurelle to read Telegram channels that the logged-in Telegram account can access.
 </details>
 
-### 3. Connect a Songbird channel
+### 3. Connect a Aurelle channel
 
-In Songbird, create or edit a **public channel**, enable **Remote Channel**, choose **Telegram**, and enter a source such as `@channelname` or `https://t.me/channelname`. Remote Channel is locked for private channels.
+In Aurelle, create or edit a **public channel**, enable **Remote Channel**, choose **Telegram**, and enter a source such as `@channelname` or `https://t.me/channelname`. Remote Channel is locked for private channels.
 
 Optional channel settings:
 
 | Setting | Effect |
 |---|---|
-| Sync Channel Metadata | Copies the Telegram channel title/avatar into the Songbird channel. |
-| Stream Media Files | Downloads Telegram media into Songbird uploads when `FILE_UPLOAD=true`. Follows the upload size/count limits, file retention, encryption-at-rest, and video transcoding settings. Text-only mirrored posts follow `MESSAGE_TEXT_RETENTION`. |
+| Sync Channel Metadata | Copies the Telegram channel title/avatar into the Aurelle channel. |
+| Stream Media Files | Downloads Telegram media into Aurelle uploads when `FILE_UPLOAD=true`. Follows the upload size/count limits, file retention, encryption-at-rest, and video transcoding settings. Text-only mirrored posts follow `MESSAGE_TEXT_RETENTION`. |
 
 :::info
 

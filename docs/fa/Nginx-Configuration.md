@@ -1,6 +1,6 @@
 # پیکربندی Nginx
 
-Songbird هم فرانت‌اند ساخته‌شده و هم API را از سرور Node ارائه می‌دهد، بنابراین Nginx تنها باید یک upstream را پراکسی کند: `http://127.0.0.1:SERVER_PORT`.
+Aurelle هم فرانت‌اند ساخته‌شده و هم API را از سرور Node ارائه می‌دهد، بنابراین Nginx تنها باید یک upstream را پراکسی کند: `http://127.0.0.1:SERVER_PORT`.
 
 فایل `/etc/nginx/sites-available/songbird` را ایجاد کنید:
 

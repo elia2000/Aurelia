@@ -393,7 +393,7 @@ describe("Dual Driver Complete DB Functions Coverage", () => {
         return { rows: [], rowCount: 1 };
       });
 
-      await dbSetSetting("site_name", "Songbird");
+      await dbSetSetting("site_name", "Aurelle");
       await dbDeleteSetting("site_name");
       const settings = await dbGetAllSettings();
       expect(Array.isArray(settings)).toBe(true);

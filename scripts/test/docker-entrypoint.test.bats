@@ -24,7 +24,7 @@ teardown() {
 
   run "$ENTRYPOINT_SCRIPT" echo "app_started"
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "Starting local Songbird Media Worker on port 9090" ]]
+  [[ "$output" =~ "Starting local Aurelle Media Worker on port 9090" ]]
   [[ "$output" =~ "app_started" ]]
 }
 
@@ -36,7 +36,7 @@ teardown() {
 
   run "$ENTRYPOINT_SCRIPT" echo "app_started"
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "Starting local Songbird Media Worker on port 9090" ]]
+  [[ "$output" =~ "Starting local Aurelle Media Worker on port 9090" ]]
   [[ "$output" =~ "app_started" ]]
 }
 
@@ -48,7 +48,7 @@ teardown() {
 
   run "$ENTRYPOINT_SCRIPT" echo "app_started"
   [ "$status" -eq 0 ]
-  [[ ! "$output" =~ "Starting local Songbird Media Worker" ]]
+  [[ ! "$output" =~ "Starting local Aurelle Media Worker" ]]
   [[ "$output" =~ "app_started" ]]
 }
 
@@ -60,7 +60,7 @@ teardown() {
 
   run "$ENTRYPOINT_SCRIPT" echo "app_started"
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "Starting local Songbird Media Worker on port 8080" ]]
+  [[ "$output" =~ "Starting local Aurelle Media Worker on port 8080" ]]
   [[ "$output" =~ "app_started" ]]
 }
 
@@ -71,7 +71,7 @@ teardown() {
 
   run "$ENTRYPOINT_SCRIPT" echo "app_started"
   [ "$status" -eq 0 ]
-  [[ ! "$output" =~ "Starting local Songbird Media Worker" ]]
+  [[ ! "$output" =~ "Starting local Aurelle Media Worker" ]]
   [[ "$output" =~ "app_started" ]]
 }
 
@@ -83,6 +83,6 @@ teardown() {
 
   run "$ENTRYPOINT_SCRIPT" echo "app_started"
   [ "$status" -eq 0 ]
-  [[ ! "$output" =~ "Starting local Songbird Media Worker" ]]
+  [[ ! "$output" =~ "Starting local Aurelle Media Worker" ]]
   [[ "$output" =~ "app_started" ]]
 }

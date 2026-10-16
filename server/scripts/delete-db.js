@@ -22,7 +22,7 @@ async function main() {
   if (dbConfig.client === "postgres") {
     const { running, port } = await detectRunningServer();
     if (running) {
-      throw new Error(`Stop Songbird on port ${port} before deleting its PostgreSQL database, or use the Admin Panel action.`);
+      throw new Error(`Stop Aurelle on port ${port} before deleting its PostgreSQL database, or use the Admin Panel action.`);
     }
     await createPostgresMaintenance({ config: dbConfig }).dropDatabase();
     fs.rmSync(uploadsDir, { recursive: true, force: true });

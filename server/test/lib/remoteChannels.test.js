@@ -31,7 +31,7 @@ describe("remote channel async database dependencies", () => {
     });
 
     await expect(manager.syncSourceMetadata(5)).rejects.toThrow(
-      "Songbird metadata sync failed",
+      "Aurelle metadata sync failed",
     );
     expect(events).toEqual(["source-error"]);
   });

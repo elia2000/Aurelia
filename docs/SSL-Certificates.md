@@ -47,7 +47,7 @@ The [Deployment Script](./Deployment-Script.md) (`songbird-deploy`) can configur
 
 ## Option D: Self-signed certificate (not recommended for production)
 
-Songbird ships a helper script that generates a self-signed certificate:
+Aurelle ships a helper script that generates a self-signed certificate:
 
 ```bash
 bash scripts/gen-certs.sh

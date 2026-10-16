@@ -1280,7 +1280,7 @@ setup_test_git_repo() {
 
   run update_songbird
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "Songbird is already up to date." ]]
+  [[ "$output" =~ "Aurelle is already up to date." ]]
   [[ "$output" =~ "No rebuild needed." ]]
 }
 
@@ -1367,7 +1367,7 @@ setup_test_git_repo() {
 
   run update_songbird
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "Songbird is already up to date. No rebuild needed." ]]
+  [[ "$output" =~ "Aurelle is already up to date. No rebuild needed." ]]
 }
 
 @test "update_songbird: offline mode prompt downgrade when zip version is lower (accepted)" {
@@ -1447,7 +1447,7 @@ setup_test_git_repo() {
 
   run update_songbird
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "Songbird is already up to date. No rebuild needed." ]]
+  [[ "$output" =~ "Aurelle is already up to date. No rebuild needed." ]]
 }
 
 @test "update_songbird: offline mode prompt update when zip version is the same (accepted)" {

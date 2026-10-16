@@ -1,6 +1,6 @@
 # Running behind a CDN
 
-Running Songbird behind a CDN (Content Delivery Network) is strongly recommended, and in many cases required, for anyone self-hosting in a restricted network environment.
+Running Aurelle behind a CDN (Content Delivery Network) is strongly recommended, and in many cases required, for anyone self-hosting in a restricted network environment.
 
 ## Why you need a CDN
 
@@ -81,7 +81,7 @@ If you used the deployment script or Certbot for SSL, you already have a valid c
 
 ### 5. Preserve real visitor IPs in Nginx (optional)
 
-When traffic comes through Cloudflare, the IP your server sees at the Nginx layer is a Cloudflare edge IP, not the visitor's real IP. However, **Songbird's Node.js server already handles this correctly** — it has `app.set('trust proxy', 1)` configured, which tells Express to read the real client IP from the `X-Forwarded-For` header that Cloudflare always sends. This means rate limiting and all IP-aware logic in Songbird work correctly behind a CDN without any extra Nginx configuration.
+When traffic comes through Cloudflare, the IP your server sees at the Nginx layer is a Cloudflare edge IP, not the visitor's real IP. However, **Aurelle's Node.js server already handles this correctly** — it has `app.set('trust proxy', 1)` configured, which tells Express to read the real client IP from the `X-Forwarded-For` header that Cloudflare always sends. This means rate limiting and all IP-aware logic in Aurelle work correctly behind a CDN without any extra Nginx configuration.
 
 The only thing you lose without this step is accurate IPs in your **Nginx access logs**. If that matters to you, add the following inside the `server {}` block in your Nginx config:
 
@@ -144,10 +144,10 @@ The same pattern applies to other CDN providers (Arvan Cloud, Fastly, BunnyCDN, 
 
 ## SSE and long-lived connections
 
-Songbird uses WebSocket for real-time updates (messages, presence, and typing) and SSE as a fallback stream. Both require a persistent HTTP/WebSocket connection that stays open; a user's presence state is determined by their live connection. Some CDN configurations close idle or long-running connections.
+Aurelle uses WebSocket for real-time updates (messages, presence, and typing) and SSE as a fallback stream. Both require a persistent HTTP/WebSocket connection that stays open; a user's presence state is determined by their live connection. Some CDN configurations close idle or long-running connections.
 
 If users experience messages only loading after a page refresh (a sign of broken SSE), check:
 
 - **Cloudflare**: Enable **HTTP/2** in the Speed settings. Cloudflare supports SSE natively over HTTP/2. Also ensure the `/api/events` path is not cached — add a Cache Rule to bypass caching for that path.
 - **Response buffering**: Ensure `proxy_buffering off` and `add_header X-Accel-Buffering no` remain in your Nginx `/api/events` location block. See [Configure Nginx](./Nginx-Configuration.md).
-- **Timeout settings**: In Cloudflare, the proxy timeout is 100 seconds by default on the free plan. The Songbird client reconnects automatically, so this is acceptable, but upgrading to a paid plan allows longer timeouts.
+- **Timeout settings**: In Cloudflare, the proxy timeout is 100 seconds by default on the free plan. The Aurelle client reconnects automatically, so this is acceptable, but upgrading to a paid plan allows longer timeouts.

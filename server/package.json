@@ -4,12 +4,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/elia2000/Aurelle.git"
+    "url": "git+https://github.com/elia2000/Aurelia.git"
   },
   "bugs": {
-    "url": "https://github.com/elia2000/Aurelle/issues"
+    "url": "https://github.com/elia2000/Aurelia/issues"
   },
-  "homepage": "https://github.com/elia2000/Aurelle#readme",
+  "homepage": "https://github.com/elia2000/Aurelia#readme",
   "type": "module",
   "scripts": {
     "dev": "node --watch --watch-path=. --watch-path=../.env index.js",

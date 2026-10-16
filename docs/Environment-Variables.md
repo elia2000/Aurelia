@@ -31,7 +31,7 @@ nano .env
 | `POSTGRES_URL` | `string` | `null` | Optional full PostgreSQL connection string URL. |
 | `POSTGRES_SSL` | `boolean` | `false` | Enable SSL for PostgreSQL connections. |
 | `NODE_EXTRA_CA_CERTS` | `string` | `""` | Absolute path to an additional trusted PEM CA certificate bundle or file (required for managed PostgreSQL databases with custom/self-signed CAs like Aiven or AWS RDS). |
-| `REDIS_HOST` | `string` | `""` | Optional Redis host. If set, Songbird uses Redis for BullMQ background job queues (media processing), session storage, and pub/sub instead of in-process fallback. |
+| `REDIS_HOST` | `string` | `""` | Optional Redis host. If set, Aurelle uses Redis for BullMQ background job queues (media processing), session storage, and pub/sub instead of in-process fallback. |
 | `REDIS_PORT` | `integer` | `6379` | Optional Redis port. |
 | `REDIS_URL` | `string` | `""` | Optional Redis connection URL (e.g. `redis://user:pass@host:port`). |
 | `APP_ENV` | `string` | `production` | Server runtime mode (`production` recommended/default). |
@@ -56,11 +56,11 @@ nano .env
 | `STORAGE_FORCE_PATH_STYLE` | `boolean` | `true` | Enable path-style URL syntax (`true` recommended for MinIO, R2, ArvanCloud, etc.). |
 | `STORAGE_PROXY_URL` | `string` | `""` | Optional HTTP/HTTPS proxy URL for object storage requests. |
 | `WORKER_URL` | `string` | `""` | External media processing worker base URL for HTTP push transcoding (e.g. `https://worker.example.com`). |
-| `WORKER_PORT` | `integer` | `8080` | Port for the standalone Media Worker service (`worker/`). Songbird uses this port to construct the default local Media Worker URL (`http://127.0.0.1:8080`) when `WORKER_URL` is omitted. |
+| `WORKER_PORT` | `integer` | `8080` | Port for the standalone Media Worker service (`worker/`). Aurelle uses this port to construct the default local Media Worker URL (`http://127.0.0.1:8080`) when `WORKER_URL` is omitted. |
 | `STORAGE_PROCESSING_MODE` | `string` | `auto` | Media processing workflow mode (`auto`, `local`, `remote`). |
 | `STORAGE_PROCESSING_TIMEOUT_MS` | `integer` | `120000` | Total retry timeout in milliseconds when dispatching transcode jobs to the remote worker before falling back to the local worker (in `auto` mode) or failing the dispatch (in `remote` mode). |
-| `WEBHOOK_SECRET` | `string` | *(Auto-generated)* | Secret token (`x-songbird-webhook-secret`) to authenticate dispatch and callback requests between Songbird and the Media Worker. |
-| `WEBHOOK_URL` | `string` | `""` | Songbird public webhook callback URL sent to external workers (e.g. `https://songbird.example.com/api/uploads/webhook/processed`). |
+| `WEBHOOK_SECRET` | `string` | *(Auto-generated)* | Secret token (`x-songbird-webhook-secret`) to authenticate dispatch and callback requests between Aurelle and the Media Worker. |
+| `WEBHOOK_URL` | `string` | `""` | Aurelle public webhook callback URL sent to external workers (e.g. `https://songbird.example.com/api/uploads/webhook/processed`). |
 | `STORAGE_ENCRYPTION_MODE` | `string` | `remote` | Storage encryption strategy (`remote` for provider-side SSE-S3, `local` for application-level encryption). |
 | `MESSAGE_FILE_RETENTION` | `integer` | `7` | Auto-delete uploaded message files after N days (`0` disables). |
 | `MESSAGE_TEXT_RETENTION` | `integer` | `0` | Auto-delete text-only messages after N days (`0` disables). |
@@ -72,7 +72,7 @@ nano .env
 | `REMOTE_CHANNEL_TELEGRAM_API_HASH` | `string` | `""` | Telegram API hash. |
 | `REMOTE_CHANNEL_TELEGRAM_SESSION_STRING` | `string` | `""` | Telegram StringSession. Treat it like a password. |
 | `REMOTE_CHANNEL_TELEGRAM_PROXY_URL` | `string` | `""` | Telegram MTProto proxy URL. (`REMOTE_CHANNEL_PROXY_URL` is supported as a legacy fallback.) |
-| `REMOTE_CHANNEL_SONGBIRD_PROXY_URL` | `string` | `""` | HTTP/HTTPS proxy for outbound requests from this server to remote Songbird servers. |
+| `REMOTE_CHANNEL_SONGBIRD_PROXY_URL` | `string` | `""` | HTTP/HTTPS proxy for outbound requests from this server to remote Aurelle servers. |
 | `REMOTE_CHANNEL_TICK_MODE` | `boolean` | `false` | When `true`, background poll loops stay off so a serverless host can sleep. |
 | `REMOTE_CHANNEL_CRON_SECRET` | `string` | *(Auto-generated)* | Shared secret for the tick endpoint. |
 | `REMOTE_CHANNEL_POLL_INTERVAL_MS` | `integer` | `5000` | How often the poller checks enabled Remote Channel sources (`1000`-`900000`). |
@@ -114,7 +114,7 @@ nano .env
 
 :::info
 
-**Encryption at rest:** Songbird auto-generates `STORAGE_ENCRYPTION_KEY` on first run and saves it into `.env`. Keep that value stable. On startup, the server backfills existing stored messages, message-upload files, and avatar files into encrypted form when needed.
+**Encryption at rest:** Aurelle auto-generates `STORAGE_ENCRYPTION_KEY` on first run and saves it into `.env`. Keep that value stable. On startup, the server backfills existing stored messages, message-upload files, and avatar files into encrypted form when needed.
 
 :::
 

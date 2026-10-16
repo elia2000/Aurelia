@@ -3,7 +3,7 @@
 #
 # What it does on the target VM (Ubuntu, hosts: all, become: yes):
 #   1. Installs Docker Engine + compose plugin, git and openssl.
-#   2. Clones elia2000/Aurelle into /root/songbird at the latest GitHub
+#   2. Clones elia2000/Aurelia into /root/songbird at the latest GitHub
 #      release (falls back to the main branch when no release is published
 #      or the API is unreachable).
 #   3. Generates a self-signed TLS cert (certs/) if none exists, so the
@@ -24,7 +24,7 @@
   hosts: all
   become: true
   vars:
-    songbird_repo: "https://github.com/elia2000/Aurelle.git"
+    songbird_repo: "https://github.com/elia2000/Aurelia.git"
     # "latest" resolves to the newest GitHub release tag at install time.
     # Set to an explicit tag or branch (e.g. "v0.12.1" or "main") to pin instead.
     songbird_version: "latest"
@@ -76,7 +76,7 @@
 
     - name: Resolve latest Songbird release
       ansible.builtin.uri:
-        url: https://api.github.com/repos/elia2000/Aurelle/releases/latest
+        url: https://api.github.com/repos/elia2000/Aurelia/releases/latest
         return_content: yes
       register: songbird_release
       failed_when: false

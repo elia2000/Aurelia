@@ -1,10 +1,10 @@
 # Updating
 
-How you update or downgrade depends on how you installed Songbird.
+How you update or downgrade depends on how you installed Aurelle.
 
 | Install method | Update / Downgrade path |
 |---|---|
-| Deployment script | Run `songbird-deploy` and choose **Update Songbird** (handles database backup, git pull or checkout, rebuild, migrations, and service restart). |
+| Deployment script | Run `songbird-deploy` and choose **Update Aurelle** (handles database backup, git pull or checkout, rebuild, migrations, and service restart). |
 | Docker | Git pull/checkout target tag or commit + `docker compose up -d --build`. |
 | Manual (systemd) | Git pull/checkout target tag or commit + rebuild client/server + restart service. |
 
@@ -29,7 +29,7 @@ The [Deployment Script](./Deployment-Script.md) handles both updates and downgra
 
 ## Deployment script (songbird-deploy)
 
-The interactive deployment script is the easiest way to update or downgrade your Songbird instance.
+The interactive deployment script is the easiest way to update or downgrade your Aurelle instance.
 
 Run the tool:
 
@@ -37,7 +37,7 @@ Run the tool:
 songbird-deploy
 ```
 
-Choose option **2** (**Update Songbird**).
+Choose option **2** (**Update Aurelle**).
 
 ### 1. Pre-update database backup
 
@@ -65,7 +65,7 @@ When newer commits are available on the `main` branch, the script automatically:
 If your local instance is already up to date with `origin/main`, the script informs you:
 
 ```txt
-Songbird is already up to date.
+Aurelle is already up to date.
 Do you want to downgrade? [y/N]
 ```
 

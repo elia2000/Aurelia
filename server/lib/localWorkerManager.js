@@ -164,7 +164,7 @@ export async function ensureLocalWorkerRunning(options = {}) {
     process.once("SIGTERM", cleanup);
 
     console.log(
-      `[localWorkerManager] Auto-started local Songbird Media Worker on port ${workerPort} (PID: ${child.pid}, mode: ${storageProcessingMode})`,
+      `[localWorkerManager] Auto-started local Aurelle Media Worker on port ${workerPort} (PID: ${child.pid}, mode: ${storageProcessingMode})`,
     );
 
     return {

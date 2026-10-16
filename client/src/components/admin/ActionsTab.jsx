@@ -232,7 +232,7 @@ const ActionsTab = forwardRef(function ActionsTab({ serviceStatus }, ref) {
       }
       const blob = await res.blob();
       const contentDisposition = res.headers.get("content-disposition");
-      let filename = "songbird-backup.db";
+      let filename = "aurelle-backup.db";
       if (contentDisposition) {
         const match = contentDisposition.match(/filename="?([^";]+)"?/);
         if (match && match[1]) filename = match[1];

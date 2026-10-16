@@ -40,7 +40,7 @@ There are two primary ways to grant an account **owner** or **admin** privileges
    ```
   :::
 
-2. Log in to your Songbird instance with the promoted account.
+2. Log in to your Aurelle instance with the promoted account.
 
 3. Click the **Admin Panel** button in the sidebar (accessible only by owner and admins).
 
@@ -48,7 +48,7 @@ There are two primary ways to grant an account **owner** or **admin** privileges
 
 For deployments on PaaS providers (such as Render, Railway, or Fly.io) or container platforms where terminal access is unavailable, authenticated users can claim privileges directly via the web UI:
 
-1. Configure `ADMIN_API_TOKEN` in your environment variables (e.g., in your PaaS dashboard settings). If not set, Songbird auto-generates a token on first boot and saves it in `.env`.
+1. Configure `ADMIN_API_TOKEN` in your environment variables (e.g., in your PaaS dashboard settings). If not set, Aurelle auto-generates a token on first boot and saves it in `.env`.
 2. Log in to your registered user account.
 3. Open your browser and navigate directly to `/admin`.
 4. Enter the `ADMIN_API_TOKEN` in the Emergency Admin Access prompt.
@@ -69,7 +69,7 @@ Do not share `ADMIN_API_TOKEN` and keep it private. Anyone can access the admin 
 
 ## Dashboard Tab
 
-The Dashboard provides an overview of your Songbird instance:
+The Dashboard provides an overview of your Aurelle instance:
 
 - **Statistics**: Total users, chats, messages, and uploaded files
 - **System Info**: Uptime, and environment
@@ -77,7 +77,7 @@ The Dashboard provides an overview of your Songbird instance:
 
 ## Users Tab
 
-Manage all users in your Songbird instance:
+Manage all users in your Aurelle instance:
 
 ### Features
 
@@ -183,7 +183,7 @@ Configure runtime settings through the UI (replaces most `.env` variables):
 - Push notification proxy URL (nullable) — restart required
 - Object storage proxy URL (nullable) — restart required
 - Telegram proxy URL (nullable) — restart required
-- Songbird server-to-server proxy URL (nullable, live)
+- Aurelle server-to-server proxy URL (nullable, live)
 
 #### Secrets (owner-only)
 
@@ -232,7 +232,7 @@ Perform system administration tasks:
 
 **Restore**
 - SQLite backups can be uploaded and restored while the service is running
-- PostgreSQL restore is deliberately offline-only: stop Songbird, then use `npm run db:restore -- -y --file <backup.dump>`
+- PostgreSQL restore is deliberately offline-only: stop Aurelle, then use `npm run db:restore -- -y --file <backup.dump>`
 
 **Vacuum**
 - SQLite compacts the database file with `VACUUM`
@@ -247,12 +247,12 @@ Perform system administration tasks:
 - See if update is available
 
 **Restart Service**
-- Restart the Songbird server
+- Restart the Aurelle server
 - Applies pending changes
 - Reconnects all clients
 
 **Stop Service**
-- Gracefully stop the Songbird server
+- Gracefully stop the Aurelle server
 - Requires manual start via systemd/Docker
 
 :::warning Permission Requirements

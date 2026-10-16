@@ -1,6 +1,6 @@
 # Deployment Script
 
-The deployment script (`songbird-deploy`) is the recommended way to install and manage Songbird. It is an interactive, menu-driven tool that handles dependencies, builds, Nginx, SSL certificates, environment configuration, database management, and updates, so you do not have to run those steps by hand.
+The deployment script (`songbird-deploy`) is the recommended way to install and manage Aurelle. It is an interactive, menu-driven tool that handles dependencies, builds, Nginx, SSL certificates, environment configuration, database management, and updates, so you do not have to run those steps by hand.
 
 :::info
 
@@ -13,7 +13,7 @@ The script targets Ubuntu (22.04+) and needs root privileges (it uses `sudo` aut
 Run the one-liner on your server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelle/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelia/main/scripts/install.sh | bash
 ```
 
 This downloads the script, opens the menu, and installs a global `songbird-deploy` command. From then on, launch it anytime with:
@@ -26,12 +26,12 @@ songbird-deploy
 
 | Option | Action | Description |
 |---|---|---|
-| 1 | 📥 Install Songbird | Full guided install: dependencies, build, Nginx, SSL, and `.env`. |
-| 2 | 🔄 Update Songbird | Update to latest version or downgrade to a specific version, rebuild, and restart (optional pre-update backup). |
-| 3 | ♻️ Restart Songbird | Restart the `songbird.service`. |
+| 1 | 📥 Install Aurelle | Full guided install: dependencies, build, Nginx, SSL, and `.env`. |
+| 2 | 🔄 Update Aurelle | Update to latest version or downgrade to a specific version, rebuild, and restart (optional pre-update backup). |
+| 3 | ♻️ Restart Aurelle | Restart the `songbird.service`. |
 | 4 | ⚙️ Edit Settings (.env) | Change ports, uploads, retention, sign-up, and other env values, then rebuild/apply. |
 | 5 | 🗃️ Manage Database | Open the database submenu (see below). |
-| 6 | 🗑️ Remove Songbird | Uninstall Songbird, optionally removing the global command. |
+| 6 | 🗑️ Remove Aurelle | Uninstall Aurelle, optionally removing the global command. |
 | 7 | 🔄 Update menu | Check GitHub for newer script versions and update the global command (or reinstall current). |
 | 8 | 🌐 Configure mirrors | Set NodeSource, apt, and npm registry mirrors for restricted networks. |
 | 9 | 📋 View Logs | Open the logs submenu (script, service, Nginx access/error). |
@@ -52,8 +52,8 @@ When you choose **Install**, the script walks you through a series of prompts:
 
 | Mode | Description |
 |---|---|
-| Domain | Serve Songbird on a domain name (e.g. `example.com`). |
-| IP | Serve Songbird directly on the server's public IP. |
+| Domain | Serve Aurelle on a domain name (e.g. `example.com`). |
+| IP | Serve Aurelle directly on the server's public IP. |
 
 ### 3. Certificate mode
 
@@ -109,7 +109,7 @@ Option **5** opens a full database manager that wraps the [database commands](./
 
 ## Updating and downgrading
 
-Choose **Update Songbird** (Option 2) from the menu to update or downgrade your installation:
+Choose **Update Aurelle** (Option 2) from the menu to update or downgrade your installation:
 
 1. **Database backup**: The script offers to create a timestamped backup before touching application files.
 2. **GitHub mode**:

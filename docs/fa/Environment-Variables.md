@@ -31,7 +31,7 @@ nano .env
 | `POSTGRES_URL` | `string` | `null` | رشته اتصال اختیاری کامل برای PostgreSQL. |
 | `POSTGRES_SSL` | `boolean` | `false` | فعالسازی SSL برای اتصالات PostgreSQL. |
 | `NODE_EXTRA_CA_CERTS` | `string` | `""` | مسیر مطلق به یک فایل گواهی ریشه مورد اعتماد اضافی با فرمت PEM (الزامی برای پایگاه های داده مدیریت شده مانند Aiven یا AWS RDS که از CA اختصاصی/سلف سایند استفاده میکنند). |
-| `REDIS_HOST` | `string` | `""` | آدرس اختیاری هاست Redis. در صورت تنظیم، Songbird از Redis برای صف های پس زمینه BullMQ (پردازش رسانه)، مدیریت نشست ها و pub/sub به جای مکانیزم درون-فرآیندی استفاده میکند. |
+| `REDIS_HOST` | `string` | `""` | آدرس اختیاری هاست Redis. در صورت تنظیم، Aurelle از Redis برای صف های پس زمینه BullMQ (پردازش رسانه)، مدیریت نشست ها و pub/sub به جای مکانیزم درون-فرآیندی استفاده میکند. |
 | `REDIS_PORT` | `integer` | `6379` | پورت اختیاری Redis. |
 | `REDIS_URL` | `string` | `""` | آدرس URL اختیاری اتصال به Redis (مانند `redis://user:pass@host:port`). |
 | `APP_ENV` | `string` | `production` | حالت اجرای سرور (`production` توصیه‌شده/پیش‌فرض است). |
@@ -56,11 +56,11 @@ nano .env
 | `STORAGE_FORCE_PATH_STYLE` | `boolean` | `true` | فعال سازی ساختار URL به روش path-style (مقدار `true` برای MinIO، R2، ArvanCloud توصیه میشود). |
 | `STORAGE_PROXY_URL` | `string` | `""` | آدرس پروکسی اختیاری برای درخواست های فضای ذخیره سازی ابری. |
 | `WORKER_URL` | `string` | `""` | آدرس پایه worker خارجی پردازش رسانه برای ترنسکد با HTTP push (مانند `https://worker.example.com`). |
-| `WORKER_PORT` | `integer` | `8080` | پورت سرویس Media Worker مستقل (`worker/`). در صورت خالی بودن `WORKER_URL`، پلتفرم Songbird از این مقدار برای ساخت آدرس پیشفرض ورکر محلی (`http://127.0.0.1:8080`) استفاده میکند. |
+| `WORKER_PORT` | `integer` | `8080` | پورت سرویس Media Worker مستقل (`worker/`). در صورت خالی بودن `WORKER_URL`، پلتفرم Aurelle از این مقدار برای ساخت آدرس پیشفرض ورکر محلی (`http://127.0.0.1:8080`) استفاده میکند. |
 | `STORAGE_PROCESSING_MODE` | `string` | `auto` | حالت گردش کار پردازش مدیا (`auto`، `local`، `remote`). |
 | `STORAGE_PROCESSING_TIMEOUT_MS` | `integer` | `120000` | مهلت زمانی تلاش مجدد به میلی ثانیه برای ارسال کارهای ترنسکد به ورکر ریموت پیش از انتقال به ورکر محلی (در حالت `auto`) یا عدم موفقیت ارسال (در حالت `remote`). |
-| `WEBHOOK_SECRET` | `string` | *(تولید خودکار)* | توکن امنیتی هدر `x-songbird-webhook-secret` برای احراز هویت ارتباطات میان Songbird و Media Worker. |
-| `WEBHOOK_URL` | `string` | `""` | آدرس بازخوانی (Callback) عمومی Webhook سرور Songbird ارسالی به workerها (مانند `https://songbird.example.com/api/uploads/webhook/processed`). |
+| `WEBHOOK_SECRET` | `string` | *(تولید خودکار)* | توکن امنیتی هدر `x-songbird-webhook-secret` برای احراز هویت ارتباطات میان Aurelle و Media Worker. |
+| `WEBHOOK_URL` | `string` | `""` | آدرس بازخوانی (Callback) عمومی Webhook سرور Aurelle ارسالی به workerها (مانند `https://songbird.example.com/api/uploads/webhook/processed`). |
 | `STORAGE_ENCRYPTION_MODE` | `string` | `remote` | استراتژی رمزنگاری ذخیره سازی (`remote` برای سمت ارائه دهنده، `local` برای رمزنگاری سمت اپلیکیشن). |
 | `MESSAGE_FILE_RETENTION` | `integer` | `7` | حذف خودکار فایل‌های پیام آپلودشده پس از N روز (`0` غیرفعال می‌کند). |
 | `MESSAGE_TEXT_RETENTION` | `integer` | `0` | حذف خودکار پیام‌های فقط‌متنی پس از N روز (`0` غیرفعال می‌کند). |
@@ -72,7 +72,7 @@ nano .env
 | `REMOTE_CHANNEL_TELEGRAM_API_HASH` | `string` | `""` | API hash مربوط به Telegram. |
 | `REMOTE_CHANNEL_TELEGRAM_SESSION_STRING` | `string` | `""` | StringSession مربوط به Telegram. با آن مانند یک رمز عبور رفتار کنید. |
 | `REMOTE_CHANNEL_TELEGRAM_PROXY_URL` | `string` | `""` | نشانی پراکسی MTProto مربوط به Telegram. (`REMOTE_CHANNEL_PROXY_URL` به‌عنوان جایگزین قدیمی پشتیبانی می‌شود.) |
-| `REMOTE_CHANNEL_SONGBIRD_PROXY_URL` | `string` | `""` | پراکسی HTTP/HTTPS برای درخواست‌های خروجی از این سرور به سرورهای ریموت Songbird. |
+| `REMOTE_CHANNEL_SONGBIRD_PROXY_URL` | `string` | `""` | پراکسی HTTP/HTTPS برای درخواست‌های خروجی از این سرور به سرورهای ریموت Aurelle. |
 | `REMOTE_CHANNEL_TICK_MODE` | `boolean` | `false` | وقتی `true` باشد، حلقه‌های poll پس‌زمینه خاموش می‌مانند تا میزبان serverless بتواند sleep شود.  |
 | `REMOTE_CHANNEL_CRON_SECRET` | `string` | *(تولید خودکار)* | secret مشترک برای endpoint مربوط به tick. |
 | `REMOTE_CHANNEL_POLL_INTERVAL_MS` | `integer` | `5000` | فاصله زمانی بررسی منابع فعال کانال ریموت توسط poller (`1000`-`900000`). |
@@ -114,7 +114,7 @@ nano .env
 
 :::info
 
-**رمزنگاری در حالت سکون:** Songbird در اولین اجرا `STORAGE_ENCRYPTION_KEY` را به‌صورت خودکار تولید کرده و آن را در `.env` ذخیره می‌کند. آن مقدار را پایدار نگه دارید. هنگام راه‌اندازی، سرور در صورت نیاز پیام‌های ذخیره‌شده موجود، فایل‌های آپلود پیام و فایل‌های آواتار را به شکل رمزنگاری‌شده درمی‌آورد.
+**رمزنگاری در حالت سکون:** Aurelle در اولین اجرا `STORAGE_ENCRYPTION_KEY` را به‌صورت خودکار تولید کرده و آن را در `.env` ذخیره می‌کند. آن مقدار را پایدار نگه دارید. هنگام راه‌اندازی، سرور در صورت نیاز پیام‌های ذخیره‌شده موجود، فایل‌های آپلود پیام و فایل‌های آواتار را به شکل رمزنگاری‌شده درمی‌آورد.
 
 :::
 

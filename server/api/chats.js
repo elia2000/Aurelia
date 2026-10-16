@@ -264,7 +264,7 @@ function registerChatRoutes(app, deps) {
       if (enabled && !normalized.sourceUrl) {
         return {
           shouldSave: true,
-          error: "Songbird source URL is required.",
+          error: "Aurelle source URL is required.",
           status: 400,
         };
       }
@@ -855,7 +855,7 @@ function registerChatRoutes(app, deps) {
     });
   });
 
-  // Public unauthenticated metadata endpoint used by remote Songbird servers
+  // Public unauthenticated metadata endpoint used by remote Aurelle servers
   // to sync channel name and avatar when "Sync Channel Metadata" is enabled.
   // Only works for public channels on servers with SIGN_UP enabled.
   app.get("/api/channels/:username/meta", async (req, res) => {
@@ -889,7 +889,7 @@ function registerChatRoutes(app, deps) {
     });
   });
 
-  // Public unauthenticated messages endpoint used by remote Songbird servers
+  // Public unauthenticated messages endpoint used by remote Aurelle servers
   app.get("/api/channels/:username/messages", async (req, res) => {
     if (!getSetting("SIGN_UP")) {
       return res.status(403).json({ error: "This server is private." });

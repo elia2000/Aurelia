@@ -112,7 +112,7 @@ validate_instance_data_dir() {
   expected_data_dir="$install_dir/data"
   canonical_data_dir="$("$REALPATH_BIN" -m -- "$DATA_DIR")"
   if [[ "$canonical_data_dir" != "$expected_data_dir" ]]; then
-    printf 'Root-run Songbird data commands only support DATA_DIR=%s.\n' "$expected_data_dir" >&2
+    printf 'Root-run Aurelle data commands only support DATA_DIR=%s.\n' "$expected_data_dir" >&2
     return 78
   fi
   DATA_DIR="$expected_data_dir"
@@ -122,7 +122,7 @@ validate_current_account() {
   local runtime_user="$1" runtime_group="$2"
 
   if [[ "$("$ID_BIN" -un)" != "$runtime_user" || "$("$ID_BIN" -gn)" != "$runtime_group" ]]; then
-    printf 'Songbird data commands must be run as %s:%s.\n' "$runtime_user" "$runtime_group" >&2
+    printf 'Aurelle data commands must be run as %s:%s.\n' "$runtime_user" "$runtime_group" >&2
     return 77
   fi
 }
@@ -159,7 +159,7 @@ execute_data_command() {
       exec "$@"
       ;;
     *)
-      printf 'Unknown Songbird runtime mode: %s.\n' "$mode" >&2
+      printf 'Unknown Aurelle runtime mode: %s.\n' "$mode" >&2
       return 70
       ;;
   esac
@@ -170,7 +170,7 @@ require_utilities() {
 
   for utility in "$ID_BIN" "$MKDIR_BIN"; do
     if [[ ! -x "$utility" ]]; then
-      printf 'Songbird data command launcher requires standard Debian/Ubuntu system utilities.\n' >&2
+      printf 'Aurelle data command launcher requires standard Debian/Ubuntu system utilities.\n' >&2
       return 69
     fi
   done
@@ -194,7 +194,7 @@ main() {
   if [[ "$mode" == "systemd" && "$runtime_user" != "root" && "$EUID" -eq 0 ]]; then
     for utility in "$CHOWN_BIN" "$RUNUSER_BIN" "$ENV_BIN" "$REALPATH_BIN" "$DIRNAME_BIN"; do
       if [[ ! -x "$utility" ]]; then
-        printf 'Songbird data command launcher requires standard Debian/Ubuntu system utilities.\n' >&2
+        printf 'Aurelle data command launcher requires standard Debian/Ubuntu system utilities.\n' >&2
         return 69
       fi
     done

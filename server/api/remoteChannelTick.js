@@ -4,7 +4,7 @@ import rateLimit, { ipKeyGenerator } from "express-rate-limit";
  * remoteChannelTick.js — sleep-friendly on-demand polling.
  *
  * POST /api/internal/remote-channel/tick runs one poll+queue cycle
- * (Telegram + Songbird sources, then a queue drain) and disconnects the
+ * (Telegram + Aurelle sources, then a queue drain) and disconnects the
  * MTProto client so a serverless host (e.g. Render free) can sleep again.
  *
  * Auth: shared secret via `x-songbird-cron-secret` header, matching

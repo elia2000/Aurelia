@@ -1,6 +1,6 @@
 # Running behind a domain + subpath
 
-By default Songbird is served from the root of a domain (e.g. `https://chat.example.com/`). If you instead want to host it under a subpath (e.g. `https://example.com/songbird/`), you need to align three things: the Vite build `base`, the client asset references, and the Nginx location block.
+By default Aurelle is served from the root of a domain (e.g. `https://chat.example.com/`). If you instead want to host it under a subpath (e.g. `https://example.com/songbird/`), you need to align three things: the Vite build `base`, the client asset references, and the Nginx location block.
 
 :::info
 
@@ -14,7 +14,7 @@ Root-domain hosting is the supported default and needs none of the steps below. 
 |---|---|---|
 | Vite build | Set `base` to the subpath | So built asset URLs are prefixed with the subpath. |
 | `client/index.html` | Ensure icon/manifest links resolve under the subpath | Absolute `/...` paths break when served from a subpath. |
-| Nginx | Add a `location` block for the subpath that proxies to the Node server | So requests under the subpath reach Songbird. |
+| Nginx | Add a `location` block for the subpath that proxies to the Node server | So requests under the subpath reach Aurelle. |
 | `.env` | Keep `SERVER_PORT` / `CLIENT_PORT` aligned with the proxy | Same as a normal install. |
 
 ## 1. Set the Vite `base`

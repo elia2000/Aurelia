@@ -59,7 +59,7 @@ docker run hello-world
 ```bash
 sudo mkdir -p /opt/songbird
 cd /opt/songbird
-git clone https://github.com/elia2000/Aurelle.git .
+git clone https://github.com/elia2000/Aurelia.git .
 ```
 
 ## 3. Configure environment
@@ -72,7 +72,7 @@ nano .env
 ```
 
 :::info Using PostgreSQL with Docker
-Songbird defaults to SQLite (`DB_CLIENT=sqlite3`). To use PostgreSQL instead, edit `.env` to set `DB_CLIENT=postgres` along with your `POSTGRES_*` environment variables, or uncomment the optional `postgres` service and `postgres-data` volume block in `docker-compose.yaml`.
+Aurelle defaults to SQLite (`DB_CLIENT=sqlite3`). To use PostgreSQL instead, edit `.env` to set `DB_CLIENT=postgres` along with your `POSTGRES_*` environment variables, or uncomment the optional `postgres` service and `postgres-data` volume block in `docker-compose.yaml`.
 :::
 
 :::info Media Worker Container
@@ -120,7 +120,7 @@ docker compose restart nginx
 
 ## Runtime User and Persistent Data
 
-Docker deployments do not use `songbird.service`. Songbird runs as the user configured for the container (root in the current image unless Compose `user:` overrides it), and database commands run as that same container UID/GID:
+Docker deployments do not use `songbird.service`. Aurelle runs as the user configured for the container (root in the current image unless Compose `user:` overrides it), and database commands run as that same container UID/GID:
 
 ```bash
 docker compose exec songbird npm --prefix /app/server run db:inspect
@@ -134,7 +134,7 @@ services:
     user: "songbird:songbird"
 ```
 
-When using a bind mount instead of the default named volume, make the host directory writable by that same UID:GID before starting Songbird. Songbird does not change host bind-mount ownership automatically:
+When using a bind mount instead of the default named volume, make the host directory writable by that same UID:GID before starting Aurelle. Aurelle does not change host bind-mount ownership automatically:
 
 ```bash
 mkdir -p ./data

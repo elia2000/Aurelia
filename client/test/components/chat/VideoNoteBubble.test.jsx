@@ -174,3 +174,125 @@ describe("VideoNoteBubble", () => {
     expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
   });
 });
+
+describe("VideoNoteBubble seek bullet", () => {
+  // A bare <video> with a test source has no timeline: give it one.
+  let positions;
+  beforeEach(() => {
+    positions = new WeakMap();
+    Object.defineProperty(HTMLMediaElement.prototype, "currentTime", {
+      configurable: true,
+      get() {
+        return positions.get(this) ?? 0;
+      },
+      set(value) {
+        positions.set(this, Number(value));
+      },
+    });
+    Object.defineProperty(HTMLMediaElement.prototype, "duration", { configurable: true, get: () => 12 });
+  });
+
+  async function loaded() {
+    const { msg, user } = await setup();
+    render(<VideoNoteBubble msg={msg} user={user} />);
+    await page.getByRole("button", { name: /Play video message/ }).click();
+    await vi.waitFor(() => expect(document.querySelector("video")?.src.startsWith("blob:")).toBe(true));
+    await expect.element(page.getByRole("button", { name: /Pause video message/ })).toBeInTheDocument();
+    const video = document.querySelector("video");
+    const wrap = video.closest("div.relative");
+    const rect = wrap.getBoundingClientRect();
+    const scale = rect.width / 224;
+    const R = (224 / 2 - 5 / 2) * scale; // ring radius on screen
+    const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    // Where the ring is at a fraction of the way round, clockwise from the top.
+    const at = (fraction) => ({
+      clientX: center.x + R * Math.sin(2 * Math.PI * fraction),
+      clientY: center.y - R * Math.cos(2 * Math.PI * fraction),
+    });
+    const fire = (target, type, point) =>
+      target.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 1, ...point }));
+    return { video, wrap, at, fire, center, R };
+  }
+
+  test("a bullet rides the ring and follows the playback position", async () => {
+    const { video, wrap, R } = await loaded();
+    positions.set(video, 3); // a quarter of 12 s
+    video.dispatchEvent(new Event("timeupdate"));
+    await vi.waitFor(() => expect(document.querySelector('[role="slider"]').getAttribute("aria-valuenow")).toBe("3"));
+    await new Promise((r) => setTimeout(r, 400)); // (the bullet glides to its place)
+    const bullet = document.querySelector('[data-testid="seek-bullet"]').getBoundingClientRect();
+    const box = wrap.getBoundingClientRect(); // (measured now: the layout can shift while the poster loads)
+    const center = { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    // A quarter of the way round is the 3 o'clock position.
+    expect(bullet.left + bullet.width / 2).toBeGreaterThan(center.x + R * 0.9);
+    expect(Math.abs(bullet.top + bullet.height / 2 - center.y)).toBeLessThan(6);
+    const slider = document.querySelector('[role="slider"]');
+    expect(slider.getAttribute("aria-valuenow")).toBe("3");
+    expect(slider.getAttribute("aria-valuemax")).toBe("12");
+  });
+
+  test("pressing the ring and dragging round seeks; the picture is not toggled", async () => {
+    const { video, wrap, at, fire } = await loaded();
+    const button = wrap.querySelector("button");
+    HTMLMediaElement.prototype.pause.mockClear();
+    fire(button, "pointerdown", at(0.25));
+    expect(positions.get(video)).toBeCloseTo(3, 1);
+    fire(wrap, "pointermove", at(0.5));
+    expect(positions.get(video)).toBeCloseTo(6, 1);
+    fire(wrap, "pointermove", at(0.75));
+    expect(positions.get(video)).toBeCloseTo(9, 1);
+    fire(wrap, "pointerup", at(0.75));
+    button.click(); // the click that follows a drag is not a tap on the picture
+    expect(HTMLMediaElement.prototype.pause).not.toHaveBeenCalled();
+  });
+
+  test("dragging past the top does not jump from the end back to the start", async () => {
+    const { video, wrap, at, fire } = await loaded();
+    fire(wrap, "pointerdown", at(0.9));
+    expect(positions.get(video)).toBeCloseTo(10.8, 1);
+    fire(wrap, "pointermove", at(0.02)); // carried on over the top
+    expect(positions.get(video)).toBeCloseTo(12, 1); // stops at the end
+    fire(wrap, "pointerup", at(0.02));
+  });
+
+  test("a tap on the picture (inside the ring) still plays and pauses", async () => {
+    const { wrap, fire, center } = await loaded();
+    const button = wrap.querySelector("button");
+    HTMLMediaElement.prototype.pause.mockClear();
+    fire(button, "pointerdown", { clientX: center.x, clientY: center.y });
+    fire(wrap, "pointerup", { clientX: center.x, clientY: center.y });
+    button.click();
+    expect(HTMLMediaElement.prototype.pause).toHaveBeenCalledTimes(1);
+  });
+
+  test("the ring cannot be sought before the video has been loaded", async () => {
+    const { msg, user } = await setup();
+    render(<VideoNoteBubble msg={msg} user={user} />);
+    await expect.element(page.getByRole("button", { name: /Play video message/ })).toBeInTheDocument();
+    const wrap = document.querySelector("video").closest("div.relative");
+    const rect = wrap.getBoundingClientRect();
+    wrap.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        pointerId: 1,
+        clientX: rect.left + rect.width / 2 + rect.width / 2 - 3,
+        clientY: rect.top + rect.height / 2,
+      }),
+    );
+    expect(mocks.fetchCiphertext).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-testid="seek-bullet"]')).toBeNull();
+    expect(document.querySelector('[role="slider"]')?.getAttribute("tabindex") ?? "-1").toBe("-1");
+  });
+
+  test("the arrow keys move the position by five seconds", async () => {
+    const { video } = await loaded();
+    const slider = document.querySelector('[role="slider"]');
+    slider.focus();
+    slider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    expect(positions.get(video)).toBeCloseTo(5, 1);
+    slider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    expect(positions.get(video)).toBeCloseTo(0, 1);
+    slider.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    expect(positions.get(video)).toBeCloseTo(12, 1);
+  });
+});

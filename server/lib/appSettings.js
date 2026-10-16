@@ -326,9 +326,9 @@ export const SETTING_DEFS = [
   {
     key: "REMOTE_CHANNEL_SONGBIRD_PROXY_URL",
     type: TYPE_STRING,
-    label: "Songbird proxy",
+    label: "Aurelle proxy",
     description:
-      "Proxy URL for outbound server-to-server requests to remote Songbird instances.",
+      "Proxy URL for outbound server-to-server requests to remote Aurelle instances.",
     group: "proxy",
     envKey: "REMOTE_CHANNEL_SONGBIRD_PROXY_URL",
     defaultVal: "",

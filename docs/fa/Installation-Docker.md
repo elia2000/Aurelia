@@ -59,7 +59,7 @@ docker run hello-world
 ```bash
 sudo mkdir -p /opt/songbird
 cd /opt/songbird
-git clone https://github.com/elia2000/Aurelle.git .
+git clone https://github.com/elia2000/Aurelia.git .
 ```
 
 ## ۳. پیکربندی محیط
@@ -72,7 +72,7 @@ nano .env
 ```
 
 :::info استفاده از PostgreSQL در Docker
-پایگاه داده پیشفرض Songbird بر پایه SQLite است (`DB_CLIENT=sqlite3`). برای استفاده از PostgreSQL، فایل `.env` را ویرایش کرده و `DB_CLIENT=postgres` را به همراه متغیرهای `POSTGRES_*` تنظیم کنید، یا سرویس و volume اختیاری `postgres` را در `docker-compose.yaml` از حالت کامنت خارج کنید.
+پایگاه داده پیشفرض Aurelle بر پایه SQLite است (`DB_CLIENT=sqlite3`). برای استفاده از PostgreSQL، فایل `.env` را ویرایش کرده و `DB_CLIENT=postgres` را به همراه متغیرهای `POSTGRES_*` تنظیم کنید، یا سرویس و volume اختیاری `postgres` را در `docker-compose.yaml` از حالت کامنت خارج کنید.
 :::
 
 :::info کانتینر Media Worker
@@ -90,7 +90,7 @@ Aurelle به‌صورت پیش‌فرض یک پروسه ورکر محلی را �
 
 ## ۵. ساخت و اجرا
 
-Aurelle از روی سورس ساخته می‌شود: فایل `docker-compose.yaml` بلوک `build:` دارد و هیچ ایمیج آماده‌ای منتشر نشده است (ایمیج Songbird در Docker Hub شامل تماس‌ها، پیام‌های ویدیویی و برندینگ Aurelle نیست). ایمیج را بسازید و کانتینرها را اجرا کنید:
+Aurelle از روی سورس ساخته می‌شود: فایل `docker-compose.yaml` بلوک `build:` دارد و هیچ ایمیج آماده‌ای منتشر نشده است (ایمیج Aurelle در Docker Hub شامل تماس‌ها، پیام‌های ویدیویی و برندینگ Aurelle نیست). ایمیج را بسازید و کانتینرها را اجرا کنید:
 
 ```bash
 cd /opt/songbird
@@ -120,7 +120,7 @@ docker compose restart nginx
 
 ## کاربر runtime و داده پایدار
 
-استقرارهای Docker از `songbird.service` استفاده نمیکنند. Songbird با کاربر پیکربندی شده برای container اجرا میشود (در image فعلی root است، مگر آنکه `user:` در Compose آن را override کند) و دستورهای پایگاه داده با همان UID/GID ‏container اجرا میشوند:
+استقرارهای Docker از `songbird.service` استفاده نمیکنند. Aurelle با کاربر پیکربندی شده برای container اجرا میشود (در image فعلی root است، مگر آنکه `user:` در Compose آن را override کند) و دستورهای پایگاه داده با همان UID/GID ‏container اجرا میشوند:
 
 ```bash
 docker compose exec songbird npm --prefix /app/server run db:inspect
@@ -134,7 +134,7 @@ services:
     user: "songbird:songbird"
 ```
 
-اگر به جای named volume پیشفرض از bind mount استفاده میکنید، پیش از راه اندازی Songbird، پوشه host را برای همان UID:GID قابل نوشتن کنید. Songbird مالکیت bind mount روی host را به صورت خودکار تغییر نمیدهد:
+اگر به جای named volume پیشفرض از bind mount استفاده میکنید، پیش از راه اندازی Aurelle، پوشه host را برای همان UID:GID قابل نوشتن کنید. Aurelle مالکیت bind mount روی host را به صورت خودکار تغییر نمیدهد:
 
 ```bash
 mkdir -p ./data

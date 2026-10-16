@@ -14,7 +14,7 @@ hero:
       link: /Deployment-Script
     - theme: alt
       text: View on GitHub
-      link: https://github.com/elia2000/Aurelle
+      link: https://github.com/elia2000/Aurelia
 
 features:
   - icon: 🔐
@@ -43,7 +43,7 @@ features:
     link: /Object-Storage
   - icon: 📡
     title: Remote Channels
-    details: Mirror Telegram channels or Songbird channels into your own channels.
+    details: Mirror Telegram channels or Aurelle channels into your own channels.
     link: /Remote-Channel-Setup
   - icon: 🗃️
     title: Database Tools

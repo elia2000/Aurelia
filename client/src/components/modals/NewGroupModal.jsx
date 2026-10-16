@@ -16,7 +16,7 @@ import {
   UserPlus,
   Users,
 } from "../../icons/lucide.js";
-import { SongbirdIcon, TelegramIcon } from "../../icons/BrandIcons.jsx";
+import { AurelleIcon, TelegramIcon } from "../../icons/BrandIcons.jsx";
 import { copyTextToClipboard } from "../../utils/clipboard.js";
 import { getAvatarStyle } from "../../utils/avatarColor.js";
 import { hasPersian } from "../../utils/fontUtils.js";
@@ -174,7 +174,7 @@ export default function NewGroupModal({
     fileUploadEnabled &&
     Boolean(groupForm.remoteChannelStreamMedia);
   const remoteProviderLabel =
-    groupForm.remoteChannelProvider === "songbird" ? "Songbird" : "Telegram";
+    groupForm.remoteChannelProvider === "songbird" ? "Aurelle" : "Telegram";
   const remoteSourcePlaceholder =
     groupForm.remoteChannelProvider === "songbird"
       ? "https://example.com/invite/channelname"
@@ -546,7 +546,7 @@ export default function NewGroupModal({
                       >
                         <span className="flex items-center gap-2">
                           {groupForm.remoteChannelProvider === "songbird"
-                            ? <SongbirdIcon size={16} />
+                            ? <AurelleIcon size={16} />
                             : <TelegramIcon size={16} className="shrink-0" />}
                           {remoteProviderLabel}
                         </span>
@@ -607,8 +607,8 @@ export default function NewGroupModal({
                             className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left transition hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-emerald-500/10 dark:hover:text-emerald-200"
                           >
                             <span className="flex items-center gap-2">
-                              <SongbirdIcon size={16} />
-                              Songbird
+                              <AurelleIcon size={16} />
+                              Aurelle
                             </span>
                             {groupForm.remoteChannelProvider === "songbird" ? (
                               <span className="h-2 w-2 rounded-full bg-emerald-500" />

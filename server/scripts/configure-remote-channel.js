@@ -262,7 +262,7 @@ function systemdServiceExists(serviceName) {
 
 function restartSongbirdService(options) {
   if (options.noRestart) {
-    console.log("Songbird restart skipped because --no-restart was passed.");
+    console.log("Aurelle restart skipped because --no-restart was passed.");
     return;
   }
 
@@ -286,7 +286,7 @@ function restartSongbirdService(options) {
       `Remote Channel configuration was saved, but restarting ${serviceName} failed. Run "sudo systemctl restart ${serviceName}" manually.`,
     );
   }
-  console.log("Songbird restarted successfully.");
+  console.log("Aurelle restarted successfully.");
 }
 
 function formatExistingHint(value) {
@@ -447,7 +447,7 @@ try {
   dotenv.config({ path: envPath, override: true, quiet: true });
   dotenv.config({ path: path.join(serverDir, ".env"), override: true, quiet: true });
 
-  console.log("Songbird Remote Channel configuration");
+  console.log("Aurelle Remote Channel configuration");
   console.log(
     "Create Telegram credentials at https://my.telegram.org/apps first.\n",
   );
@@ -469,8 +469,8 @@ try {
     retryDelay: 1000,
     autoReconnect: false,
     ...connectionOptions,
-    deviceModel: "Songbird",
-    systemVersion: "Songbird Server",
+    deviceModel: "Aurelle",
+    systemVersion: "Aurelle Server",
     appVersion: "1.0",
   });
 
@@ -502,7 +502,7 @@ try {
   const displayPath = path.relative(process.cwd(), envPath) || envPath;
   console.log(`\nRemote Channel configuration saved to ${displayPath}.`);
   console.log(
-    "Keep the Telegram session private. It authorizes Songbird to read channels visible to this Telegram account.",
+    "Keep the Telegram session private. It authorizes Aurelle to read channels visible to this Telegram account.",
   );
   restartSongbirdService(options);
 } catch (error) {

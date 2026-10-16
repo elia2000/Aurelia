@@ -52,7 +52,7 @@ const force = hasForceYes(args);
 const { running, port } = await detectRunningServer();
 if (running) {
   console.error(
-    `Refusing to run storage:migrate while Songbird is running on port ${port}. Stop the server first so the bucket and database cannot race the migration.`,
+    `Refusing to run storage:migrate while Aurelle is running on port ${port}. Stop the server first so the bucket and database cannot race the migration.`,
   );
   process.exit(1);
 }

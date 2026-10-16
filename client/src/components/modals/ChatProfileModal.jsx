@@ -15,7 +15,7 @@ import {
   Volume2,
   VolumeX,
 } from "../../icons/lucide.js";
-import { SongbirdIcon, TelegramIcon } from "../../icons/BrandIcons.jsx";
+import { AurelleIcon, TelegramIcon } from "../../icons/BrandIcons.jsx";
 import { copyTextToClipboard } from "../../utils/clipboard.js";
 import { getAvatarInitials } from "../../utils/avatarInitials.js";
 import { hasPersian } from "../../utils/fontUtils.js";
@@ -571,7 +571,7 @@ export default function ChatProfileModal({
                       {remoteChannelStatus.source.provider === "telegram" ? (
                         <TelegramIcon size={18} className="shrink-0" />
                       ) : remoteChannelStatus.source.provider === "songbird" ? (
-                        <SongbirdIcon size={18} />
+                        <AurelleIcon size={18} />
                       ) : (
                         <span>{remoteChannelStatus.source.provider}:</span>
                       )}

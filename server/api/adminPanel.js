@@ -196,7 +196,7 @@ function registerAdminPanelRoutes(app, deps) {
         if (opt.ok) normalized = opt;
       }
       if (enabled && !normalized.sourceUrl) {
-        return { shouldSave: true, error: "Songbird source URL is required.", status: 400 };
+        return { shouldSave: true, error: "Aurelle source URL is required.", status: 400 };
       }
     }
     return {
@@ -1704,7 +1704,7 @@ function registerAdminPanelRoutes(app, deps) {
     // dropdb --force terminates this server's own pool. Run it only after the
     // process has stopped, using the CLI command that enforces that condition.
     return res.status(409).json({
-      error: "Stop Songbird, then run npm run db:delete -- -y to delete a PostgreSQL database.",
+      error: "Stop Aurelle, then run npm run db:delete -- -y to delete a PostgreSQL database.",
     });
   });
 
@@ -1982,7 +1982,7 @@ function registerAdminPanelRoutes(app, deps) {
       // database connections. The offline CLI detects a running server first.
       if (dbConfig?.client === "postgres") {
         return res.status(409).json({
-          error: "Stop Songbird, then run npm run db:restore -- -y --file <backup.dump>.",
+          error: "Stop Aurelle, then run npm run db:restore -- -y --file <backup.dump>.",
         });
       }
       next();

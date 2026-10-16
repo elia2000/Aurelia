@@ -21,7 +21,7 @@ Aurelle is a fork of [Songbird](https://github.com/bllackbull/Songbird) (MIT) th
 - 💬 **Chat types**: Direct messages, groups, and channels
 - 📁 **Media Support**: File uploads, voice messages, video transcoding
 - 🔔 **Push Notifications**: Web push with VAPID (also for incoming calls)
-- 📡 **Remote Channels**: Mirror Telegram or Songbird channels
+- 📡 **Remote Channels**: Mirror Telegram or Aurelle channels
 - 🛡️ **Admin Panel**: Full management interface with owner role
 - 🔒 **Security**: Encryption at rest, bcrypt hashing, rate limiting
 - 📱 **PWA**: Installable progressive web app
@@ -44,7 +44,7 @@ The server can still see metadata (who talks to whom, when, sizes). Read the [th
 Aurelle is built from source. With Docker:
 
 ```bash
-git clone https://github.com/elia2000/Aurelle.git
+git clone https://github.com/elia2000/Aurelia.git
 cd Aurelle
 cp .env.example .env
 bash scripts/gen-certs.sh    # self-signed TLS certificate for testing -> certs/cert.pem, certs/key.pem
@@ -56,7 +56,7 @@ The bundled nginx needs `certs/cert.pem` and `certs/key.pem` before it can start
 Or on an Ubuntu server (22.04+) with `sudo`, use the deployment script:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelle/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelia/main/scripts/install.sh | bash
 ```
 
 > [!TIP]

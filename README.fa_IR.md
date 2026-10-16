@@ -21,7 +21,7 @@ Aurelle یک فورک از [Songbird](https://github.com/bllackbull/Songbird) (�
 - 💬 **انواع چت**: پیام مستقیم، گروه و کانال
 - 📁 **پشتیبانی از رسانه**: آپلود فایل، پیام صوتی، تبدیل ویدئو
 - 🔔 **Push Notification**: اعلان وب با VAPID (برای تماس ورودی هم)
-- 📡 **کانال‌های ریموت**: آینه‌کردن کانال‌های Telegram یا Songbird
+- 📡 **کانال‌های ریموت**: آینه‌کردن کانال‌های Telegram یا Aurelle
 - 🛡️ **پنل مدیریت**: رابط مدیریتی کامل با نقش مالک
 - 🔒 **امنیت**: رمزنگاری در حالت ذخیره، هش bcrypt، محدودیت نرخ
 - 📱 **PWA**: اپلیکیشن وب نصب‌شدنی
@@ -44,7 +44,7 @@ Aurelle یک فورک از [Songbird](https://github.com/bllackbull/Songbird) (�
 Aurelle از روی سورس ساخته می‌شود. با Docker:
 
 ```bash
-git clone https://github.com/elia2000/Aurelle.git
+git clone https://github.com/elia2000/Aurelia.git
 cd Aurelle
 cp .env.example .env
 bash scripts/gen-certs.sh    # گواهی TLS خودامضا برای آزمایش -> certs/cert.pem و certs/key.pem
@@ -56,7 +56,7 @@ nginx همراه پروژه پیش از اجرا به فایل‌های `certs/c
 یا روی یک سرور Ubuntu (نسخه 22.04+) با دسترسی `sudo` از اسکریپت نصب استفاده کنید:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelle/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelia/main/scripts/install.sh | bash
 ```
 
 > [!TIP]

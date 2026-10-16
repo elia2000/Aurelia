@@ -116,7 +116,7 @@ async function main() {
   if (dbConfig.client === "postgres") {
     const { running, port } = await detectRunningServer();
     if (running) {
-      console.error(`Stop Songbird on port ${port} before restoring a PostgreSQL archive.`);
+      console.error(`Stop Aurelle on port ${port} before restoring a PostgreSQL archive.`);
       process.exit(1);
     }
     console.log(`PostgreSQL active — restoring native archive "${path.basename(sourcePath)}"...`);

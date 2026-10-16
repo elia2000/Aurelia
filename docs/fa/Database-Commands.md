@@ -1,6 +1,6 @@
 # دستورات پایگاه داده
 
-Songbird از هر دو موتور پایگاه داده SQLite (پیشفرض) و PostgreSQL پشتیبانی می کند و مجموعه ای از اسکریپته ای `npm` را برای مدیریت پایگاه داده، کاربران، چت ها، فایل ها و پشتیبان ها از خط فرمان ارائه می دهد. آنها را از پوشه `server/` اجرا کنید:
+Aurelle از هر دو موتور پایگاه داده SQLite (پیشفرض) و PostgreSQL پشتیبانی می کند و مجموعه ای از اسکریپته ای `npm` را برای مدیریت پایگاه داده، کاربران، چت ها، فایل ها و پشتیبان ها از خط فرمان ارائه می دهد. آنها را از پوشه `server/` اجرا کنید:
 
 ```bash
 cd /opt/songbird/server
@@ -26,7 +26,7 @@ cd /opt/songbird/server
 
 ### مالکیت پوشه داده
 
-دستورهای پشتیبانی شده پایگاه داده از یک اجراکننده پیش از Node استفاده میکنند و از حساب runtime ‏Songbird پیروی میکنند:
+دستورهای پشتیبانی شده پایگاه داده از یک اجراکننده پیش از Node استفاده میکنند و از حساب runtime ‏Aurelle پیروی میکنند:
 
 - **Docker:** دستور با UID/GID فعلی container اجرا میشود. Docker از `songbird.service` استفاده نمیکند.
 - **systemd:** دستور از `User=` و `Group=` مؤثر در `songbird.service`، از جمله overrideهای systemd، پیروی میکند. نبودن `Group=` به primary group کاربر service تبدیل میشود. وقتی root یک دستور را برای حساب service غیر root اجرا میکند، اجراکننده فقط پوشه `data/` همین installation را اصلاح کرده و سپس به همان حساب پیکربندی شده تغییر میکند.
@@ -111,7 +111,7 @@ npm run db:restore -- -y --file /path/to/songbird-backup.dump
 
 :::warning PostgreSQL باید آفلاین باشد
 
-پیش از اجرای `db:restore` برای PostgreSQL، Songbird را متوقف کنید. دستور بومی `pg_restore --clean` اشیای پایگاه داده را جایگزین می‌کند و نمی‌تواند با اطمینان از طریق فرآیند زنده Songbird اجرا شود. Songbird را فقط پس از موفقیت دستور شروع یا ریستارت کنید.
+پیش از اجرای `db:restore` برای PostgreSQL، Aurelle را متوقف کنید. دستور بومی `pg_restore --clean` اشیای پایگاه داده را جایگزین می‌کند و نمی‌تواند با اطمینان از طریق فرآیند زنده Aurelle اجرا شود. Aurelle را فقط پس از موفقیت دستور شروع یا ریستارت کنید.
 
 :::
 
@@ -197,7 +197,7 @@ npm run db:reset -- -y --no-recreate
 
 :::info رفتار آنلاین دربرابر آفلاین
 
-وقتی Songbird در حال اجرا است، دستور به سرور محلی احرازشده واگذار می‌شود و بازنشانی حفظ‌کننده schema را انجام می‌دهد. وقتی Songbird متوقف است، SQLite فایل پایگاه داده را حذف می‌کند و PostgreSQL پایگاه داده را drop می‌کند؛ سپس هر موتور را می‌توان دوباره ایجاد و migrate کرد.
+وقتی Aurelle در حال اجرا است، دستور به سرور محلی احرازشده واگذار می‌شود و بازنشانی حفظ‌کننده schema را انجام می‌دهد. وقتی Aurelle متوقف است، SQLite فایل پایگاه داده را حذف می‌کند و PostgreSQL پایگاه داده را drop می‌کند؛ سپس هر موتور را می‌توان دوباره ایجاد و migrate کرد.
 
 
 :::
@@ -216,7 +216,7 @@ npm run db:delete -- -y
 
 :::warning PostgreSQL باید آفلاین باشد
 
-پیش از `db:delete` در PostgreSQL، Songbird را متوقف کنید؛ `dropdb --force` اتصال‌های فعال PostgreSQL را قطع می‌کند. آپلودهای محلی پیام نیز حذف می‌شوند، اما اگر storage راه‌دور پیکربندی شده باشد باید جداگانه پاک‌سازی شود.
+پیش از `db:delete` در PostgreSQL، Aurelle را متوقف کنید؛ `dropdb --force` اتصال‌های فعال PostgreSQL را قطع می‌کند. آپلودهای محلی پیام نیز حذف می‌شوند، اما اگر storage راه‌دور پیکربندی شده باشد باید جداگانه پاک‌سازی شود.
 
 :::
 
@@ -253,10 +253,10 @@ npm run db:file:inspect
 | `--password <value>` | سوم | بله | رمز عبور حساب (هنگام ذخیره با bcrypt هش می‌شود). |
 
 ```bash
-npm run db:user:create -- --nickname "Songbird Sage" --username songbird.sage --password "12345678"
+npm run db:user:create -- --nickname "Aurelle Sage" --username songbird.sage --password "12345678"
 
 # positional form:
-npm run db:user:create -- "Songbird Sage" songbird.sage "12345678"
+npm run db:user:create -- "Aurelle Sage" songbird.sage "12345678"
 ```
 
 ### `db:user:generate`
@@ -289,7 +289,7 @@ npm run db:user:generate -- --count 50 --password "12345678" --nickname-prefix M
 | `--color <#hex>` | خیر | رنگ پروفایل، برای مثال `#10b981`. |
 
 ```bash
-npm run db:user:edit -- songbird.sage --nickname "Songbird Sage" --color "#ff6b6b"
+npm run db:user:edit -- songbird.sage --nickname "Aurelle Sage" --color "#ff6b6b"
 npm run db:user:edit -- 1 --username songbird.admin --status invisible
 ```
 
@@ -354,7 +354,7 @@ npm run db:user:delete -- --all -y
 | `--users <a,b,c>` | خیر | اعضای اولیه جداشده با کاما. |
 | `--remote-channel <source>` | خیر | منبع Telegram (`@name`، پیوند `t.me`، یا شناسه عددی). فقط کانال‌ها؛ به `REMOTE_CHANNEL=true` نیاز دارد. |
 | `--sync-metadata` | خیر | کپی عنوان/آواتار منبع به کانال. |
-| `--stream-media` | خیر | دانلود رسانه منبع به آپلودهای Songbird. |
+| `--stream-media` | خیر | دانلود رسانه منبع به آپلودهای Aurelle. |
 
 ```bash
 npm run db:chat:create -- --type group --name "Core Team" --owner songbird.sage --username core.team --visibility private --users songbird.sage2,songbird.sage3
@@ -526,7 +526,7 @@ npm run storage:migrate
 ```
 
 :::warning بررسی عدم تداخل با سرور فعال
-دستور `storage:migrate` در صورت در حال اجرا بودن سرور Songbird متوقف میشود تا از ایجاد race condition با آپلودهای فعال کاربران جلوگیری کند. قبل از اجرا، سرور را متوقف کنید.
+دستور `storage:migrate` در صورت در حال اجرا بودن سرور Aurelle متوقف میشود تا از ایجاد race condition با آپلودهای فعال کاربران جلوگیری کند. قبل از اجرا، سرور را متوقف کنید.
 :::
 
 ## اجرای دستورها از طریق Docker

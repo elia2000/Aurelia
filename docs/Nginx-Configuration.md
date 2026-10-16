@@ -1,6 +1,6 @@
 # Configure Nginx
 
-Songbird serves both the built frontend and the API from the Node server, so Nginx only needs to proxy one upstream: `http://127.0.0.1:SERVER_PORT`.
+Aurelle serves both the built frontend and the API from the Node server, so Nginx only needs to proxy one upstream: `http://127.0.0.1:SERVER_PORT`.
 
 Create `/etc/nginx/sites-available/songbird`:
 

@@ -8,7 +8,7 @@ import { getSetting } from "./appSettings.js";
 import { isValidUuid } from "./uuidUtils.js";
 import { markEncryptedFileRecord } from "./storageEncryption.js";
 
-// ─── Songbird outbound proxy ──────────────────────────────────────────────────
+// ─── Aurelle outbound proxy ──────────────────────────────────────────────────
 // Applied per-fetch-call (no persistent connection to bake it into), so this
 // reads the live setting on every call instead of a value captured at startup.
 
@@ -33,7 +33,7 @@ function songbirdFetch(url, options = {}) {
   // SSRF guard: reject requests to private/internal hosts regardless of call site.
   //
   // A static allowlist is intentionally not used — the Remote Channel feature
-  // federates with any public Songbird server, so the hostname is open-ended by
+  // federates with any public Aurelle server, so the hostname is open-ended by
   // design. Instead, we block the entire private/internal address space (loopback,
   // RFC-1918, link-local, cloud metadata endpoints, etc.) via isPrivateHost().
   // codeql[js/ssrf] - hostname validated against private-address blocklist;
@@ -114,9 +114,9 @@ function errorMessage(error) {
 }
 
 /**
- * Normalize a Songbird remote channel source value.
+ * Normalize a Aurelle remote channel source value.
  *
- * Accepts a Songbird invite link in the form:
+ * Accepts a Aurelle invite link in the form:
  *   https://example.com/invite/<username>
  *   https://example.com/invite/<token>
  *
@@ -127,13 +127,13 @@ function errorMessage(error) {
 function normalizeSongbirdSource(value) {
   const raw = String(value || "").trim();
   if (!raw) {
-    return { ok: false, error: "Songbird source is required." };
+    return { ok: false, error: "Aurelle source is required." };
   }
 
   if (!/^https?:\/\//i.test(raw)) {
     return {
       ok: false,
-      error: "Songbird source must be a full invite URL (https://...).",
+      error: "Aurelle source must be a full invite URL (https://...).",
     };
   }
 
@@ -141,11 +141,11 @@ function normalizeSongbirdSource(value) {
   try {
     url = new URL(raw);
   } catch {
-    return { ok: false, error: "Songbird source URL is invalid." };
+    return { ok: false, error: "Aurelle source URL is invalid." };
   }
 
   if (url.protocol !== "https:" && url.protocol !== "http:") {
-    return { ok: false, error: "Songbird source URL must use http or https." };
+    return { ok: false, error: "Aurelle source URL must use http or https." };
   }
 
   const parts = url.pathname.split("/").filter(Boolean);
@@ -154,7 +154,7 @@ function normalizeSongbirdSource(value) {
     return {
       ok: false,
       error:
-        "Songbird source must be a channel invite link (e.g. https://example.com/invite/channelname).",
+        "Aurelle source must be a channel invite link (e.g. https://example.com/invite/channelname).",
     };
   }
 
@@ -210,7 +210,7 @@ function isPrivateHost(hostname) {
 }
 
 /**
- * Resolve a Songbird invite link against the target server to get the
+ * Resolve a Aurelle invite link against the target server to get the
  * real channel username. Verifies the server is public and the channel exists.
  *
  * Public channel invite links use the channel username as the path segment
@@ -223,17 +223,17 @@ function isPrivateHost(hostname) {
 async function resolveSongbirdSource(sourceUrl, inviteTarget) {
   const candidateUsername = String(inviteTarget || "").trim().toLowerCase().replace(/^@+/, "");
   if (!candidateUsername) {
-    return { ok: false, error: "Songbird source channel username could not be determined from the invite link." };
+    return { ok: false, error: "Aurelle source channel username could not be determined from the invite link." };
   }
 
   // SSRF protection: reject requests to private/internal hosts.
   try {
     const parsedSourceUrl = new URL(sourceUrl);
     if (isPrivateHost(parsedSourceUrl.hostname)) {
-      return { ok: false, error: "Songbird source URL must point to a public server." };
+      return { ok: false, error: "Aurelle source URL must point to a public server." };
     }
   } catch {
-    return { ok: false, error: "Songbird source URL is invalid." };
+    return { ok: false, error: "Aurelle source URL is invalid." };
   }
 
   const metaUrl = `${sourceUrl}/api/channels/${encodeURIComponent(candidateUsername)}/meta`;
@@ -248,7 +248,7 @@ async function resolveSongbirdSource(sourceUrl, inviteTarget) {
   }
 
   if (metaRes.status === 403) {
-    return { ok: false, error: "The target server is private (sign-up disabled). Only public servers can be used as a Songbird remote source." };
+    return { ok: false, error: "The target server is private (sign-up disabled). Only public servers can be used as a Aurelle remote source." };
   }
   if (metaRes.status === 404) {
     return { ok: false, error: "Channel not found on target server. Use a public channel invite link (e.g. https://server/invite/channelusername)." };
@@ -256,10 +256,10 @@ async function resolveSongbirdSource(sourceUrl, inviteTarget) {
 
   // A 200 response that is not JSON means the endpoint does not exist on the
   // target server (the SPA catch-all served index.html) — i.e. the target is
-  // running an older Songbird version without Songbird remote channel support.
+  // running an older Aurelle version without Aurelle remote channel support.
   const contentType = String(metaRes.headers.get("content-type") || "").toLowerCase();
   if (!contentType.includes("application/json")) {
-    return { ok: false, error: "The target server does not support Songbird remote channels. It may be running an older version of Songbird." };
+    return { ok: false, error: "The target server does not support Aurelle remote channels. It may be running an older version of Aurelle." };
   }
 
   if (!metaRes.ok) {
@@ -289,9 +289,9 @@ async function fetchSongbirdJson(url, timeoutMs = 15_000) {
   const contentType = String(res.headers.get("content-type") || "").toLowerCase();
   if (!contentType.includes("application/json")) {
     // Non-JSON 200 means the endpoint doesn't exist (SPA catch-all served HTML)
-    // — the target server is running an older Songbird version.
+    // — the target server is running an older Aurelle version.
     throw new Error(
-      "Target server does not support Songbird remote channels (outdated version).",
+      "Target server does not support Aurelle remote channels (outdated version).",
     );
   }
   if (!res.ok) {
@@ -569,20 +569,20 @@ function buildTelegramOriginLabel(source = {}) {
 
 function buildSongbirdOriginLabel(source = {}) {
   const title = String(source?.title || source?.source_title || "").trim();
-  if (title) return `Songbird: ${title}`;
+  if (title) return `Aurelle: ${title}`;
   const username = String(source?.username || source?.source_username || "")
     .trim()
     .replace(/^@+/, "");
-  if (username) return `Songbird: @${username}`;
+  if (username) return `Aurelle: @${username}`;
   const sourceUrl = String(source?.source_url || "").trim();
   if (sourceUrl) {
     try {
-      return `Songbird: ${new URL(sourceUrl).hostname}`;
+      return `Aurelle: ${new URL(sourceUrl).hostname}`;
     } catch {
-      return `Songbird: ${sourceUrl}`;
+      return `Aurelle: ${sourceUrl}`;
     }
   }
-  return "Songbird channel";
+  return "Aurelle channel";
 }
 
 function computeTextExpiryIso(retentionDays) {
@@ -860,7 +860,7 @@ export function createRemoteChannelManager(deps = {}) {
   let apiId = Number(config.telegramApiId || 0);
   let apiHash = String(config.telegramApiHash || "").trim();
   let sessionString = String(config.telegramSessionString || "").trim();
-  // The manager is enabled if the feature is on — Songbird sources work without
+  // The manager is enabled if the feature is on — Aurelle sources work without
   // Telegram credentials. Telegram sources additionally require apiId/hash/session.
   const enabled = Boolean(config.enabled);
   const tickMode = Boolean(config.tickMode);
@@ -984,8 +984,8 @@ export function createRemoteChannelManager(deps = {}) {
       retryDelay: 2000,
       autoReconnect: true,
       ...connectionOptions,
-      deviceModel: "Songbird",
-      systemVersion: "Songbird Server",
+      deviceModel: "Aurelle",
+      systemVersion: "Aurelle Server",
       appVersion: "1.0",
     });
     telegramClient.onError = async (error) => {
@@ -1300,7 +1300,7 @@ export function createRemoteChannelManager(deps = {}) {
   }
 
   /**
-   * Fetch channel name and avatar from a remote Songbird server's public
+   * Fetch channel name and avatar from a remote Aurelle server's public
    * metadata endpoint and apply them to the local channel if sync_metadata
    * is enabled — mirrors what syncResolvedSourceMetadata does for Telegram.
    */
@@ -1309,7 +1309,7 @@ export function createRemoteChannelManager(deps = {}) {
     const channelUsername = String(source.source_username || "").trim();
     if (!sourceUrl || !channelUsername) {
       throw new Error(
-        "Songbird source URL or channel username is not configured.",
+        "Aurelle source URL or channel username is not configured.",
       );
     }
 
@@ -1324,7 +1324,7 @@ export function createRemoteChannelManager(deps = {}) {
       const contentType = String(res.headers.get("content-type") || "").toLowerCase();
       if (!contentType.includes("application/json")) {
         throw new Error(
-          "Target server does not support Songbird remote channels (outdated version).",
+          "Target server does not support Aurelle remote channels (outdated version).",
         );
       }
       if (!res.ok) {
@@ -1337,7 +1337,7 @@ export function createRemoteChannelManager(deps = {}) {
     } catch (error) {
       const message = errorMessage(error);
       await resolveMaybePromise(updateRemoteChannelSourceError(source.id, message));
-      throw new Error(`Songbird metadata sync failed: ${message}`);
+      throw new Error(`Aurelle metadata sync failed: ${message}`);
     }
 
     const title = String(data?.name || "").trim();
@@ -1541,7 +1541,7 @@ export function createRemoteChannelManager(deps = {}) {
     const sourceUrl = String(source.source_url || "").trim();
     const channelUsername = String(source.source_username || "").trim();
     if (!sourceUrl || !channelUsername) {
-      throw new Error("Songbird source URL or channel username is not configured.");
+      throw new Error("Aurelle source URL or channel username is not configured.");
     }
 
     const lastMessageId = Number(source.last_remote_message_id || 0) || 0;
@@ -1579,7 +1579,7 @@ export function createRemoteChannelManager(deps = {}) {
       maxSeenId = Math.max(maxSeenId, msgId);
 
       const body = truncateBody(String(msg.body || "").trim(), messageMaxChars);
-      // Skip messages with no text body (file-only messages from a Songbird
+      // Skip messages with no text body (file-only messages from a Aurelle
       // source are not yet supported — media streaming is Telegram-specific).
       if (!body) continue;
 
@@ -1647,7 +1647,7 @@ export function createRemoteChannelManager(deps = {}) {
   }
 
   async function runSongbirdPollLoop() {
-    // Songbird polling doesn't need a Telegram client — it's always runnable
+    // Aurelle polling doesn't need a Telegram client — it's always runnable
     // as long as the feature is enabled.
     try {
       while (!stopped) {
@@ -2348,12 +2348,12 @@ export function createRemoteChannelManager(deps = {}) {
       return;
     }
 
-    // --- Songbird provider: text-only, no Telegram client needed ---
+    // --- Aurelle provider: text-only, no Telegram client needed ---
     if (currentSource.provider === "songbird") {
       const remoteMessage = envelope?.message || {};
       const body = truncateBody(String(remoteMessage?.body || "").trim(), messageMaxChars);
       if (!body) {
-        await resolveMaybePromise(markRemoteChannelQueueItemSkipped(item.id, "Songbird post has no text to mirror."));
+        await resolveMaybePromise(markRemoteChannelQueueItemSkipped(item.id, "Aurelle post has no text to mirror."));
         return;
       }
 
@@ -2697,7 +2697,7 @@ export function createRemoteChannelManager(deps = {}) {
     if (apiId && apiHash && sessionString) {
       void runPollLoop();
     }
-    // Songbird poll loop runs independently — no credentials needed.
+    // Aurelle poll loop runs independently — no credentials needed.
     void runSongbirdPollLoop();
     queueTimer = setInterval(() => {
       void runQueueLoop();
@@ -2734,11 +2734,11 @@ export function createRemoteChannelManager(deps = {}) {
     if (source.provider === "songbird") {
       const sourceUrl = String(source.source_url || source.source_raw || "").trim();
       if (!sourceUrl) {
-        throw new Error("Songbird source URL is not configured.");
+        throw new Error("Aurelle source URL is not configured.");
       }
       const channelUsername = String(source.source_username || "").trim();
       if (!channelUsername) {
-        throw new Error("Songbird source channel username is not resolved yet. Try saving the settings again.");
+        throw new Error("Aurelle source channel username is not resolved yet. Try saving the settings again.");
       }
       // Verify the target server is reachable and the channel is still public.
       const metaUrl = `${sourceUrl}/api/channels/${encodeURIComponent(channelUsername)}/meta`;
@@ -2748,7 +2748,7 @@ export function createRemoteChannelManager(deps = {}) {
         signal: AbortSignal.timeout(10_000),
       });
       if (response.status === 403) {
-        throw new Error("Target server is private. Only public servers can be used as a Songbird remote source.");
+        throw new Error("Target server is private. Only public servers can be used as a Aurelle remote source.");
       }
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));

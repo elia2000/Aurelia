@@ -14,7 +14,7 @@ hero:
       link: /fa/Deployment-Script
     - theme: alt
       text: مشاهده در GitHub
-      link: https://github.com/elia2000/Aurelle
+      link: https://github.com/elia2000/Aurelia
 
 features:
   - icon: 🔐
@@ -43,7 +43,7 @@ features:
     link: /fa/Object-Storage
   - icon: 📡
     title: Remote Channel
-    details: کانال‌های Telegram یا کانال‌های Songbird دیگر را داخل کانال‌های خودتان mirror کنید.
+    details: کانال‌های Telegram یا کانال‌های Aurelle دیگر را داخل کانال‌های خودتان mirror کنید.
     link: /fa/Remote-Channel-Setup
   - icon: 🗃️
     title: ابزارهای دیتابیس

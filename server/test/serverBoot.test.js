@@ -55,7 +55,7 @@ describe("Server boot", () => {
         result.ok,
         `server exited early (code=${result.code}, signal=${result.signal}) stderr:\n${result.stderr}`,
       ).toBe(true);
-      expect(result.stdout).toContain("Songbird server running");
+      expect(result.stdout).toContain("Aurelle server running");
       expect(result.stderr).not.toMatch(/ReferenceError/);
     } finally {
       fs.rmSync(result.dataDir, { recursive: true, force: true });

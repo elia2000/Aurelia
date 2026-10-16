@@ -62,7 +62,7 @@ Calls are one-to-one and happen in direct chats. You can minimise the call scree
 
 1. In a direct chat, group or *Saved messages*, press the **camera** button next to the microphone.
 2. Press the red button to record (up to **60 seconds**), press stop, preview, then **Send** or **Retake**.
-3. Recipients see a round bubble with a blurred preview. The video is downloaded and decrypted only when they press play.
+3. Recipients see a round bubble with a blurred preview. The video is downloaded and decrypted only when they press play. While it plays, a dot rides the progress ring (like in Telegram): drag it round the ring to jump to another moment, or focus it and use the arrow keys. The time shown counts down what is left.
 
 Your recording stays in the dialog until the server has accepted it. If sending does not work (you are offline, a contact has a new device, an earlier upload is still running) the reason is shown in the dialog and you can simply press *Send* again.
 

@@ -1,6 +1,6 @@
 # Database Commands
 
-Songbird supports both SQLite (default) and PostgreSQL database engines, and ships a set of `npm` scripts for managing the database, users, chats, files, and backups from the command line. Run them from the `server/` directory:
+Aurelle supports both SQLite (default) and PostgreSQL database engines, and ships a set of `npm` scripts for managing the database, users, chats, files, and backups from the command line. Run them from the `server/` directory:
 
 ```bash
 cd /opt/songbird/server
@@ -26,7 +26,7 @@ A few rules apply across all commands:
 
 ### Data directory ownership
 
-Supported database commands use a pre-Node launcher and follow Songbird's runtime account:
+Supported database commands use a pre-Node launcher and follow Aurelle's runtime account:
 
 - **Docker:** The command runs as the container's current UID/GID. Docker does not use `songbird.service`.
 - **systemd:** The command follows the effective `User=` and `Group=` of `songbird.service`, including systemd overrides. A missing `Group=` uses the service user's primary group. When root invokes a command for a non-root service account, the launcher repairs only this installation's `data/` directory and then switches to that configured account.
@@ -112,7 +112,7 @@ npm run db:restore -- -y --file /path/to/songbird-backup.dump
 
 :::warning PostgreSQL must be offline
 
-Stop Songbird before running PostgreSQL `db:restore`. Native `pg_restore --clean` replaces database objects and cannot safely run through the live Songbird process. Start or restart Songbird only after the command succeeds.
+Stop Aurelle before running PostgreSQL `db:restore`. Native `pg_restore --clean` replaces database objects and cannot safely run through the live Aurelle process. Start or restart Aurelle only after the command succeeds.
 
 :::
 
@@ -198,7 +198,7 @@ npm run db:reset -- -y --no-recreate
 
 :::info Online vs. Offline behavior
 
-When Songbird is running, the command delegates to the authenticated local server and performs an schema-preserving reset. When Songbird is stopped, SQLite removes its database file and PostgreSQL drops the database; either engine can then be recreated and migrated.
+When Aurelle is running, the command delegates to the authenticated local server and performs an schema-preserving reset. When Aurelle is stopped, SQLite removes its database file and PostgreSQL drops the database; either engine can then be recreated and migrated.
 
 :::
 
@@ -216,7 +216,7 @@ npm run db:delete -- -y
 
 :::warning PostgreSQL must be offline
 
-Stop Songbird before PostgreSQL `db:delete`; `dropdb --force` terminates active PostgreSQL connections. Local message uploads are also removed, but remote object storage must be cleaned separately if configured.
+Stop Aurelle before PostgreSQL `db:delete`; `dropdb --force` terminates active PostgreSQL connections. Local message uploads are also removed, but remote object storage must be cleaned separately if configured.
 
 :::
 
@@ -254,10 +254,10 @@ Creates a single user. Accepts named flags or three positional arguments (`nickn
 | `--role <owner\|admin\|user>` | 4th | No | User role. |
 
 ```bash
-npm run db:user:create -- --nickname "Songbird Sage" --username songbird.sage --password "12345678"
+npm run db:user:create -- --nickname "Aurelle Sage" --username songbird.sage --password "12345678"
 
 # positional form:
-npm run db:user:create -- "Songbird Sage" songbird.sage "12345678"
+npm run db:user:create -- "Aurelle Sage" songbird.sage "12345678"
 ```
 
 ### `db:user:generate`
@@ -291,7 +291,7 @@ Edits a user profile. The first positional argument is the user selector (id or 
 | `--role <owner\|admin\|user>` | No | User role. |
 
 ```bash
-npm run db:user:edit -- songbird.sage --nickname "Songbird Sage" --color "#ff6b6b"
+npm run db:user:edit -- songbird.sage --nickname "Aurelle Sage" --color "#ff6b6b"
 npm run db:user:edit -- 1 --username songbird.admin --status invisible
 ```
 
@@ -356,7 +356,7 @@ Creates a group or channel. Channels can optionally be configured as a Remote Ch
 | `--users <a,b,c>` | No | Comma-separated initial members. |
 | `--remote-channel <source>` | No | Telegram source (`@name`, `t.me` link, or numeric id). Channels only; requires `REMOTE_CHANNEL=true`. |
 | `--sync-metadata` | No | Copy the source's title/avatar into the channel. |
-| `--stream-media` | No | Download source media into Songbird uploads. |
+| `--stream-media` | No | Download source media into Aurelle uploads. |
 
 ```bash
 npm run db:chat:create -- --type group --name "Core Team" --owner songbird.sage --username core.team --visibility private --users songbird.sage2,songbird.sage3
@@ -527,7 +527,7 @@ npm run storage:migrate
 ```
 
 :::warning Concurrency Guard
-`storage:migrate` refuses to run if the Songbird server process is actively running, preventing race conditions with live uploads. Stop the server before executing.
+`storage:migrate` refuses to run if the Aurelle server process is actively running, preventing race conditions with live uploads. Stop the server before executing.
 :::
 
 ## Running commands via Docker

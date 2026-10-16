@@ -122,8 +122,8 @@ function registerAdminRemoteChannelRoutes(app, deps) {
       requestRetries: 1,
       autoReconnect: false,
       ...connectionOptions,
-      deviceModel: "Songbird",
-      systemVersion: "Songbird Server",
+      deviceModel: "Aurelle",
+      systemVersion: "Aurelle Server",
       appVersion: "1.0",
     });
   };
@@ -362,7 +362,7 @@ function registerAdminRemoteChannelRoutes(app, deps) {
           baseLogger: new Logger("none"),
           connectionRetries: 1,
           autoReconnect: false,
-          deviceModel: "Songbird",
+          deviceModel: "Aurelle",
         },
       );
       try {

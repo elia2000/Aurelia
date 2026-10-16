@@ -1,16 +1,16 @@
 # Cloud Deployment
 
-This guide covers deploying Songbird on managed cloud infrastructure, including **Platform as a Service (PaaS)**, **Container as a Service (CaaS)**, and container orchestration platforms.
+This guide covers deploying Aurelle on managed cloud infrastructure, including **Platform as a Service (PaaS)**, **Container as a Service (CaaS)**, and container orchestration platforms.
 
 :::tip Looking for Self-Hosted VPS Deployment?
-If you are deploying Songbird on a single Virtual Private Server (VPS) using Docker Compose or systemd, refer to the [Install via Docker](./Installation-Docker.md) or [Deployment Script](./Deployment-Script.md) guides.
+If you are deploying Aurelle on a single Virtual Private Server (VPS) using Docker Compose or systemd, refer to the [Install via Docker](./Installation-Docker.md) or [Deployment Script](./Deployment-Script.md) guides.
 :::
 
 ## Architecture Overview
 
-Songbird can be deployed across various cloud paradigms depending on your operational and scaling requirements:
+Aurelle can be deployed across various cloud paradigms depending on your operational and scaling requirements:
 
-| Paradigm | Description | Suitable Platforms | Songbird Support |
+| Paradigm | Description | Suitable Platforms | Aurelle Support |
 |---|---|---|---|
 | **IaaS** *(Infrastructure as a Service)* | Self-managed Virtual Machines running Docker or systemd | AWS EC2, DigitalOcean Droplets, Hetzner | Fully Supported |
 | **PaaS** *(Platform as a Service)* | Deploy directly from source code repository | Render, Railway, Heroku, Fly.io | Fully Supported |
@@ -18,7 +18,7 @@ Songbird can be deployed across various cloud paradigms depending on your operat
 
 ## 1. Deploying on PaaS
 
-PaaS providers let you deploy Songbird directly from your Git repository without managing server infrastructure.
+PaaS providers let you deploy Aurelle directly from your Git repository without managing server infrastructure.
 
 ### Build and Start Settings
 
@@ -38,7 +38,7 @@ Configure your PaaS deployment with the following runtime commands:
 
 PaaS instances are **ephemeral** by default — any files saved to local disk (such as SQLite databases or file uploads) will be erased whenever the application restarts or redeploys.
 
-To run Songbird on PaaS, choose one of two storage strategies:
+To run Aurelle on PaaS, choose one of two storage strategies:
 
 #### Strategy A: Single-Instance with Persistent Volume
 If deploying a single app instance on platforms supporting volume mounts (e.g. Railway or Fly.io):
@@ -89,11 +89,11 @@ For stateless, zero-downtime PaaS deployments:
 
 ### Railway (Infrastructure as Code)
 
-Songbird includes an automated **Infrastructure as Code (IaC)** configuration at `.railway/railway.ts` for one-click, reproducible multi-service deployment on [Railway](https://railway.com).
+Aurelle includes an automated **Infrastructure as Code (IaC)** configuration at `.railway/railway.ts` for one-click, reproducible multi-service deployment on [Railway](https://railway.com).
 
 #### Architecture & Resources Provisioned
 
-The Railway IaC configuration programmatically creates and interconnects a full-stack Songbird topology under a single `"songbird"` project group:
+The Railway IaC configuration programmatically creates and interconnects a full-stack Aurelle topology under a single `"songbird"` project group:
 
 ```txt
 ┌────────────────────────────────────────────────────────────────────────┐
@@ -102,7 +102,7 @@ The Railway IaC configuration programmatically creates and interconnects a full-
 │   ┌─────────────────────────── "songbird" Group ──────────────────┐    │
 │   │                                                               │    │
 │   │   ┌──────────────────┐               ┌────────────────────┐   │    │
-│   │   │  PostgreSQL      │◀──────────────│  Songbird App      │   │    │
+│   │   │  PostgreSQL      │◀──────────────│  Aurelle App      │   │    │
 │   │   │  (Managed DB)    │  DATABASE_URL │  (Web & API)       │   │    │
 │   │   └──────────────────┘               └────────┬───────────┘   │    │
 │   │                                               │               │    │
@@ -110,7 +110,7 @@ The Railway IaC configuration programmatically creates and interconnects a full-
 │   │                                       Network │ Worker URL    │    │
 │   │                                               │               │    │
 │   │   ┌──────────────────┐               ┌────────▼───────────┐   │    │
-│   │   │  Uploads Bucket  │◀──────────────│  Songbird Worker   │   │    │
+│   │   │  Uploads Bucket  │◀──────────────│  Aurelle Worker   │   │    │
 │   │   │  (S3 Storage)    │  S3 Driver    │  (Media Transcoder)│   │    │
 │   │   └────────▲─────────┘               └────────────────────┘   │    │
 │   │            │                                  │               │    │
@@ -126,7 +126,7 @@ The Railway IaC configuration programmatically creates and interconnects a full-
 
 #### Step-by-Step Deployment Guide
 
-Follow these steps to deploy Songbird on Railway using the Railway CLI:
+Follow these steps to deploy Aurelle on Railway using the Railway CLI:
 
 ##### Step 1: Install Railway CLI
 
@@ -144,7 +144,7 @@ railway login
 
 ##### Step 3: Initialize or Link the Project
 
-Navigate to your local clone of the Songbird repository and initialize a new project or link to an existing one:
+Navigate to your local clone of the Aurelle repository and initialize a new project or link to an existing one:
 
 ```bash
 railway init
@@ -160,9 +160,9 @@ Deploy the code. Railway automatically recognizes `.railway/railway.ts` and prov
 railway up
 ```
 
-##### Step 5: Expose Public Domain for Songbird App
+##### Step 5: Expose Public Domain for Aurelle App
 
-By default, Railway services run within private networking. To make Songbird accessible to users:
+By default, Railway services run within private networking. To make Aurelle accessible to users:
 
 1. In the [Railway Dashboard](https://railway.com/dashboard), click on the **songbird-server** service.
 
@@ -178,7 +178,7 @@ railway domain --service songbird-server
 
 ### Render (Blueprint)
 
-Songbird ships a [Render Blueprint](https://render.com/docs/blueprints) at `render.yaml`: a single Docker web service (`songbird`) backed by managed PostgreSQL. Unlike the Railway topology there is no separate worker service — the container entrypoint auto-starts an in-container Media Worker (`WORKER_PORT=8080`) next to the app, which itself listens on Render's `PORT`, so the two never collide.
+Aurelle ships a [Render Blueprint](https://render.com/docs/blueprints) at `render.yaml`: a single Docker web service (`songbird`) backed by managed PostgreSQL. Unlike the Railway topology there is no separate worker service — the container entrypoint auto-starts an in-container Media Worker (`WORKER_PORT=8080`) next to the app, which itself listens on Render's `PORT`, so the two never collide.
 
 #### What Gets Provisioned
 
@@ -210,7 +210,7 @@ Remote Channel continuous polling prevents the app from sleeping and burns the m
 You can run Aurelle in containerized environments, but no prebuilt Docker images are published (the upstream Songbird images on Docker Hub do not include calls, video messages or the Aurelle branding). Build the images from source and push them to a container registry that you control, then point your platform at them:
 
 ```bash
-git clone https://github.com/elia2000/Aurelle.git
+git clone https://github.com/elia2000/Aurelia.git
 cd Aurelle
 docker build -t ghcr.io/<your-account>/aurelle:latest .
 docker build -t ghcr.io/<your-account>/aurelle-worker:latest worker/
@@ -238,7 +238,7 @@ To enable **multi-instance horizontal scaling**, configure the following trio of
 └──────────────┬──────────────────────────────┬───────────────┘
                │                              │
         ┌──────▼──────┐                ┌──────▼──────┐
-        │  Songbird   │                │  Songbird   │
+        │  Aurelle   │                │  Aurelle   │
         │ Instance 1  │                │ Instance 2  │
         └──────┬──────┘                └──────┬──────┘
                │                              │
@@ -273,11 +273,11 @@ STORAGE_REGION=us-east-1
 ```
 
 :::tip Media Transcoding with Remote Storage
-Songbird offloads video transcoding and thumbnail extraction to the standalone HTTP push **Media Worker** (`worker/`), which can be deployed as an independent container service or alongside backend nodes. See [Media Worker](./Media-Worker.md) and [Object Storage](./Object-Storage.md) for architecture and deployment details.
+Aurelle offloads video transcoding and thumbnail extraction to the standalone HTTP push **Media Worker** (`worker/`), which can be deployed as an independent container service or alongside backend nodes. See [Media Worker](./Media-Worker.md) and [Object Storage](./Object-Storage.md) for architecture and deployment details.
 :::
 
 #### 3. Redis Event Synchronization (Pub/Sub)
-Configure `REDIS_URL` or `REDIS_HOST`. When Redis is enabled, Songbird automatically uses Redis Pub/Sub (channel `songbird:events`) to synchronize real-time WebSocket and SSE events across all container nodes:
+Configure `REDIS_URL` or `REDIS_HOST`. When Redis is enabled, Aurelle automatically uses Redis Pub/Sub (channel `songbird:events`) to synchronize real-time WebSocket and SSE events across all container nodes:
 ```txt
 REDIS_URL=redis://:password@redis.internal:6379
 ```
@@ -288,14 +288,14 @@ For optimal WebSocket connectivity through load balancers, enable **Sticky Sessi
 
 ## 3. Serverless Compatibility
 
-Understanding how Songbird interacts with serverless execution models is critical before deploying to serverless platforms.
+Understanding how Aurelle interacts with serverless execution models is critical before deploying to serverless platforms.
 
 ### Function as a Service (FaaS) — Anti-Pattern
 
 Platforms like **AWS Lambda**, **Vercel Serverless Functions**, or **Netlify Functions** execute code in response to individual HTTP requests and terminate execution contexts immediately after.
 
 :::danger FaaS Runtimes Are Not Supported
-Deploying Songbird as a FaaS application (e.g., on Vercel Functions or AWS Lambda) is **not supported**. FaaS is an architectural anti-pattern for real-time chat platforms like Songbird.
+Deploying Aurelle as a FaaS application (e.g., on Vercel Functions or AWS Lambda) is **not supported**. FaaS is an architectural anti-pattern for real-time chat platforms like Aurelle.
 :::
 
 ### Serverless Containers — Fully Supported
@@ -304,4 +304,4 @@ Do not confuse **Function as a Service (FaaS)** with **Serverless Containers**:
 
 - **Serverless Containers** (such as **Google Cloud Run**, **AWS Fargate**, or **Azure Container Apps**) run full Docker containers without requiring you to manage underlying virtual machines.
 - Unlike FaaS, Serverless Containers provide persistent execution, full WebSocket/SSE support, long-running processes, and background workers.
-- Songbird is **fully compatible** with Serverless Container platforms.
+- Aurelle is **fully compatible** with Serverless Container platforms.

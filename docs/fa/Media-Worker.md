@@ -1,22 +1,22 @@
 # ورکر مدیا (Media Worker)
 
-پلتفرم Songbird شامل یک میکروسرویس اختصاصی، سبک، بدون حالت (Stateless) و مبتنی بر HTTP Push به نام **Media Worker** (در مسیر `worker/`) است که برای انتقال بار پردازشی سنگین ترنسکد ویدیو، بهینه سازی Faststart، استخراج تصویر thumbnail و استخراج متادیتای رسانه از سرور اصلی چت طراحی شده است.
+پلتفرم Aurelle شامل یک میکروسرویس اختصاصی، سبک، بدون حالت (Stateless) و مبتنی بر HTTP Push به نام **Media Worker** (در مسیر `worker/`) است که برای انتقال بار پردازشی سنگین ترنسکد ویدیو، بهینه سازی Faststart، استخراج تصویر thumbnail و استخراج متادیتای رسانه از سرور اصلی چت طراحی شده است.
 
 چه این سرویس به عنوان یک پردازش پس زمینه داخلی اجرا شود و چه به عنوان یک میکروسرویس مستقل ابری روی سرورها یا کانتینرهای جداگانه مستقر گردد، Media Worker تضمین میکند که پردازش فایل های رسانه ای با سرعت و اطمینان بالا بدون افت کارایی سرور اصلی چت انجام پذیرد.
 
 ## بررسی اجمالی و قابلیت های کلیدی
 
-- **بدون حالت و مستقل از پایگاه داده (Database-Agnostic)**: سرویس Media Worker هیچ اتصال مستقیمی به SQLite یا PostgreSQL ندارد. تمامی ارتباطات با سرور Songbird از طریق Endpointهای HTTP REST (مانند `POST /transcode`) و فراخوانی Webhook صورت میگیرد (`POST /api/uploads/webhook/processed`). بنابراین این ورکر در تمامی پیکربندی های دیتابیس به صورت یکسان کار میکند.
+- **بدون حالت و مستقل از پایگاه داده (Database-Agnostic)**: سرویس Media Worker هیچ اتصال مستقیمی به SQLite یا PostgreSQL ندارد. تمامی ارتباطات با سرور Aurelle از طریق Endpointهای HTTP REST (مانند `POST /transcode`) و فراخوانی Webhook صورت میگیرد (`POST /api/uploads/webhook/processed`). بنابراین این ورکر در تمامی پیکربندی های دیتابیس به صورت یکسان کار میکند.
 - **پشتیبانی از دو موتور ذخیره سازی**: پشتیبانی بومی هم از ذخیره سازی دیسک محلی (`STORAGE_DRIVER=local`) و هم از ذخیره سازی ابری سازگار با S3 (`STORAGE_DRIVER=remote` مانند Cloudflare R2، AWS S3، MinIO، ArvanCloud، Wasabi و غیره).
 - **ترنسکد هوشمند ویدیو**:
   - بررسی و اندازه گیری خودکار فرمت ویدیو، کدک ها، ابعاد و مدت زمان با استفاده از `ffprobe`.
   - تبدیل فرمت های ناسازگار یا با بیتریت بالا (مانند MKV، AVI، WebM، HEVC، ProRes و غیره) به فرمت ویدیویی استاندارد وب H.264 همراه با صدای AAC (با پسوند `.mp4`).
   - **بهینه سازی هوشمند Faststart**: چنانچه ویدیوی آپلودشده از پیش سازگار با وب باشد (H.264/AAC با پیکسل فرمت `yuv420p` در کانتینر MP4)، فرآیند سنگین تبدیل مجدد کدک رد شده و تنها فلگ Faststart اعمال میشود (`-movflags +faststart`) تا ویدیو بلافاصله در مرورگر کاربران بدون نیاز به بافر کامل پخش شود.
 - **استخراج تصویر thumbnail**: استخراج خودکار تصویر JPEG با کیفیت بالا (`<storageKey>-thumb.jpg`) از ثانیه های اولیه ویدیو برای نمایش پیش نمایش در چت.
-- **استخراج متادیتا**: اندازه گیری ابعاد دقیق (عرض و ارتفاع) و مدت زمان بر حسب ثانیه و گزارش آن به سرور Songbird جهت رندر فوری کادر پیام در کلاینت ها.
+- **استخراج متادیتا**: اندازه گیری ابعاد دقیق (عرض و ارتفاع) و مدت زمان بر حسب ثانیه و گزارش آن به سرور Aurelle جهت رندر فوری کادر پیام در کلاینت ها.
 - **پاکسازی فایل های زائد (Orphan Cleanup)**: پس از تکمیل موفقیت آمیز ترنسکد، ورکر فایل ویدیویی خام اولیه را از ذخیره سازی ابری حذف میکند تا از اشغال فضای تکراری جلوگیری شود.
 - **رمزنگاری لایه اپلیکیشن (Envelope Encryption)**: در صورت فعال بودن رمزنگاری فایل ها در وضعیت سکون (`STORAGE_ENCRYPTION_MODE=local`)، ورکر فایل رمزگذاری شده را در حافظه با `STORAGE_ENCRYPTION_KEY` رمزگشایی کرده، عملیات پردازش را انجام داده و خروجی را پیش از ذخیره سازی مجدداً رمزنگاری میکند.
-- **سیستم ارسال مطمئن Webhook با تلاش مجدد (Retry)**: ورکر پس از اتمام پردازش، نتیجه را با مکانیزم تلاش مجدد نمایی (Exponential Backoff تا ۵ مرتبه) به سرور Songbird گزارش میدهد تا در صورت قطعی موقت شبکه، هیچ پاسخی مفقود نشود.
+- **سیستم ارسال مطمئن Webhook با تلاش مجدد (Retry)**: ورکر پس از اتمام پردازش، نتیجه را با مکانیزم تلاش مجدد نمایی (Exponential Backoff تا ۵ مرتبه) به سرور Aurelle گزارش میدهد تا در صورت قطعی موقت شبکه، هیچ پاسخی مفقود نشود.
 
 ## معماری و جریان کاری (Architecture & Workflow)
 
@@ -29,7 +29,7 @@
        │ 2. Notify Server                                            │ 4. Read raw /
        ▼                                                             │    Upload processed /
 ┌──────────────┐          3. POST /transcode              ┌──────────┴──────────┐
-│   Songbird   │ ───────────────────────────────────────> │ Songbird Media Worker│
+│   Aurelle   │ ───────────────────────────────────────> │ Aurelle Media Worker│
 │   Backend    │ <─────────────────────────────────────── │    (HTTP Push)       │
 └──────────────┘        5. POST /api/uploads/webhook/     └─────────────────────┘
                                 processed (with retries)
@@ -38,11 +38,11 @@
 ### مراحل اجرا
 
 1. **آپلود مدیا**: کلاینت فایل ویدیویی را به طور مستقیم یا با Presigned URL روی فضای ابری یا دیسک محلی بارگذاری میکند.
-2. **ارسال کار به ورکر (Dispatch)**: سرور Songbird یک درخواست `POST /transcode` حاوی شناسه فایل، کلید ذخیره سازی، نوع رمزنگاری و نشانی های Callback به ورکر مدیا ارسال میکند.
+2. **ارسال کار به ورکر (Dispatch)**: سرور Aurelle یک درخواست `POST /transcode` حاوی شناسه فایل، کلید ذخیره سازی، نوع رمزنگاری و نشانی های Callback به ورکر مدیا ارسال میکند.
 3. **پذیرش و صف بندی**: ورکر فوراً پاسخ `202 Accepted` را برمیگرداند و کار را در صف پردازش غیرهمگام (`AsyncQueue`) با سقف همزمانی `WORKER_CONCURRENCY` قرار میدهد.
 4. **پردازش**: ورکر فایل را دریافت کرده، در صورت لزوم رمزگشایی نموده، کدک ها را بررسی میکند، ترنسکد یا Faststart را از طریق FFmpeg انجام داده و تصویر thumbnail را تولید می نماید.
 5. **ارسال گزارش با Webhook**: ورکر وضعیت `ready`، ابعاد، مدت زمان و کلیدهای فایل های جدید را به Endpoint سرور (`POST /api/uploads/webhook/processed`) گزارش میدهد.
-6. **پخش زنده تغییرات**: سرور Songbird رکورد فایل را در پایگاه داده به روزرسانی کرده و رویداد را به صورت زنده از طریق SSE/WebSocket به تمامی کاربران چت ارسال میکند.
+6. **پخش زنده تغییرات**: سرور Aurelle رکورد فایل را در پایگاه داده به روزرسانی کرده و رویداد را به صورت زنده از طریق SSE/WebSocket به تمامی کاربران چت ارسال میکند.
 
 ## حالت های پردازش مدیا (`STORAGE_PROCESSING_MODE`)
 
@@ -50,7 +50,7 @@
 
 | حالت | عملکرد |
 |---|---|
-| `auto` (پیشفرض) | **ارسال به ورکر ریموت با تلاش مجدد و بازگشت به ورکر محلی.** در این حالت، Songbird ابتدا کار را به ورکر ریموت (`WORKER_URL`) میفرستد و در صورت بروز خطا تا سقف `STORAGE_PROCESSING_TIMEOUT_MS` تلاش مجدد میکند. در محیط های Docker و استاندارد، سرور Songbird ورکر محلی (`http://127.0.0.1:WORKER_PORT`) را نیز به عنوان پروسه فرزند مدیریت میکند تا در صورت عدم تنظیم یا اتمام مهلت زمانی ورکر ریموت، پردازش بدون وقفه به صورت محلی انجام گیرد. |
+| `auto` (پیشفرض) | **ارسال به ورکر ریموت با تلاش مجدد و بازگشت به ورکر محلی.** در این حالت، Aurelle ابتدا کار را به ورکر ریموت (`WORKER_URL`) میفرستد و در صورت بروز خطا تا سقف `STORAGE_PROCESSING_TIMEOUT_MS` تلاش مجدد میکند. در محیط های Docker و استاندارد، سرور Aurelle ورکر محلی (`http://127.0.0.1:WORKER_PORT`) را نیز به عنوان پروسه فرزند مدیریت میکند تا در صورت عدم تنظیم یا اتمام مهلت زمانی ورکر ریموت، پردازش بدون وقفه به صورت محلی انجام گیرد. |
 | `local` | **پردازش کاملاً محلی.** تمامی درخواست های ترنسکد فقط به ورکر محلی مستقر روی `http://127.0.0.1:WORKER_PORT` ارسال میشوند و هیچ ورکر ریموتی فراخوانی نمیشود. پروسه فرزند ورکر محلی در زمان شروع به طور خودکار اجرا میگردد. |
 | `remote` | **پردازش کاملاً ریموت.** کارها فقط به ورکر ریموت (`WORKER_URL`) ارسال میشوند و تلاش مجدد تا سقف `STORAGE_PROCESSING_TIMEOUT_MS` بدون بازگشت به ورکر محلی انجام میگیرد. هیچ ورکر محلی در سرور اجرا یا مانیتور نمیگردد. این حالت برای استقرارهای ابری سبک (Serverless / PaaS) جهت کاهش بار سرور اصلی بسیار مناسب است. |
 
@@ -64,7 +64,7 @@
 |---|---|---:|---|
 | `WORKER_PORT` | `integer` | `8080` | پورت HTTP که ورکر روی آن به درخواست ها گوش میدهد. |
 | `WORKER_CONCURRENCY` | `integer` | `2` | حداکثر تعداد پردازش های ویدیویی همزمان FFmpeg. |
-| `WEBHOOK_SECRET` | `string` | `""` | توکن امنیتی برای اعتبارسنجی درخواست های ورودی و فراخوانی Webhook خروجی (`x-songbird-webhook-secret`). باید با `WEBHOOK_SECRET` سرور Songbird یکسان باشد. |
+| `WEBHOOK_SECRET` | `string` | `""` | توکن امنیتی برای اعتبارسنجی درخواست های ورودی و فراخوانی Webhook خروجی (`x-songbird-webhook-secret`). باید با `WEBHOOK_SECRET` سرور Aurelle یکسان باشد. |
 | `STORAGE_DRIVER` | `string` | `local` | درایور ذخیره سازی (`local` برای دیسک محلی یا `remote` / `s3` برای ذخیره سازی ابری). |
 | `DATA_DIR` | `string` | `/opt/songbird/data` | مسیر دایرکتوری داده محلی (هنگام استفاده از `STORAGE_DRIVER=local`). |
 | `STORAGE_BUCKET` | `string` | `""` | نام باکت ذخیره سازی S3 / R2. |
@@ -75,17 +75,17 @@
 | `STORAGE_FORCE_PATH_STYLE` | `boolean` | `true` | فعال سازی ساختار آدرس دهی Path-Style. برای Cloudflare R2، MinIO، ArvanCloud و Wasabi توصیه میشود. |
 | `STORAGE_ENCRYPTION_KEY` | `string` | `""` | *(اختیاری)* کلید رمزنگاری متقارن لایه اپلیکیشن در صورت فعال بودن `STORAGE_ENCRYPTION_MODE=local`. |
 
-### تنظیمات سرور Songbird
+### تنظیمات سرور Aurelle
 
-این متغیرها در فایل `.env` سرور اصلی Songbird پیکربندی میشوند:
+این متغیرها در فایل `.env` سرور اصلی Aurelle پیکربندی میشوند:
 
 | متغیر | نوع | پیشفرض | توضیح |
 |---|---|---:|---|
 | `WORKER_URL` | `string` | `""` | نشانی URL پایه ورکر ریموت برای ترنسکد با HTTP Push (مثلاً `https://media-worker.example.com`). نام جایگزین: `MEDIA_WORKER_URL`. |
-| `WORKER_PORT` | `integer` | `8080` | پورت ورکر محلی. Songbird از این پورت برای ساخت نشانی `http://127.0.0.1:WORKER_PORT` استفاده میکند. |
+| `WORKER_PORT` | `integer` | `8080` | پورت ورکر محلی. Aurelle از این پورت برای ساخت نشانی `http://127.0.0.1:WORKER_PORT` استفاده میکند. |
 | `STORAGE_PROCESSING_MODE` | `string` | `auto` | استراتژی پردازش رسانه (`auto`، `local` یا `remote`). |
 | `STORAGE_PROCESSING_TIMEOUT_MS` | `integer` | `120000` | مهلت زمانی تلاش مجدد به میلی ثانیه برای ارسال به ورکر ریموت پیش از انتقال به پردازش محلی در حالت `auto` یا عدم موفقیت در حالت `remote`. |
-| `WEBHOOK_URL` | `string` | `""` | نشانی عمومی فراخوانی Webhook سرور Songbird که به ورکر ارسال میشود (مثلاً `https://songbird.example.com/api/uploads/webhook/processed`). نام جایگزین: `WEBHOOK_CALLBACK_URL`. |
+| `WEBHOOK_URL` | `string` | `""` | نشانی عمومی فراخوانی Webhook سرور Aurelle که به ورکر ارسال میشود (مثلاً `https://songbird.example.com/api/uploads/webhook/processed`). نام جایگزین: `WEBHOOK_CALLBACK_URL`. |
 | `WEBHOOK_SECRET` | `string` | *(تولید خودکار)* | توکن مشترک برای احراز هویت درخواست های Webhook. در صورت خالی بودن در اولین اجرا به طور خودکار تولید میشود. |
 | `FILE_UPLOAD_TRANSCODE_VIDEOS` | `boolean` | `true` | در صورت تنظیم روی `false`، فرآیند ترنسکد ویدیو کاملاً غیرفعال شده، ارسال درخواست های ترنسکد (`POST /transcode`) به ورکرهای محلی و ریموت متوقف شده و از اجرای پروسه ورکر محلی جلوگیری میشود. |
 
@@ -93,7 +93,7 @@
 
 ### ۱. استقرار خودکار و یکپارچه (سرور تکی / Docker)
 
-اگر Songbird را با استفاده از Docker Compose پیشفرض یا اسکریپت نصب استاندارد اجرا میکنید، نیازی به راه اندازی یا اجرای جداگانه Media Worker ندارید.
+اگر Aurelle را با استفاده از Docker Compose پیشفرض یا اسکریپت نصب استاندارد اجرا میکنید، نیازی به راه اندازی یا اجرای جداگانه Media Worker ندارید.
 
 - در استقرارهای Docker، فایل `scripts/docker-entrypoint.sh` ورکر محلی را به صورت خودکار در پس زمینه اجرا میکند.
 - در استقرارهای دستی/Node، ماژول `localWorkerManager` وضعیت پورت ورکر را بررسی کرده و در صورت نیاز پروسه `worker/index.js` را اجرا و مدیریت میکند.
@@ -102,7 +102,7 @@
 چنانچه به ترنسکد ویدیوها نیازی ندارید یا میخواهید در سرورهای با منابع محدود از مصرف پردازنده (CPU) و حافظه رم جلوگیری کنید، متغیر `FILE_UPLOAD_TRANSCODE_VIDEOS=false` را در `.env` (یا از طریق پنل مدیریت در بخش **تنظیمات > آپلود فایل**) تنظیم نمایید. در این وضعیت:
 
 - فایل های ویدیویی آپلودشده بدون تبدیل مجدد در فرمت اصلی خود نگهداری میشوند.
-- سرور Songbird ارسال هرگونه درخواست ترنسکد (`POST /transcode`) به ورکرهای محلی یا ریموت را متوقف میکند.
+- سرور Aurelle ارسال هرگونه درخواست ترنسکد (`POST /transcode`) به ورکرهای محلی یا ریموت را متوقف میکند.
 - پروسه ورکر محلی در پس زمینه توسط `scripts/docker-entrypoint.sh` یا مدیر ورکر داخلی (`localWorkerManager`) اجرا نخواهد شد.
 :::
 
@@ -111,7 +111,7 @@
 پروژه Aurelle تعریف یک ایمیج بسیار سبک از Media Worker را به صورت جداگانه در `worker/Dockerfile` ارائه می‌کند. ایمیج آماده‌ای منتشر نشده است؛ بنابراین آن را خودتان از روی یک کلون مخزن بسازید:
 
 ```bash
-git clone https://github.com/elia2000/Aurelle.git
+git clone https://github.com/elia2000/Aurelia.git
 cd Aurelle
 docker build -t aurelle-worker:latest worker/
 ```
@@ -181,7 +181,7 @@ docker compose -f docker-compose.yaml up -d --build
 
 ۱. در پنل [Render](https://render.com) یک **Web Service** جدید ایجاد کنید.
 
-۲. مخزن گیت Songbird خود را متصل نمایید.
+۲. مخزن گیت Aurelle خود را متصل نمایید.
 
 ۳. تنظیمات سرویس را به شکل زیر وارد کنید:
    - **Runtime**: `Docker`
@@ -191,11 +191,11 @@ docker compose -f docker-compose.yaml up -d --build
 ۴. متغیرهای محیطی را اضافه کنید:
    - `WORKER_PORT`: `8080`
    - `WORKER_CONCURRENCY`: `2`
-   - `WEBHOOK_SECRET`: *(مشابه سرور Songbird)*
+   - `WEBHOOK_SECRET`: *(مشابه سرور Aurelle)*
    - `STORAGE_DRIVER`: `remote`
    - `STORAGE_ENDPOINT`, `STORAGE_BUCKET`, `STORAGE_ACCESS_KEY_ID`, `STORAGE_SECRET_ACCESS_KEY`, `STORAGE_FORCE_PATH_STYLE`
 
-۵. در فایل `.env` سرور اصلی Songbird مقادیر زیر را قرار دهید:
+۵. در فایل `.env` سرور اصلی Aurelle مقادیر زیر را قرار دهید:
    ```txt
    WORKER_URL=https://your-media-worker.onrender.com
    WEBHOOK_URL=https://songbird.example.com/api/uploads/webhook/processed
@@ -205,12 +205,12 @@ docker compose -f docker-compose.yaml up -d --build
 
 #### پلتفرم های Railway / Fly.io
 
-- **استقرار خودکار (Railway IaC)**: پروژه Songbird دارای پیکربندی آماده زیرساخت به عنوان کد در مسیر `.railway/railway.ts` است که سرویس `songbird-worker` را به صورت کاملاً خودکار در کنار برنامه اصلی، پایگاه داده PostgreSQL و باکت ذخیره سازی فایل مستقر و متصل میکند. برای جزئیات کامل به [راهنمای استقرار ابری](./Cloud-Deployment.md#استقرار-خودکار-با-railway-زیرساخت-به-عنوان-کد-iac) مراجعه کنید.
+- **استقرار خودکار (Railway IaC)**: پروژه Aurelle دارای پیکربندی آماده زیرساخت به عنوان کد در مسیر `.railway/railway.ts` است که سرویس `songbird-worker` را به صورت کاملاً خودکار در کنار برنامه اصلی، پایگاه داده PostgreSQL و باکت ذخیره سازی فایل مستقر و متصل میکند. برای جزئیات کامل به [راهنمای استقرار ابری](./Cloud-Deployment.md#استقرار-خودکار-با-railway-زیرساخت-به-عنوان-کد-iac) مراجعه کنید.
 - **راهاندازی دستی (Railway / Fly.io)**: ساخت مستقیم از `worker/Dockerfile` با دایرکتوری ریشه `worker`. پورت تعریف شده در `WORKER_PORT` (`8080`) را در معرض دسترسی قرار دهید و مطمئن شوید ورکر امکان دسترسی به Endpoint باکت S3 و `WEBHOOK_URL` سرور چت را دارد.
 
 ### ۴. استقرار به عنوان سرویس Systemd (سرور VPS لینوکس)
 
-در صورتی که Songbird را به صورت مستقیم و بدون داکر روی لینوکس اجرا میکنید:
+در صورتی که Aurelle را به صورت مستقیم و بدون داکر روی لینوکس اجرا میکنید:
 
 **۱. نصب پیشنیازهای سیستمی:**
 
@@ -230,7 +230,7 @@ npm ci --omit=dev
 
 ```ini
 [Unit]
-Description=Songbird Media Worker
+Description=Aurelle Media Worker
 After=network.target
 
 [Service]
@@ -316,11 +316,11 @@ curl http://localhost:8080/health
 }
 ```
 
-### ۳. فراخوانی Webhook سرور Songbird
+### ۳. فراخوانی Webhook سرور Aurelle
 
-**Endpoint روی سرور Songbird:** `POST /api/uploads/webhook/processed`
+**Endpoint روی سرور Aurelle:** `POST /api/uploads/webhook/processed`
 
-پس از اتمام عملیات، ورکر این درخواست را به سرور Songbird ارسال میکند.
+پس از اتمام عملیات، ورکر این درخواست را به سرور Aurelle ارسال میکند.
 
 **هدرها:**
 - `Content-Type: application/json`
@@ -360,9 +360,9 @@ curl http://localhost:8080/health
 
 ## نکات امنیتی و بهترین شیوه ها
 
-۱. **همگام سازی `WEBHOOK_SECRET`**: همواره یک رشته امن و تصادفی یکسان را برای `WEBHOOK_SECRET` در سرور Songbird و Media Worker قرار دهید. درخواست های بدون هدر معتبر با خطای `401 Unauthorized` رد میشوند.
+۱. **همگام سازی `WEBHOOK_SECRET`**: همواره یک رشته امن و تصادفی یکسان را برای `WEBHOOK_SECRET` در سرور Aurelle و Media Worker قرار دهید. درخواست های بدون هدر معتبر با خطای `401 Unauthorized` رد میشوند.
 
-۲. **جداسازی شبکه (Network Isolation)**: در استقرارهای چندسروری، ورکر را روی IP خصوصی شبکه محلی قرار داده یا با فایروال (UFW یا Security Groups) دسترسی به `POST /transcode` را تنها به IP سرور Songbird محدود کنید.
+۲. **جداسازی شبکه (Network Isolation)**: در استقرارهای چندسروری، ورکر را روی IP خصوصی شبکه محلی قرار داده یا با فایروال (UFW یا Security Groups) دسترسی به `POST /transcode` را تنها به IP سرور Aurelle محدود کنید.
 
 ۳. **تنظیم همزمانی و تخصیص منابع**:
    - پردازش ویدیو به شدت متکی بر CPU و RAM است.
@@ -375,12 +375,12 @@ curl http://localhost:8080/health
 
 ### خطای `401 Unauthorized` از ورکر
 
-- بررسی کنید که مقدار `WEBHOOK_SECRET` در فایل `.env` سرور Songbird با مقدار آن در ورکر کاملاً یکسان باشد.
+- بررسی کنید که مقدار `WEBHOOK_SECRET` در فایل `.env` سرور Aurelle با مقدار آن در ورکر کاملاً یکسان باشد.
 - در صورت وجود کاراکترهای خاص در توکن، آن را داخل دابل کوتیشن (`"..."`) قرار دهید.
 
-### عدم دریافت نتیجه Webhook در سرور Songbird
+### عدم دریافت نتیجه Webhook در سرور Aurelle
 
-- اطمینان حاصل کنید که `WEBHOOK_URL` در سرور Songbird به یک آدرس عمومی و در دسترس ورکر اشاره دارد (مثلاً `https://songbird.example.com/api/uploads/webhook/processed`).
+- اطمینان حاصل کنید که `WEBHOOK_URL` در سرور Aurelle به یک آدرس عمومی و در دسترس ورکر اشاره دارد (مثلاً `https://songbird.example.com/api/uploads/webhook/processed`).
 - اگر از آدرس های محلی (`localhost` یا `127.0.0.1`) استفاده میکنید، مطمئن شوید هر دو سرویس روی یک هاست و شبکه اجرا میشوند.
 - لاگ های ورکر را برای مشاهده خطاهای تلاش مجدد بررسی کنید (`[worker] Callback webhook returned HTTP ...`).
 
