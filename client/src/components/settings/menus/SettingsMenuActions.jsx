@@ -4,6 +4,7 @@ import {
   Database,
   Info,
   LogOut,
+  Palette,
   Rocket,
   ShieldCheck,
   User,
@@ -100,6 +101,14 @@ export function SettingsMenuActions({
       >
         <Bell size={18} className={`${iconCls} icon-anim-swing`} />
         Notifications
+      </button>
+      <button
+        type="button"
+        onClick={() => setSettingsPanel("appearance")}
+        className={`${buttonBase} ${accentHover}`}
+      >
+        <Palette size={18} className={`${iconCls} icon-anim-spin-dir`} />
+        Appearance
       </button>
       <ThemeButton
         isDark={isDark}

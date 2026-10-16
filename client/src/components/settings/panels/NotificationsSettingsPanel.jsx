@@ -12,7 +12,7 @@ export function NotificationsSettingsPanel({
   const buttonBase =
     "flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left text-sm font-semibold transition";
   const buttonHover =
-    "hover:border-emerald-300 hover:bg-emerald-50 hover:shadow-[0_0_18px_rgba(16,185,129,0.18)] dark:hover:bg-emerald-500/10";
+    "hover:border-emerald-300 hover:bg-emerald-50 hover:shadow-[0_0_18px_color-mix(in_srgb,var(--color-emerald-500)_18%,transparent)] dark:hover:bg-emerald-500/10";
   const buttonTheme =
     "border-emerald-200/70 bg-white/90 text-emerald-700 dark:border-emerald-500/30 dark:bg-slate-900/50 dark:text-emerald-200";
   const disabledTheme =

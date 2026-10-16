@@ -895,9 +895,9 @@ export default function ChatWindowPanel({
   const chatScrollStaticStyle = useMemo(
     () => ({
       backgroundImage: isDark
-        ? "radial-gradient(circle at top right, rgba(16,185,129,0.22), transparent 48%), radial-gradient(circle at bottom left, rgba(16,185,129,0.20), transparent 44%)"
-        : "radial-gradient(circle at top right, rgba(16,185,129,0.10), transparent 45%), radial-gradient(circle at bottom left, rgba(16,185,129,0.09), transparent 40%)",
-      backgroundColor: isDark ? "#0b1320" : "#dcfce7",
+        ? "radial-gradient(circle at top right, color-mix(in srgb, var(--color-emerald-500) 22%, transparent), transparent 48%), radial-gradient(circle at bottom left, color-mix(in srgb, var(--color-emerald-500) 20%, transparent), transparent 44%)"
+        : "radial-gradient(circle at top right, color-mix(in srgb, var(--color-emerald-500) 10%, transparent), transparent 45%), radial-gradient(circle at bottom left, color-mix(in srgb, var(--color-emerald-500) 9%, transparent), transparent 40%)",
+      backgroundColor: isDark ? "#0b1320" : "var(--theme-chat-bg, #dcfce7)",
       scrollbarGutter: "stable both-edges",
       overflowAnchor: "none",
     }),
@@ -1537,7 +1537,7 @@ export default function ChatWindowPanel({
           <button
             type="button"
             onClick={() => onToggleChannelMute?.()}
-            className="inline-flex h-11 items-center rounded-2xl border border-emerald-200 bg-white px-6 text-sm font-semibold text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:shadow-[0_0_14px_rgba(16,185,129,0.2)] dark:border-emerald-500/30 dark:bg-slate-900 dark:text-emerald-200 dark:hover:bg-emerald-500/10"
+            className="inline-flex h-11 items-center rounded-2xl border border-emerald-200 bg-white px-6 text-sm font-semibold text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:shadow-[0_0_14px_color-mix(in_srgb,var(--color-emerald-500)_20%,transparent)] dark:border-emerald-500/30 dark:bg-slate-900 dark:text-emerald-200 dark:hover:bg-emerald-500/10"
           >
             {isChannelMuted ? "Unmute" : "Mute"}
           </button>

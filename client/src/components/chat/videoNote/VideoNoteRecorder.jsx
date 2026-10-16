@@ -234,7 +234,7 @@ export default function VideoNoteRecorder({ open, onClose, onSend, busy = false,
                 onClick={recorder.retake}
                 disabled={busy}
                 aria-label="Record again"
-                className="inline-flex h-12 items-center gap-2 rounded-full border border-emerald-200 bg-white px-4 text-xs font-semibold text-emerald-700 transition hover:border-emerald-300 hover:shadow-[0_0_14px_rgba(16,185,129,0.2)] disabled:opacity-50 dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-200"
+                className="inline-flex h-12 items-center gap-2 rounded-full border border-emerald-200 bg-white px-4 text-xs font-semibold text-emerald-700 transition hover:border-emerald-300 hover:shadow-[0_0_14px_color-mix(in_srgb,var(--color-emerald-500)_20%,transparent)] disabled:opacity-50 dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-200"
               >
                 <RotateCcw size={16} /> Retake
               </button>

@@ -40,6 +40,20 @@ describe("GET /api/app/build", () => {
   });
 });
 
+describe("theme palette in /api/app/info", () => {
+  test("clients get the admin's palette", async () => {
+    const { app } = makeApp({ settings: { THEME_PALETTE: "#FF0000, #00ff00 #0f0" } });
+    const res = await request(app).get("/api/app/info");
+    expect(res.body.themePalette).toEqual(["#ff0000", "#00ff00"]);
+  });
+
+  test("without one they get the 30 built-in colours", async () => {
+    const { app } = makeApp();
+    const res = await request(app).get("/api/app/info");
+    expect(res.body.themePalette).toHaveLength(30);
+  });
+});
+
 describe("GET /api/app/info", () => {
   // ── Shape ──────────────────────────────────────────────────────────────────
 

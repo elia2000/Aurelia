@@ -649,7 +649,7 @@ export default function ChatProfileModal({
                   <ContextMenuSurface
                     as="div"
                     key={`member-row-${member.id}`}
-                    className="flex items-center gap-2 rounded-xl border border-emerald-100/80 bg-white/80 px-2 py-2 transition hover:border-emerald-300 hover:shadow-[0_0_20px_rgba(16,185,129,0.18)] dark:border-emerald-500/20 dark:bg-slate-900/70 dark:hover:border-emerald-500/35 dark:hover:shadow-[0_0_18px_rgba(16,185,129,0.12)]"
+                    className="flex items-center gap-2 rounded-xl border border-emerald-100/80 bg-white/80 px-2 py-2 transition hover:border-emerald-300 hover:shadow-[0_0_20px_color-mix(in_srgb,var(--color-emerald-500)_18%,transparent)] dark:border-emerald-500/20 dark:bg-slate-900/70 dark:hover:border-emerald-500/35 dark:hover:shadow-[0_0_18px_color-mix(in_srgb,var(--color-emerald-500)_12%,transparent)]"
                     contextMenu={{
                       isMobile:
                         typeof window !== "undefined" &&

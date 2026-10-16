@@ -7,7 +7,7 @@ import { useHeaderActions } from "../../calls/useHeaderActions.js";
 const SafetyNumberModal = lazy(() => import("./SafetyNumberModal.jsx"));
 
 const base =
-  "inline-flex h-8 w-8 items-center justify-center rounded-full border border-emerald-200 bg-white/80 text-emerald-700 transition hover:border-emerald-300 hover:shadow-[0_0_14px_rgba(16,185,129,0.2)] disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-200";
+  "inline-flex h-8 w-8 items-center justify-center rounded-full border border-emerald-200 bg-white/80 text-emerald-700 transition hover:border-emerald-300 hover:shadow-[0_0_14px_color-mix(in_srgb,var(--color-emerald-500)_20%,transparent)] disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-200";
 
 /**
  * Encryption and call buttons for the header of a direct chat: the safety

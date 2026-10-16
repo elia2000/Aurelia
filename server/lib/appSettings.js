@@ -16,6 +16,7 @@
 
 import { readEnvBool, readEnvInt } from "../settings/env.js";
 import { dbKnex } from "../db/knex.js";
+import { MAX_THEME_COLORS, normalizeHex, tokenizePalette } from "./themePalette.js";
 
 // ─── Setting types ────────────────────────────────────────────────────────────
 
@@ -37,6 +38,26 @@ const TYPE_STRING = "string";
 //   defaultVal  – hard-coded fallback if env var is also absent
 //   min / max   – only for TYPE_INT, applied during validation
 //   restart     – if true, hint to the admin panel that a server restart is needed
+
+function validateThemePalette(s) {
+  const tokens = tokenizePalette(s);
+  if (tokens.length > MAX_THEME_COLORS) {
+    return { valid: false, error: `At most ${MAX_THEME_COLORS} colours are allowed.` };
+  }
+  const bad = tokens.find((token) => !normalizeHex(token));
+  if (bad) return { valid: false, error: `"${bad}" is not a hex colour (use #rrggbb).` };
+  return { valid: true, value: parseThemePaletteStrict(tokens) };
+}
+
+// The colours exactly as given (cleaned up), without the built-in fallback.
+function parseThemePaletteStrict(tokens) {
+  const out = [];
+  for (const token of tokens) {
+    const hex = normalizeHex(token);
+    if (hex && !out.includes(hex)) out.push(hex);
+  }
+  return out.join(",");
+}
 
 export const SETTING_DEFS = [
   // ── Diagnostics ────────────────────────────────────────────────────────────────
@@ -370,6 +391,20 @@ export const SETTING_DEFS = [
     max: 720,
   },
 
+  // ── Appearance ────────────────────────────────────────────────────────────────
+  {
+    key: "THEME_PALETTE",
+    type: TYPE_STRING,
+    label: "Theme colour palette",
+    description:
+      "Up to 30 hex colours (comma separated, e.g. #10b981, #2563eb). People choosing 'Random' in their settings get one of these each day. Empty = built-in palette.",
+    group: "appearance",
+    envKey: "THEME_PALETTE",
+    defaultVal: "",
+    nullable: true,
+    validate: validateThemePalette,
+  },
+
   // ── Push notifications ────────────────────────────────────────────────────────
   {
     key: "PUSH_PROXY_URL",
@@ -684,6 +719,7 @@ export function validateSetting(key, raw) {
   if (def.nullable && s === "") return { valid: true, value: "" };
   if (s.length > 2000)
     return { valid: false, error: `Value is too long (max 2000 characters).` };
+  if (typeof def.validate === "function") return def.validate(s);
   return { valid: true, value: s };
 }
 

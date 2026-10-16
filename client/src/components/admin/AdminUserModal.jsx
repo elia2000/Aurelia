@@ -355,7 +355,7 @@ export default function AdminUserModal({ mode = "edit", user = null, onClose, on
 
             {/* Submit */}
             <button type="submit" disabled={profileBusy}
-              className="w-full rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 hover:shadow-[0_0_20px_rgba(16,185,129,0.4)] disabled:opacity-70">
+              className="w-full rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 hover:shadow-[0_0_20px_color-mix(in_srgb,var(--color-emerald-500)_40%,transparent)] disabled:opacity-70">
               {profileBusy ? (creating ? "Creating…" : "Saving…") : (creating ? "Create user" : "Save profile")}
             </button>
 

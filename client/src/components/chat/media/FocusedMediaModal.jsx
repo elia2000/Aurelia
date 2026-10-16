@@ -373,7 +373,7 @@ export function FocusedMediaModal({
           <button
             type="button"
             onClick={handleMobileSave}
-            className="pointer-events-auto relative z-50 group inline-flex h-9 items-center gap-2 rounded-full bg-emerald-500 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 hover:shadow-[0_0_22px_rgba(16,185,129,0.45)]"
+            className="pointer-events-auto relative z-50 group inline-flex h-9 items-center gap-2 rounded-full bg-emerald-500 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 hover:shadow-[0_0_22px_color-mix(in_srgb,var(--color-emerald-500)_45%,transparent)]"
           >
             <Download size={15} className="icon-anim-drop" />
             Save
@@ -415,7 +415,7 @@ export function FocusedMediaModal({
                   focusedMedia.name || "media",
                 );
               }}
-              className="pointer-events-auto relative z-50 group inline-flex h-9 items-center gap-2 rounded-full bg-emerald-500 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 hover:shadow-[0_0_22px_rgba(16,185,129,0.45)]"
+              className="pointer-events-auto relative z-50 group inline-flex h-9 items-center gap-2 rounded-full bg-emerald-500 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 hover:shadow-[0_0_22px_color-mix(in_srgb,var(--color-emerald-500)_45%,transparent)]"
             >
               <Download size={15} className="icon-anim-drop" />
               Save

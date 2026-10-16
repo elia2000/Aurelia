@@ -1,4 +1,5 @@
 import { readAppMeta } from "../lib/appMeta.js";
+import { parseThemePalette } from "../lib/themePalette.js";
 
 function registerAppRoutes(app, deps) {
   const { REMOTE_CHANNELS, getSetting, fs, path, projectRootDir, callsConfig } = deps;
@@ -25,6 +26,8 @@ function registerAppRoutes(app, deps) {
     const appMeta = readAppMeta({ fs, path, projectRootDir });
     res.json({
       buildId: readBuildId(),
+      // The colours "Random" draws from (the admin sets them as hex codes).
+      themePalette: parseThemePalette(getSetting("THEME_PALETTE")),
       version: appMeta.version,
       normalizedVersion: appMeta.normalizedVersion,
       changelog: appMeta.changelog,

@@ -26,6 +26,7 @@ import {
   Lock,
   MessageCircleMore,
   PackageOpen,
+  Palette,
   Paperclip,
   Pencil,
   Refresh,
@@ -53,6 +54,7 @@ const GROUP_META = {
   retention: { label: "Message Retention", order: 3 },
   limits: { label: "Limits", order: 4 },
   client: { label: "Client Behavior", order: 5 },
+  appearance: { label: "Appearance", order: 5.5 },
   remote_channel: { label: "Remote Channel", order: 6 },
   storage: { label: "Object Storage & Worker", order: 7 },
   realtime: { label: "Realtime", order: 8 },
@@ -62,6 +64,7 @@ const GROUP_META = {
 // Icon for each setting key
 const SETTING_ICONS = {
   APP_DEBUG: Bug,
+  THEME_PALETTE: Palette,
   SIGN_UP: UserPlus,
   FILE_UPLOAD: Paperclip,
   FILE_UPLOAD_MAX_SIZE_MB: Box,

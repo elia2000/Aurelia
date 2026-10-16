@@ -6,6 +6,7 @@ import { getAvatarInitials } from "../../../utils/avatarInitials.js";
 import { USERNAME_INPUT_PATTERN, useNameLimits } from "../../../utils/nameLimits.js";
 import { InlineError } from "../common/InlineError.jsx";
 import { AboutSettingsPanel } from "../panels/AboutSettingsPanel.jsx";
+import { AppearanceSettingsPanel } from "../panels/AppearanceSettingsPanel.jsx";
 import { DataSettingsPanel } from "../panels/DataSettingsPanel.jsx";
 import ConfirmPasswordModal from "../../modals/ConfirmPasswordModal.jsx";
 import Avatar from "../../common/Avatar.jsx";
@@ -67,7 +68,9 @@ export function DesktopSettingsModal({
                 ? "Security"
                 : settingsPanel === "data"
                   ? "Data"
-                  : "About"}
+                  : settingsPanel === "appearance"
+                    ? "Appearance"
+                    : "About"}
           </h3>
           <button
             type="button"
@@ -240,7 +243,7 @@ export function DesktopSettingsModal({
             ) : null}
             <button
               type="submit"
-              className="w-full rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 hover:shadow-[0_0_20px_rgba(16,185,129,0.4)]"
+              className="w-full rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 hover:shadow-[0_0_20px_color-mix(in_srgb,var(--color-emerald-500)_40%,transparent)]"
             >
               Save profile
             </button>
@@ -273,7 +276,7 @@ export function DesktopSettingsModal({
                 <button
                   type="button"
                   onClick={() => setShowCurrentPassword((prev) => !prev)}
-                  className="absolute right-1 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-transparent bg-transparent text-emerald-700 transition hover:bg-emerald-100 hover:shadow-[0_0_18px_rgba(16,185,129,0.22)] dark:text-emerald-200 dark:hover:bg-emerald-500/10"
+                  className="absolute right-1 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-transparent bg-transparent text-emerald-700 transition hover:bg-emerald-100 hover:shadow-[0_0_18px_color-mix(in_srgb,var(--color-emerald-500)_22%,transparent)] dark:text-emerald-200 dark:hover:bg-emerald-500/10"
                   aria-label={
                     showCurrentPassword
                       ? "Hide current password"
@@ -308,7 +311,7 @@ export function DesktopSettingsModal({
                 <button
                   type="button"
                   onClick={() => setShowNewPassword((prev) => !prev)}
-                  className="absolute right-1 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-transparent bg-transparent text-emerald-700 transition hover:bg-emerald-100 hover:shadow-[0_0_18px_rgba(16,185,129,0.22)] dark:text-emerald-200 dark:hover:bg-emerald-500/10"
+                  className="absolute right-1 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-transparent bg-transparent text-emerald-700 transition hover:bg-emerald-100 hover:shadow-[0_0_18px_color-mix(in_srgb,var(--color-emerald-500)_22%,transparent)] dark:text-emerald-200 dark:hover:bg-emerald-500/10"
                   aria-label={
                     showNewPassword ? "Hide new password" : "Show new password"
                   }
@@ -341,7 +344,7 @@ export function DesktopSettingsModal({
                 <button
                   type="button"
                   onClick={() => setShowConfirmPassword((prev) => !prev)}
-                  className="absolute right-1 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-transparent bg-transparent text-emerald-700 transition hover:bg-emerald-100 hover:shadow-[0_0_18px_rgba(16,185,129,0.22)] dark:text-emerald-200 dark:hover:bg-emerald-500/10"
+                  className="absolute right-1 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-transparent bg-transparent text-emerald-700 transition hover:bg-emerald-100 hover:shadow-[0_0_18px_color-mix(in_srgb,var(--color-emerald-500)_22%,transparent)] dark:text-emerald-200 dark:hover:bg-emerald-500/10"
                   aria-label={
                     showConfirmPassword
                       ? "Hide confirm password"
@@ -358,7 +361,7 @@ export function DesktopSettingsModal({
             </label>
             <button
               type="submit"
-              className="w-full rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 hover:shadow-[0_0_20px_rgba(16,185,129,0.4)]"
+              className="w-full rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 hover:shadow-[0_0_20px_color-mix(in_srgb,var(--color-emerald-500)_40%,transparent)]"
             >
               Update password
             </button>
@@ -375,6 +378,12 @@ export function DesktopSettingsModal({
               user={currentUser}
               variant="desktop"
             />
+          </div>
+        ) : null}
+
+        {settingsPanel === "appearance" ? (
+          <div className="app-scroll mt-4 min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+            <AppearanceSettingsPanel onDone={handleClosePanel} variant="desktop" />
           </div>
         ) : null}
 

@@ -83,7 +83,7 @@ function RoundButton({ label, onClick, active = false, danger = false, accept = 
   const tone = danger
     ? "bg-rose-600 text-white hover:bg-rose-500 shadow-[0_0_14px_rgba(244,63,94,0.35)]"
     : accept
-      ? "bg-emerald-500 text-white hover:bg-emerald-400 shadow-[0_0_14px_rgba(16,185,129,0.35)]"
+      ? "bg-emerald-500 text-white hover:bg-emerald-400 shadow-[0_0_14px_color-mix(in_srgb,var(--color-emerald-500)_35%,transparent)]"
       : active
         ? "bg-white text-slate-900 hover:bg-slate-100"
         : "bg-white/10 text-white hover:bg-white/20";

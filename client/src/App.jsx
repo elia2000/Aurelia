@@ -8,6 +8,8 @@ import { setNameLimits } from './utils/nameLimits.js'
 import { setChatPageConfig } from './settings/chatPageConfig.js'
 import InstallBar from './components/pwa/InstallBar.jsx'
 import NewVersionBanner from './components/pwa/NewVersionBanner.jsx'
+import { useThemeColor } from './hooks/useThemeColor.js'
+import { setThemePalette } from './utils/themeStore.js'
 import InstallGuideModal from './components/pwa/InstallGuideModal.jsx'
 import {
   getSavedSessionUser,
@@ -160,6 +162,8 @@ export default function App() {
     getInviteToken(window.location.pathname),
   )
   const [userState, setUserState] = useState(() => getSavedSessionUser())
+  // The person's chosen accent colour (or today's random one), for the whole app.
+  useThemeColor(userState?.id ?? userState?.username ?? null)
   const setUser = (next) => {
     setUserState((prev) => {
       const resolved = typeof next === 'function' ? next(prev) : next
@@ -730,6 +734,7 @@ export default function App() {
           usernameMax: data?.usernameMaxChars,
         })
         setMessageMaxChars(data?.messageMaxChars)
+        setThemePalette(data?.themePalette)
         setChatPageConfig({
           messageFetchLimit: data?.chatMessageFetchLimit,
           messagePageSize: data?.chatMessagePageSize,

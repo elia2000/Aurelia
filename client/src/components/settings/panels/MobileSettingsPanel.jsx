@@ -10,6 +10,7 @@ import {
   Info,
   LogOut,
   Moon,
+  Palette,
   Pencil,
   Rocket,
   ShieldCheck,
@@ -23,6 +24,7 @@ import { getAvatarInitials } from "../../../utils/avatarInitials.js";
 import { USERNAME_INPUT_PATTERN, useNameLimits } from "../../../utils/nameLimits.js";
 import { InlineError } from "../common/InlineError.jsx";
 import { AboutSettingsPanel } from "./AboutSettingsPanel.jsx";
+import { AppearanceSettingsPanel } from "./AppearanceSettingsPanel.jsx";
 import { DataSettingsPanel } from "./DataSettingsPanel.jsx";
 import { NotificationsSettingsPanel } from "./NotificationsSettingsPanel.jsx";
 import ConfirmPasswordModal from "../../modals/ConfirmPasswordModal.jsx";
@@ -36,6 +38,7 @@ const DETAIL_TITLES = {
   security: "Security",
   data: "Data",
   notifications: "Notifications",
+  appearance: "Appearance",
   about: "About",
 };
 
@@ -383,7 +386,7 @@ export function MobileSettingsPanel({
       ) : null}
       <button
         type="submit"
-        className="w-full rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-white shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 hover:shadow-[0_0_20px_rgba(16,185,129,0.4)]"
+        className="w-full rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-white shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 hover:shadow-[0_0_20px_color-mix(in_srgb,var(--color-emerald-500)_40%,transparent)]"
       >
         Save profile
       </button>
@@ -413,7 +416,7 @@ export function MobileSettingsPanel({
           <button
             type="button"
             onClick={() => setShowCurrentPassword((prev) => !prev)}
-            className="absolute right-1 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border border-transparent bg-transparent text-emerald-700 transition hover:bg-emerald-100 hover:shadow-[0_0_18px_rgba(16,185,129,0.22)] dark:text-emerald-200 dark:hover:bg-emerald-500/10"
+            className="absolute right-1 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border border-transparent bg-transparent text-emerald-700 transition hover:bg-emerald-100 hover:shadow-[0_0_18px_color-mix(in_srgb,var(--color-emerald-500)_22%,transparent)] dark:text-emerald-200 dark:hover:bg-emerald-500/10"
             aria-label={
               showCurrentPassword ? "Hide current password" : "Show current password"
             }
@@ -446,7 +449,7 @@ export function MobileSettingsPanel({
           <button
             type="button"
             onClick={() => setShowNewPassword((prev) => !prev)}
-            className="absolute right-1 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border border-transparent bg-transparent text-emerald-700 transition hover:bg-emerald-100 hover:shadow-[0_0_18px_rgba(16,185,129,0.22)] dark:text-emerald-200 dark:hover:bg-emerald-500/10"
+            className="absolute right-1 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border border-transparent bg-transparent text-emerald-700 transition hover:bg-emerald-100 hover:shadow-[0_0_18px_color-mix(in_srgb,var(--color-emerald-500)_22%,transparent)] dark:text-emerald-200 dark:hover:bg-emerald-500/10"
             aria-label={showNewPassword ? "Hide new password" : "Show new password"}
           >
             {showNewPassword ? (
@@ -477,7 +480,7 @@ export function MobileSettingsPanel({
           <button
             type="button"
             onClick={() => setShowConfirmPassword((prev) => !prev)}
-            className="absolute right-1 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border border-transparent bg-transparent text-emerald-700 transition hover:bg-emerald-100 hover:shadow-[0_0_18px_rgba(16,185,129,0.22)] dark:text-emerald-200 dark:hover:bg-emerald-500/10"
+            className="absolute right-1 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border border-transparent bg-transparent text-emerald-700 transition hover:bg-emerald-100 hover:shadow-[0_0_18px_color-mix(in_srgb,var(--color-emerald-500)_22%,transparent)] dark:text-emerald-200 dark:hover:bg-emerald-500/10"
             aria-label={
               showConfirmPassword ? "Hide confirm password" : "Show confirm password"
             }
@@ -492,7 +495,7 @@ export function MobileSettingsPanel({
       </label>
       <button
         type="submit"
-        className="w-full rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-white shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 hover:shadow-[0_0_20px_rgba(16,185,129,0.4)]"
+        className="w-full rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-white shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 hover:shadow-[0_0_20px_color-mix(in_srgb,var(--color-emerald-500)_40%,transparent)]"
       >
         Update password
       </button>
@@ -539,6 +542,9 @@ export function MobileSettingsPanel({
           </div>
         </>
       );
+    }
+    if (settingsPanel === "appearance") {
+      return <AppearanceSettingsPanel onDone={handleClosePanel} variant="mobile" />;
     }
     if (settingsPanel === "about") {
       return (
@@ -656,6 +662,11 @@ export function MobileSettingsPanel({
                   label="Notifications"
                   icon={<Bell size={22} className="icon-anim-swing" />}
                   onClick={openNotificationsPanel}
+                />
+                <MobileMenuRow
+                  label="Appearance"
+                  icon={<Palette size={22} className="icon-anim-spin-dir" />}
+                  onClick={() => setSettingsPanel("appearance")}
                 />
                 <MobileMenuRow
                   label={isDark ? "Light mode" : "Dark mode"}
