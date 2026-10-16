@@ -23,9 +23,16 @@ export const TRUST = Object.freeze({
   KEY_MISMATCH: "key_mismatch",
 });
 
+const MAX_RETIRED = 64;
+
 export function createTrustTracker(store) {
+  // Device ids come from the server. Plain-object lookups would treat names
+  // like "__proto__" or "constructor" as already known, so every lookup is an
+  // own-property check and the maps carry no prototype.
+  const has = (map, id) => Object.hasOwn(map, id);
+
   async function fingerprints(devices) {
-    const map = {};
+    const map = Object.create(null);
     for (const device of devices) map[device.id] = await deviceFingerprint(device);
     return map;
   }
@@ -44,7 +51,7 @@ export function createTrustTracker(store) {
 
     const current = await fingerprints(devices);
     for (const device of devices) {
-      if (!(device.id in known)) added.push(device.id);
+      if (!has(known, device.id)) added.push(device.id);
       else if (known[device.id] !== current[device.id]) mismatched.push(device.id);
     }
     if (mismatched.length) return { status: TRUST.KEY_MISMATCH, added, mismatched, verified };
@@ -55,12 +62,24 @@ export function createTrustTracker(store) {
       return { status: TRUST.NEW, added: [], mismatched: [], verified: false };
     }
 
-    // Forget devices the server no longer lists (revoked), but never pin new ones.
+    // Stop trusting devices the server no longer lists (revoked), but remember
+    // what their keys were: that is the only way to tell an old message from a
+    // retired device of this person from one signed with a key the server made
+    // up for the occasion. Never pin new ones here.
     const stillListed = Object.fromEntries(
-      Object.entries(known).filter(([id]) => id in current),
+      Object.entries(known).filter(([id]) => has(current, id)),
     );
     if (Object.keys(stillListed).length !== Object.keys(known).length) {
-      await store.putPeer(userId, { ...pin, devices: stillListed, updatedAt: Date.now() });
+      const retired = { ...(pin.retired || {}) };
+      for (const [id, fingerprint] of Object.entries(known)) {
+        if (!has(current, id)) retired[id] = fingerprint;
+      }
+      await store.putPeer(userId, {
+        ...pin,
+        devices: stillListed,
+        retired: Object.fromEntries(Object.entries(retired).slice(-MAX_RETIRED)),
+        updatedAt: Date.now(),
+      });
     }
     return {
       status: added.length ? TRUST.DEVICES_ADDED : TRUST.OK,
@@ -82,6 +101,18 @@ export function createTrustTracker(store) {
       verifiedNumber: null,
       updatedAt: Date.now(),
     });
+  }
+
+  /**
+   * True when `device` is one this person used to have and we had pinned, with
+   * the very keys we pinned. A revoked device the server now claims for them
+   * with any other keys (or one we never saw) is not vouched for.
+   */
+  async function wasRetiredDevice(userId, device) {
+    const pin = await store.getPeer(userId);
+    const retired = pin?.retired;
+    if (!retired || !has(retired, device.id)) return false;
+    return retired[device.id] === (await deviceFingerprint(device));
   }
 
   async function wasVerified(userId) {
@@ -108,5 +139,5 @@ export function createTrustTracker(store) {
     });
   }
 
-  return { assess, acknowledge, isVerified, wasVerified, setVerified };
+  return { assess, acknowledge, isVerified, wasVerified, wasRetiredDevice, setVerified };
 }

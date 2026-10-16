@@ -1,4 +1,5 @@
 import { dbKnex } from "../db/knex.js";
+import { isSafeStorageKey } from "./storageKeys.js";
 
 export function createMessageFileJobs({
   adminGetAll,
@@ -257,7 +258,8 @@ export function createMessageFileJobs({
       const thumbKey = String(
         row?.thumb_storage_key ?? row?.thumbStorageKey ?? "",
       ).trim();
-      if (thumbKey) thumbKeys.add(thumbKey);
+      // A key that points outside the uploads folder is never ours to delete.
+      if (thumbKey && isSafeStorageKey(thumbKey)) thumbKeys.add(thumbKey);
     });
     if (!thumbKeys.size) return 0;
 

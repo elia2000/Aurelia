@@ -4,6 +4,8 @@ import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
 import multer from "multer";
+import express from "express";
+import request from "supertest";
 import { createUploadTools } from "../lib/uploads.js";
 
 describe("server/lib/uploads.js avatar storage enhancements", () => {
@@ -250,5 +252,83 @@ describe("server/lib/uploads.js avatar storage enhancements", () => {
         "uploads/avatars/avatar-full-url.png",
       );
     });
+  });
+});
+
+
+describe("server/lib/uploads.js avatars cannot be turned into scripts", () => {
+  let tmpDir;
+  let avatarUploadRootDir;
+  let tools;
+  let app;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sb-avatar-xss-"));
+    avatarUploadRootDir = path.join(tmpDir, "avatars");
+    fs.mkdirSync(avatarUploadRootDir, { recursive: true });
+    tools = createUploadTools({
+      fs,
+      path,
+      crypto,
+      multer,
+      adminGetRow: () => null,
+      adminRun: () => null,
+      adminSave: () => null,
+      uploadRootDir: tmpDir,
+      avatarUploadRootDir,
+      fileUploadMaxSize: 10 * 1024 * 1024,
+      fileUploadMaxFiles: 1,
+      fileUploadMaxTotalSize: 10 * 1024 * 1024,
+      storageEncryption: {
+        encryptFileInPlace: () => true,
+        decryptFileToBuffer: (file) => fs.readFileSync(file),
+      },
+      storageProvider: { type: "local" },
+    });
+    app = express();
+    app.post("/up", tools.uploadAvatar.single("avatar"), (req, res) =>
+      res.json({ filename: req.file.filename }),
+    );
+    tools.registerUploadRoutes(app, { adminGetRow: () => null });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("the stored extension follows the declared image type, not the file name", async () => {
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>');
+    for (const [filename, contentType, expected] of [
+      ["evil.svg", "image/png", ".png"],
+      ["evil.html", "image/jpeg", ".jpg"],
+      ["evil.png", "image/webp", ".webp"],
+      ["no-extension", "image/gif", ".gif"],
+      ["evil.svg", "image/svg+xml", ".bin"],
+    ]) {
+      const res = await request(app).post("/up").attach("avatar", svg, { filename, contentType });
+      expect(res.status, filename).toBe(200);
+      expect(path.extname(res.body.filename), `${filename} as ${contentType}`).toBe(expected);
+    }
+  });
+
+  test("a stored avatar is served as its image type", async () => {
+    fs.writeFileSync(path.join(avatarUploadRootDir, "avatar-1-aa.png"), "png-bytes");
+    const res = await request(app).get("/api/uploads/avatars/avatar-1-aa.png");
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toContain("image/png");
+    expect(res.headers["content-disposition"]).toBeUndefined();
+    expect(res.headers["content-security-policy"]).toContain("sandbox");
+    expect(res.headers["x-content-type-options"]).toBe("nosniff");
+  });
+
+  test("an older avatar saved under a document extension is downloaded, never rendered", async () => {
+    for (const name of ["avatar-2-bb.svg", "avatar-3-cc.html", "avatar-4-dd.bin"]) {
+      fs.writeFileSync(path.join(avatarUploadRootDir, name), "<svg onload=alert(1)/>");
+      const res = await request(app).get(`/api/uploads/avatars/${name}`);
+      expect(res.status, name).toBe(200);
+      expect(res.headers["content-type"], name).toContain("application/octet-stream");
+      expect(res.headers["content-disposition"], name).toBe("attachment");
+      expect(res.headers["content-security-policy"], name).toContain("sandbox");
+    }
   });
 });

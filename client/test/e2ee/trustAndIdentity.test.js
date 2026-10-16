@@ -100,9 +100,46 @@ describe("trust-on-first-use", () => {
     await trust.assess("bob", [bob.record]);
     expect(await trust.isVerified("bob", "999")).toBe(true);
   });
+
+  test("a device id that is an Object.prototype name cannot hide as already-known", async () => {
+    const bob = await makeIdentity("bob");
+    await trust.assess("bob", [bob.record]);
+    for (const id of ["__proto__", "constructor", "toString", "hasOwnProperty"]) {
+      const sneaky = { ...(await makeIdentity("bob")).record, id };
+      const result = await trust.assess("bob", [bob.record, sneaky]);
+      expect(result.status, id).toBe(TRUST.DEVICES_ADDED);
+      expect(result.added, id).toEqual([id]);
+    }
+  });
+
+  test("a device id that is an Object.prototype name is pinned like any other once acknowledged", async () => {
+    const bob = await makeIdentity("bob");
+    const sneaky = { ...(await makeIdentity("bob")).record, id: "__proto__" };
+    await trust.assess("bob", [bob.record]);
+    await trust.acknowledge("bob", [bob.record, sneaky]);
+    expect((await trust.assess("bob", [bob.record, sneaky])).status).toBe(TRUST.OK);
+    const other = { ...(await makeIdentity("bob")).record, id: "__proto__" };
+    expect((await trust.assess("bob", [bob.record, other])).status).toBe(TRUST.KEY_MISMATCH);
+  });
 });
 
 describe("directory", () => {
+  test("a device whose id is not a UUID is never offered as a recipient", async () => {
+    const trust = createTrustTracker(createKeyStore(createMemoryAdapter()));
+    const bob = await makeIdentity("bob");
+    const bad = (await makeIdentity("bob")).record;
+    const api = {
+      fetchUserDevices: vi.fn(async () => ({ devices: [bob.record, { ...bad, id: "__proto__" }] })),
+      fetchChatDevices: vi.fn(async () => ({
+        devices: [bob.record, { ...bad, id: "constructor" }],
+        membersWithoutDevice: [],
+      })),
+    };
+    const dir = createDirectory({ api, trust });
+    expect((await dir.getUserDevices("bob")).devices.map((d) => d.id)).toEqual([bob.record.id]);
+    expect((await dir.getChatDevices("c1")).devices.map((d) => d.id)).toEqual([bob.record.id]);
+  });
+
   test("blocks with KeyMismatchError and never caches the bad answer", async () => {
     const store = createKeyStore(createMemoryAdapter());
     const trust = createTrustTracker(store);
@@ -196,9 +233,35 @@ describe("directory", () => {
     expect(await dir.findDevice("bob", old.record.id)).toBeNull();
     const found = await dir.findDevice("bob", old.record.id, { allowRevoked: true, chatId: "c" });
     expect(found.id).toBe(old.record.id);
-    expect(found.pending).toBe(false);
+    // Never seen while it was active: nothing vouches for these keys.
+    expect(found.pending).toBe(true);
     expect(api.fetchUserDevices).toHaveBeenLastCalledWith("bob", { chatId: "c", deviceId: old.record.id });
     expect((await dir.getUserDevices("bob", { force: true })).devices.map((d) => d.id)).toEqual([bob.record.id]);
+  });
+
+  test("a device we pinned before it was revoked still counts as known, but only with the keys we pinned", async () => {
+    const trust = createTrustTracker(createKeyStore(createMemoryAdapter()));
+    const bob = await makeIdentity("bob");
+    const old = await makeIdentity("bob");
+    const forged = { ...(await makeIdentity("bob")).record, id: old.record.id };
+    let listed = [bob.record, old.record];
+    let revoked = null;
+    const api = {
+      fetchUserDevices: vi.fn(async () => ({
+        devices: [...listed, ...(revoked ? [{ ...revoked, revokedAt: "2024-01-01" }] : [])],
+      })),
+    };
+    const dir = createDirectory({ api, trust });
+    await dir.getUserDevices("bob"); // pins both
+    listed = [bob.record]; // `old` is revoked and drops out of the listing
+    await dir.getUserDevices("bob", { force: true });
+
+    revoked = old.record;
+    expect((await dir.findDevice("bob", old.record.id, { allowRevoked: true })).pending).toBe(false);
+
+    // The server invents a "revoked" device under the same id with other keys.
+    revoked = forged;
+    expect((await dir.findDevice("bob", old.record.id, { allowRevoked: true })).pending).toBe(true);
   });
 
   test("findDevice re-fetches once when the device is new", async () => {

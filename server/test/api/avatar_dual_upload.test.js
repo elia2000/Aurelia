@@ -131,6 +131,10 @@ describe("Dual Avatar Upload (Presigned & Multipart S3)", () => {
   describe("POST /api/profile/avatar", () => {
     test("accepts presigned avatarUrl in JSON body and updates profile", async () => {
       const appObj = createTestApp();
+      appObj.deps.recordPendingPresignedUpload({
+        storageKey: "uploads/avatars/avatar-direct-123.png",
+        userId: ALICE_ID,
+      });
       const res = await request(appObj.app)
         .post("/api/profile/avatar")
         .set("Cookie", [`sid=${sessionToken}`])
@@ -152,6 +156,24 @@ describe("Dual Avatar Upload (Presigned & Multipart S3)", () => {
         "Alice",
         "/api/uploads/avatars/avatar-direct-123.png",
       );
+    });
+
+    test("rejects an avatar file that this person was never given an upload slot for", async () => {
+      const appObj = createTestApp();
+      // Somebody else's slot, and a file nobody is uploading at all.
+      appObj.deps.recordPendingPresignedUpload({
+        storageKey: "uploads/avatars/avatar-bobs-123.png",
+        userId: BOB_ID,
+      });
+      for (const name of ["avatar-bobs-123.png", "avatar-bob-avatar.png"]) {
+        const res = await request(appObj.app)
+          .post("/api/profile/avatar")
+          .set("Cookie", [`sid=${sessionToken}`])
+          .send({ currentUsername: "alice", avatarUrl: `/api/uploads/avatars/${name}` });
+        expect(res.status, name).toBe(400);
+      }
+      expect(updateUserProfileMock).not.toHaveBeenCalled();
+      expect(removeAvatarByUrlMock).not.toHaveBeenCalled();
     });
 
     test("rejects invalid avatarUrl in JSON body", async () => {
@@ -188,8 +210,22 @@ describe("Dual Avatar Upload (Presigned & Multipart S3)", () => {
   });
 
   describe("POST /api/chats/group/:chatId/avatar", () => {
+    test("rejects a group avatar file that this person was never given an upload slot for", async () => {
+      const appObj = createTestApp();
+      const res = await request(appObj.app)
+        .post(`/api/chats/group/${CHAT_ID}/avatar`)
+        .set("Cookie", [`sid=${sessionToken}`])
+        .send({ username: "alice", avatarUrl: "/api/uploads/avatars/avatar-bob-avatar.png" });
+      expect(res.status).toBe(400);
+      expect(updateGroupChatMock).not.toHaveBeenCalled();
+    });
+
     test("accepts presigned avatarUrl in JSON body and updates group avatar", async () => {
       const appObj = createTestApp();
+      appObj.deps.recordPendingPresignedUpload({
+        storageKey: "uploads/avatars/avatar-group-123.png",
+        userId: ALICE_ID,
+      });
       const res = await request(appObj.app)
         .post(`/api/chats/group/${CHAT_ID}/avatar`)
         .set("Cookie", [`sid=${sessionToken}`])

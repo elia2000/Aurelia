@@ -1,3 +1,4 @@
+import { ownsPendingAvatarUpload } from "../lib/pendingAvatar.js";
 import path from "node:path";
 
 function registerProfileRoutes(app, deps) {
@@ -25,6 +26,7 @@ function registerProfileRoutes(app, deps) {
     clearSessionCookie,
     removeAvatarByUrl,
     removePendingPresignedUploads,
+    listPendingPresignedUploads,
     removeStoredFileNames,
     removeUploadedFiles,
     requireSession,
@@ -244,6 +246,9 @@ function registerProfileRoutes(app, deps) {
         !fileName.startsWith("avatar-") ||
         fileName.includes("..")
       ) {
+        return res.status(400).json({ error: "Invalid avatar URL." });
+      }
+      if (!(await ownsPendingAvatarUpload({ listPendingPresignedUploads, userId: user.id, fileName }))) {
         return res.status(400).json({ error: "Invalid avatar URL." });
       }
       avatarUrl = directAvatarUrl.startsWith("/uploads/")

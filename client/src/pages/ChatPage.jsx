@@ -5235,7 +5235,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       // This device already has the plaintext: keep it so playing our own
       // message never downloads and decrypts it again. Ownership of the preview
       // URL moves here only now that the message exists.
-      rememberVideoNote(videoNoteKey({ e2ee: prepared.envelope, user_id: user?.id }), {
+      rememberVideoNote(videoNoteKey({ e2ee: prepared.envelope, user_id: user?.id, chat_id: chatId, client_request_id: tempId }), {
         url: note.previewUrl,
         posterUrl: note.posterBlob ? URL.createObjectURL(note.posterBlob) : null,
         durationMs: note.durationMs,

@@ -139,6 +139,28 @@ describe("GET /api/uploads/thumbs/:fileId", () => {
     expect(Buffer.from(res.body).equals(plain)).toBe(true);
   });
 
+  test("never reads outside the uploads folder, whatever the stored key says", async () => {
+    const outside = realPath.join(realPath.dirname(tmpDir), `sb-thumb-outside-${process.pid}.jpg`);
+    realFs.writeFileSync(outside, Buffer.concat([JPEG_HEAD, Buffer.from("secret")]));
+    try {
+      for (const key of [
+        `../${realPath.basename(outside)}`,
+        `a/../../${realPath.basename(outside)}`,
+        outside,
+      ]) {
+        const appObj = appWithFile(
+          { id: 15, storage_driver: "local", encryption_type: "none", thumb_storage_key: key },
+          { withKey: false },
+        );
+        const res = await request(appObj.app).get("/api/uploads/thumbs/15");
+        expect(res.status, key).not.toBe(200);
+        expect(res.headers["content-type"] || "").not.toContain("image/jpeg");
+      }
+    } finally {
+      realFs.rmSync(outside, { force: true });
+    }
+  });
+
   test("fetches and decrypts an encrypted remote thumbnail", async () => {
     process.env.STORAGE_ENCRYPTION_KEY = "thumb-route-key";
     const storageEncryption = createStorageEncryption({

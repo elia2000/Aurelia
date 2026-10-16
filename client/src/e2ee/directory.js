@@ -7,6 +7,7 @@
 // warn for everybody else. The assessment is never discarded.
 
 import { TRUST } from "./trust.js";
+import { isValidUuid } from "../utils/uuidUtils.js";
 
 export class KeyMismatchError extends Error {
   constructor(userId, deviceIds) {
@@ -27,6 +28,10 @@ const normalize = (device) => ({
   ...(device.revokedAt ? { revokedAt: device.revokedAt } : {}),
 });
 
+// The server only ever hands out UUID device ids. Anything else (such as
+// "__proto__") is not a device, so it is never trusted or sent a key.
+const hasValidId = (device) => isValidUuid(device?.id);
+
 const markPending = (devices, assessment) =>
   devices.map((device) => ({ ...device, pending: assessment.added.includes(device.id) }));
 
@@ -38,7 +43,7 @@ export function createDirectory({ api, trust, ttlMs = 60_000, now = () => Date.n
     if (!force && cached && now() - cached.at < ttlMs) return cached;
 
     const { devices } = await api.fetchUserDevices(userId, { chatId });
-    const list = (devices || []).filter((d) => !d.revokedAt).map(normalize);
+    const list = (devices || []).filter((d) => !d.revokedAt && hasValidId(d)).map(normalize);
     const assessment = await trust.assess(userId, list);
     if (assessment.status === TRUST.KEY_MISMATCH) {
       userCache.delete(userId);
@@ -70,8 +75,13 @@ export function createDirectory({ api, trust, ttlMs = 60_000, now = () => Date.n
       const { devices } = await api.fetchUserDevices(userId, { chatId, deviceId });
       const old = (devices || []).find((d) => d.id === deviceId && d.revokedAt);
       // A revoked key can still prove who signed an old message. It never
-      // becomes a recipient and is never pinned.
-      if (old) device = { ...normalize(old), pending: false };
+      // becomes a recipient and is never pinned. Only the keys we pinned
+      // before the device was retired count as known: a revoked device the
+      // server makes up now is as unconfirmed as any other new device.
+      if (old && hasValidId(old)) {
+        const retired = normalize(old);
+        device = { ...retired, pending: !(await trust.wasRetiredDevice(userId, retired)) };
+      }
     }
     return device || null;
   }
@@ -83,7 +93,7 @@ export function createDirectory({ api, trust, ttlMs = 60_000, now = () => Date.n
    */
   async function getChatDevices(chatId) {
     const data = await api.fetchChatDevices(chatId);
-    const devices = (data.devices || []).map(normalize);
+    const devices = (data.devices || []).filter(hasValidId).map(normalize);
     const byUser = new Map();
     devices.forEach((d) => {
       if (!byUser.has(d.userId)) byUser.set(d.userId, []);

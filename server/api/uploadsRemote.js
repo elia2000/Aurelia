@@ -7,7 +7,26 @@ import { dispatchMediaWorkerJob } from "../lib/mediaWorker.js";
 import { ensureBucketCorsForRequest } from "../lib/bucketCors.js";
 import { resolveWebhookCallbackUrl } from "../lib/webhookUrl.js";
 import { resolveThumbUrl } from "../lib/thumbUrl.js";
+import { isSafeStorageKey } from "../lib/storageKeys.js";
 import { readEnvBool } from "../settings/env.js";
+
+// The session row names the person as `id` (the users row it was joined with).
+const sessionUserId = (session) => session?.id ?? session?.userId ?? null;
+
+function secretsMatch(provided, expected) {
+  if (typeof provided !== "string" || typeof expected !== "string") return false;
+  const a = crypto.createHash("sha256").update(provided).digest();
+  const b = crypto.createHash("sha256").update(expected).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
+const AVATAR_EXTENSIONS_BY_MIME = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/gif": ".gif",
+  "image/webp": ".webp",
+  "image/bmp": ".bmp",
+};
 
 export function registerRemoteUploadRoutes(app, deps) {
   const {
@@ -200,7 +219,8 @@ export function registerRemoteUploadRoutes(app, deps) {
         });
       }
 
-      const ext = path.extname(name).toLowerCase() || ".png";
+      // The extension follows the checked image type, not the file name.
+      const ext = AVATAR_EXTENSIONS_BY_MIME[String(mime).toLowerCase()] || ".png";
       const generatedName = `avatar-${Date.now()}-${crypto.randomBytes(6).toString("hex")}${ext}`;
       const generatedKey = `uploads/avatars/${generatedName}`;
 
@@ -220,7 +240,7 @@ export function registerRemoteUploadRoutes(app, deps) {
           try {
             recordPendingPresignedUpload({
               storageKey: finalStorageKey,
-              userId: session?.userId || null,
+              userId: sessionUserId(session),
             });
           } catch (_) {}
         } else if (typeof adminRun === "function") {
@@ -228,7 +248,7 @@ export function registerRemoteUploadRoutes(app, deps) {
             callAdminRun(
               dbKnex("pending_presigned_uploads").insert({
                 storage_key: finalStorageKey,
-                user_id: session?.userId || null,
+                user_id: sessionUserId(session),
                 created_at: new Date().toISOString(),
               }),
             );
@@ -247,6 +267,18 @@ export function registerRemoteUploadRoutes(app, deps) {
         return res.status(500).json({
           error: err.message || "Failed to generate presigned upload URL.",
         });
+      }
+    }
+
+    // A file can only be attached to a message the caller wrote.
+    if (messageId && typeof adminGetRow === "function") {
+      const rawOwner = callAdminGetRow(
+        dbKnex("chat_messages").select("user_id").where("id", String(messageId)).first(),
+      );
+      const owner = rawOwner && typeof rawOwner.then === "function" ? await rawOwner : rawOwner;
+      const callerId = sessionUserId(session);
+      if (owner?.user_id && callerId && owner.user_id !== callerId) {
+        return res.status(403).json({ error: "Access denied." });
       }
     }
 
@@ -347,7 +379,7 @@ export function registerRemoteUploadRoutes(app, deps) {
         try {
           recordPendingPresignedUpload({
             storageKey: finalStorageKey,
-            userId: session?.userId || null,
+            userId: sessionUserId(session),
           });
         } catch (_) {}
       } else if (typeof adminRun === "function") {
@@ -355,7 +387,7 @@ export function registerRemoteUploadRoutes(app, deps) {
           callAdminRun(
             dbKnex("pending_presigned_uploads").insert({
               storage_key: finalStorageKey,
-              user_id: session?.userId || null,
+              user_id: sessionUserId(session),
               created_at: new Date().toISOString(),
             }),
           );
@@ -416,8 +448,8 @@ export function registerRemoteUploadRoutes(app, deps) {
       if (
         msg &&
         msg.user_id &&
-        session.userId &&
-        msg.user_id !== session.userId
+        sessionUserId(session) &&
+        msg.user_id !== sessionUserId(session)
       ) {
         return res.status(403).json({ error: "Access denied." });
       }
@@ -535,16 +567,27 @@ export function registerRemoteUploadRoutes(app, deps) {
     const depPath = deps.path;
     const depUploadRootDir = deps.uploadRootDir;
 
-    // Local disk first (covers local-driver deployments).
+    // Local disk first (covers local-driver deployments). The key comes from
+    // the database, but a key such as "../../etc/passwd" must still never
+    // leave the uploads folder.
+    const insideRoot = (candidate) => {
+      if (typeof depPath.resolve !== "function" || typeof depPath.sep !== "string") return true;
+      const root = depPath.resolve(depUploadRootDir);
+      const full = depPath.resolve(candidate);
+      return full === root || full.startsWith(root.endsWith(depPath.sep) ? root : root + depPath.sep);
+    };
     const localPaths = [];
     if (depUploadRootDir && depPath && typeof depPath.join === "function") {
-      localPaths.push(depPath.join(depUploadRootDir, String(thumbKey)));
+      const keyText = String(thumbKey);
       const base =
         typeof depPath.basename === "function"
-          ? depPath.basename(String(thumbKey))
-          : String(thumbKey).split("/").pop();
-      if (base && base !== String(thumbKey)) {
-        localPaths.push(depPath.join(depUploadRootDir, base));
+          ? depPath.basename(keyText)
+          : keyText.split("/").pop();
+      for (const candidate of [
+        depPath.join(depUploadRootDir, keyText),
+        base && base !== keyText ? depPath.join(depUploadRootDir, base) : null,
+      ]) {
+        if (candidate && insideRoot(candidate)) localPaths.push(candidate);
       }
     }
     for (const candidate of localPaths) {
@@ -585,7 +628,7 @@ export function registerRemoteUploadRoutes(app, deps) {
       deps.webhookSecret !== undefined ? deps.webhookSecret : webhookSecret;
     if (expectedSecret) {
       const headerSecret = req.headers["x-songbird-webhook-secret"];
-      if (headerSecret !== expectedSecret) {
+      if (!secretsMatch(headerSecret, expectedSecret)) {
         console.warn(
           `[uploads] Rejected webhook for file ${req.body?.fileId ?? "unknown"}: invalid webhook secret.`,
         );
@@ -604,6 +647,11 @@ export function registerRemoteUploadRoutes(app, deps) {
     } = req.body || {};
     if (!fileId) {
       return res.status(400).json({ error: "fileId is required." });
+    }
+    for (const key of [transcodedStorageKey, thumbStorageKey]) {
+      if (key !== undefined && key !== null && key !== "" && !isSafeStorageKey(key)) {
+        return res.status(400).json({ error: "Invalid storage key." });
+      }
     }
     console.log(
       `[uploads] Webhook received for file ${fileId} (status=${status || "ready"}).`,

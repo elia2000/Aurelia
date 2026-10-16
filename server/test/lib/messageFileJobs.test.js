@@ -243,3 +243,54 @@ describe("cleanupMissingMessageFiles — remote storage must not be pruned", () 
     expect(adminRunSpy).toHaveBeenCalledWith("BEGIN");
   });
 });
+
+describe("cleanupExpiredMessageFiles — thumbnail keys stay inside the uploads folder", () => {
+  const MESSAGE_ID = "d0d0d0d0-e1e1-4f2f-b040-171717171718";
+
+  test("a thumbnail key that points outside the uploads folder is never deleted", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const nodePath = await import("node:path");
+    const base = fs.mkdtempSync(nodePath.join(os.tmpdir(), "sb-retention-"));
+    const uploadRootDir = nodePath.join(base, "uploads");
+    fs.mkdirSync(uploadRootDir);
+    const outside = nodePath.join(base, "precious.jpg");
+    const inside = nodePath.join(uploadRootDir, "clip-thumb.jpg");
+    fs.writeFileSync(outside, "keep me");
+    fs.writeFileSync(inside, "old thumbnail");
+
+    const fileRows = [
+      { stored_name: "a.mp4", storage_driver: "local", thumb_storage_key: "../precious.jpg" },
+      { stored_name: "b.mp4", storage_driver: "local", thumb_storage_key: "clip-thumb.jpg" },
+    ];
+    const jobs = createMessageFileJobs({
+      getSetting: (key) => (key === "MESSAGE_FILE_RETENTION" ? 1 : null),
+      adminGetAll: (query) => {
+        const sql = String(query?.toString?.() || "");
+        if (sql.includes("distinct `stored_name`") || sql.includes('distinct "stored_name"')) {
+          return [{ stored_name: "a.mp4" }, { stored_name: "b.mp4" }];
+        }
+        if (sql.includes("message_id") && sql.includes("distinct")) return [{ message_id: MESSAGE_ID }];
+        if (sql.includes("storage_driver")) return fileRows;
+        return [];
+      },
+      adminGetRow: () => null,
+      adminRun: () => {},
+      adminSave: () => {},
+      listMessageFilesByMessageIds: () => [],
+      removeStoredFileNames: () => {},
+      uploadRootDir,
+      fs,
+      path: nodePath,
+    });
+
+    try {
+      const result = await jobs.cleanupExpiredMessageFiles();
+      expect(result.removedLocalThumbs).toBe(1);
+      expect(fs.existsSync(outside)).toBe(true);
+      expect(fs.existsSync(inside)).toBe(false);
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+});

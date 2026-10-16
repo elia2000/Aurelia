@@ -16,16 +16,20 @@ function trimPosterCache() {
 }
 
 /**
- * Cache key of a message's decrypted media. It is derived from the sender's
- * account and the envelope signature, NOT from anything a sender can pick
- * freely (such as the client request id): otherwise one chat member could
- * choose an id that collides with somebody else's message and have their own
- * video shown in its place, without any signature check.
+ * Cache key of a message's decrypted media. It names the sender, the chat, the
+ * request id AND the envelope signature. The signature (which only the sender
+ * can produce) keeps one chat member from choosing an id that collides with
+ * somebody else's message and getting their own video shown in its place.
+ * The chat and request id keep a server from replaying a message that was
+ * already opened into another chat, or a second time, and having the stored
+ * plaintext shown without the context check that decryption applies.
  */
 export const videoNoteKey = (msg) => {
   const sig = msg?.e2ee?.sig;
-  const sender = msg?.user_id || msg?.userId;
-  return sig && sender ? `${sender}:${sig}` : "";
+  const { chatId, clientRequestId, senderUserId } = videoNoteContext(msg);
+  return sig && senderUserId && chatId && clientRequestId
+    ? `${senderUserId}:${chatId}:${clientRequestId}:${sig}`
+    : "";
 };
 
 /** What the message's envelope is bound to; taken from the message, never the envelope. */

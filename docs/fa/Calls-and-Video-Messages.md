@@ -128,6 +128,29 @@ Aurelle از سرور استاندارد [coturn](https://github.com/coturn/cotu
 
 coturn را با `use-auth-secret` و `static-auth-secret=<secret>` اجرا کنید، سپس `CALLS_TURN_SECRET` و `CALLS_TURN_URLS` را مطابق آن تنظیم کنید. برای TLS از آدرس‌های `turns:` استفاده کنید.
 
+::: warning جلوی دسترسی رله به شبکه‌ی خودتان را بگیرید
+رله‌ی TURN بسته‌ها را به هر آدرسی که تماس‌گیرنده نام ببرد می‌فرستد. اگر تنظیم نکنید، coturn به سرویس‌های دیگر سرور شما و شبکه‌های خصوصی هم رله می‌کند و هر کاربرِ واردشده می‌تواند از راه آن آن‌ها را بسنجد. این خط‌ها را به `turnserver.conf` اضافه کنید (پیکربندی Docker همراه پروژه از قبل آن‌ها را دارد):
+
+```ini
+no-multicast-peers
+denied-peer-ip=0.0.0.0-0.255.255.255
+denied-peer-ip=10.0.0.0-10.255.255.255
+denied-peer-ip=100.64.0.0-100.127.255.255
+denied-peer-ip=127.0.0.0-127.255.255.255
+denied-peer-ip=169.254.0.0-169.254.255.255
+denied-peer-ip=172.16.0.0-172.31.255.255
+denied-peer-ip=192.168.0.0-192.168.255.255
+denied-peer-ip=::-::
+denied-peer-ip=::1-::1
+denied-peer-ip=::ffff:0:0-::ffff:ffff:ffff
+denied-peer-ip=64:ff9b::-64:ff9b::ffff:ffff
+denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+```
+
+اگر دستگاه رله از بازه‌ی خصوصی دیگری استفاده می‌کند (مثلاً بازه‌ی ارائه‌دهنده‌ی ابری)، آن را هم مسدود کنید. `allow-loopback-peers` را فعال نکنید.
+:::
+
 ### پشت VPN، پراکسی یا شبکه‌ی سانسورشده {#behind-a-vpn-a-proxy-or-a-censored-network}
 
 تماس به مسیری از هر گوشی تا رله نیاز دارد. دو چیز معمولاً مانع می‌شوند:

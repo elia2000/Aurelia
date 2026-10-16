@@ -1,3 +1,4 @@
+import { ownsPendingAvatarUpload } from "../lib/pendingAvatar.js";
 import path from "node:path";
 import { createInviteToken } from "../lib/inviteTokens.js";
 import { createMembershipService } from "../lib/services/membershipService.js";
@@ -45,6 +46,7 @@ function registerChatRoutes(app, deps) {
     listUsers,
     removeAvatarByUrl,
     removePendingPresignedUploads,
+    listPendingPresignedUploads,
     removeStoredFileNames,
     clearGroupMemberRemoved,
     bcrypt,
@@ -1505,6 +1507,9 @@ function registerChatRoutes(app, deps) {
           !fileName.startsWith("avatar-") ||
           fileName.includes("..")
         ) {
+          return res.status(400).json({ error: "Invalid avatar URL." });
+        }
+        if (!(await ownsPendingAvatarUpload({ listPendingPresignedUploads, userId: user.id, fileName }))) {
           return res.status(400).json({ error: "Invalid avatar URL." });
         }
         avatarUrl = directAvatarUrl.startsWith("/uploads/")

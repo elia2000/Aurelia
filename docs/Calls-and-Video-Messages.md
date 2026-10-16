@@ -124,6 +124,29 @@ The bundled configuration refuses to relay to private networks (so it cannot be 
 
 Run coturn with `use-auth-secret` and `static-auth-secret=<secret>`, then set `CALLS_TURN_SECRET` and `CALLS_TURN_URLS` to match. Use `turns:` URLs for TLS.
 
+::: warning Stop the relay reaching your own network
+A TURN relay forwards packets to whatever address a caller names. Unless told otherwise coturn will happily relay to your server's other services and to private networks, so a signed-in user could probe them through it. Add these lines to `turnserver.conf` (the bundled Docker configuration already has them):
+
+```ini
+no-multicast-peers
+denied-peer-ip=0.0.0.0-0.255.255.255
+denied-peer-ip=10.0.0.0-10.255.255.255
+denied-peer-ip=100.64.0.0-100.127.255.255
+denied-peer-ip=127.0.0.0-127.255.255.255
+denied-peer-ip=169.254.0.0-169.254.255.255
+denied-peer-ip=172.16.0.0-172.31.255.255
+denied-peer-ip=192.168.0.0-192.168.255.255
+denied-peer-ip=::-::
+denied-peer-ip=::1-::1
+denied-peer-ip=::ffff:0:0-::ffff:ffff:ffff
+denied-peer-ip=64:ff9b::-64:ff9b::ffff:ffff
+denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+```
+
+If the relay machine uses another private range (for example a cloud provider's), deny that too. Do not enable `allow-loopback-peers`.
+:::
+
 ::: warning The relay's DNS record must not be proxied
 If your domain is on Cloudflare, the record for the relay host (`turn.example.com`) must be **DNS only** (grey cloud). The orange-cloud proxy only carries web traffic, so a proxied relay can never be reached and calls between different networks stay on *Connecting…*. Aurelle checks this at start-up and tells you in the log and on the call screen. The record of the app itself should stay proxied.
 :::

@@ -72,6 +72,28 @@ export function createUploadTools({
     "image/bmp",
   ]);
 
+  // The stored name of an avatar decides how it is served later, and the
+  // original file name is whatever the uploader typed. The extension therefore
+  // comes from the image type that passed the check, never from the name: an
+  // "evil.svg" sent as image/png must not end up served as an SVG document.
+  const AVATAR_EXTENSION_BY_MIME = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "image/bmp": ".bmp",
+  };
+  const AVATAR_MIME_BY_EXTENSION = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+  };
+  const avatarExtensionForMime = (mime = "") =>
+    AVATAR_EXTENSION_BY_MIME[String(mime || "").toLowerCase()] || ".bin";
+
   const uploadDownloadLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 1000,
@@ -105,7 +127,7 @@ export function createUploadTools({
   const avatarUploadStorage = multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, avatarUploadRootDir),
     filename: (_req, file, cb) => {
-      const ext = path.extname(file.originalname || "").toLowerCase();
+      const ext = avatarExtensionForMime(file.mimetype);
       cb(
         null,
         `avatar-${Date.now()}-${crypto.randomBytes(6).toString("hex")}${ext}`,
@@ -539,7 +561,18 @@ export function createUploadTools({
         res.setHeader("X-Content-Type-Options", "nosniff");
         res.setHeader("ETag", etag);
         res.setHeader("Last-Modified", stat.mtime.toUTCString());
-        res.type(inferMimeFromFilename(storedName) || "application/octet-stream");
+        // Only plain raster images are shown. Avatars stored before the
+        // extension came from the checked type (an .svg or .html name) are
+        // downloaded, never rendered, and run no script even if opened.
+        const avatarMime =
+          AVATAR_MIME_BY_EXTENSION[path.extname(storedName).toLowerCase()] || "";
+        if (avatarMime) {
+          res.type(avatarMime);
+        } else {
+          res.type("application/octet-stream");
+          res.setHeader("Content-Disposition", "attachment");
+        }
+        res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
 
         if (
           ifNoneMatch === etag ||

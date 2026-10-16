@@ -144,6 +144,34 @@ describe("Remote Uploads & File Management Routes", () => {
       expect(createMessageFilesMock).toHaveBeenCalled();
     });
 
+    test("presign refuses to attach a file to somebody else's message", async () => {
+      const createMessageFilesMock = vi.fn(() => []);
+      const customApp = makeApp({
+        deps: {
+          storageProvider: mockRemoteProvider,
+          createMessageFiles: createMessageFilesMock,
+          adminGetRow: (sql) =>
+            sql.includes("chat_messages") ? { user_id: "someone-else" } : null,
+          MESSAGE_FILE_LIMITS: { maxFileSizeBytes: 50 * 1024 * 1024 },
+        },
+      });
+      const uId = customApp.userStore.createUser("intruder", "pass", "Intruder", null, "#fff");
+      customApp.sessionStore.createSession(uId, sessionToken);
+
+      const res = await request(customApp.app)
+        .post("/api/uploads/presign")
+        .set("Cookie", [`sid=${sessionToken}`])
+        .send({
+          messageId: "c0c0c0c0-d1d1-4e2e-af3f-060606060607",
+          filename: "sample.png",
+          contentType: "image/png",
+          fileSize: 2048,
+        });
+
+      expect(res.status).toBe(403);
+      expect(createMessageFilesMock).not.toHaveBeenCalled();
+    });
+
     test("presign returns storageKey and no fileId when messageId is absent (no row inserted)", async () => {
       const createMessageFilesMock = vi.fn(() => []);
       const customApp = makeApp({
@@ -325,6 +353,39 @@ describe("Remote Uploads & File Management Routes", () => {
       expect(res.body.status).toBe("pending");
     });
 
+    test("refuses to complete a file that belongs to somebody else's message", async () => {
+      const uuidFileId = "10000000-0000-4000-8000-000000000099";
+      const fileRecord = {
+        id: uuidFileId,
+        message_id: "50000000-0000-4000-8000-000000000099",
+        storage_driver: "s3",
+        storage_key: "uploads/file99.mp4",
+        mime_type: "video/mp4",
+        stored_name: "file99.mp4",
+        processing_status: "pending",
+      };
+      const adminRun = vi.fn();
+      const customApp = makeApp({
+        deps: {
+          storageProvider: mockRemoteProvider,
+          findMessageFileById: (id) => (String(id) === uuidFileId ? fileRecord : null),
+          adminGetRow: (sql) => (sql.includes("chat_messages") ? { user_id: "someone-else" } : null),
+          adminRun,
+          adminSave: () => {},
+        },
+      });
+      const uId = customApp.userStore.createUser("intruder2", "pass", "Intruder", null, "#fff");
+      customApp.sessionStore.createSession(uId, sessionToken);
+
+      const res = await request(customApp.app)
+        .post("/api/uploads/complete")
+        .set("Cookie", [`sid=${sessionToken}`])
+        .send({ fileId: uuidFileId, storageKey: "uploads/file99.mp4" });
+
+      expect(res.status).toBe(403);
+      expect(adminRun).not.toHaveBeenCalled();
+    });
+
     test("dispatches HTTP transcode job to mediaWorkerUrl when configured", async () => {
       const uuidFileId = "10000000-0000-4000-8000-000000000012";
       const fileRecord = {
@@ -443,6 +504,22 @@ describe("Remote Uploads & File Management Routes", () => {
         .send({ fileId: 10, status: "ready" });
 
       expect(res.status).toBe(401);
+    });
+
+    test("refuses storage keys that climb out of the storage folder", async () => {
+      for (const body of [
+        { thumbStorageKey: "../../etc/passwd" },
+        { thumbStorageKey: "/etc/passwd" },
+        { transcodedStorageKey: "a/../../b.mp4" },
+        { thumbStorageKey: "a\\b.jpg" },
+        { thumbStorageKey: "a\0b.jpg" },
+      ]) {
+        const res = await request(appObj.app)
+          .post("/api/uploads/webhook/processed")
+          .set("x-songbird-webhook-secret", "secret-key-123")
+          .send({ fileId: 999, status: "ready", ...body });
+        expect(res.status, JSON.stringify(body)).toBe(400);
+      }
     });
 
     test("returns 404 when file is not found", async () => {

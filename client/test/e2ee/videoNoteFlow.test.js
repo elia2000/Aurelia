@@ -298,7 +298,7 @@ describe("encrypted video message round trip", () => {
 
   test("the sender's own copy plays from the local cache with no download", async () => {
     const prepared = await prepare();
-    rememberVideoNote(videoNoteKey({ e2ee: prepared.envelope, user_id: "alice" }), {
+    rememberVideoNote(videoNoteKey(asMessage(prepared)), {
       url: "blob:local", posterUrl: null, durationMs: 1,
     });
     const fetchCiphertext = vi.fn();
@@ -307,6 +307,25 @@ describe("encrypted video message round trip", () => {
     });
     expect(out.url).toBe("blob:local");
     expect(fetchCiphertext).not.toHaveBeenCalled();
+  });
+
+  test("a message that was already opened is not shown again from the cache when replayed into another chat", async () => {
+    const prepared = await prepare();
+    const first = await loadVideoNote({
+      msg: asMessage(prepared), user: { id: "bob" }, services: bobServices, fetchCiphertext: async () => cipherOf(prepared),
+    });
+    expect(first.url).toMatch(/^blob:/);
+
+    // A malicious server re-posts the same envelope and file into a chat the
+    // sender never wrote it in. The cache must not answer for it.
+    const replay = asMessage(prepared, { chat_id: "other-chat" });
+    await expect(
+      loadVideoNote({ msg: replay, user: { id: "bob" }, services: bobServices, fetchCiphertext: async () => cipherOf(prepared) }),
+    ).rejects.toMatchObject({ code: expect.stringMatching(/bad_signature|corrupt/) });
+    const again = asMessage(prepared, { client_request_id: "client-2" });
+    await expect(
+      loadVideoNote({ msg: again, user: { id: "bob" }, services: bobServices, fetchCiphertext: async () => cipherOf(prepared) }),
+    ).rejects.toMatchObject({ code: "bad_signature" });
   });
 
   test("a DM with a contact who has no device is refused with a helpful message", async () => {
@@ -447,12 +466,37 @@ describe("encrypted video message round trip", () => {
 
   test("a sender device revoked after sending still verifies its old messages", async () => {
     const prepared = await prepare();
+    // Bob knew the device while it was active.
+    await bobServices.directory.getUserDevices("alice", { chatId: "chat" });
+    const other = await makeIdentity("alice");
+    devices.push(other.record);
     alice.record.revokedAt = "2024-01-01";
+    await bobServices.directory.getUserDevices("alice", { chatId: "chat", force: true });
     const loaded = await loadVideoNote({
       msg: asMessage(prepared), user: { id: "bob" }, services: bobServices, fetchCiphertext: async () => cipherOf(prepared),
     });
     expect(loaded.url).toMatch(/^blob:/);
+    expect(loaded.senderPending).toBe(false);
     delete alice.record.revokedAt;
+  });
+
+  test("a revoked sender device Bob never knew cannot vouch for a verified contact", async () => {
+    await bobServices.directory.getUserDevices("alice", { chatId: "chat" });
+    await bobServices.trust.setVerified("alice", "777", true, [alice.record]);
+    const ghost = await makeIdentity("alice");
+    ghost.record.revokedAt = "2024-01-01"; // the server claims it was revoked, but Bob never saw it
+    devices.push(ghost.record);
+    const fromGhost = await prepareVideoNoteUpload({
+      chatId: "chat", clientRequestId: "g-1", user: { id: "alice" }, note,
+      services: { ...servicesFor(ghost, "alice"), getIdentity: async () => ghost.identity },
+      acknowledgeChanges: true,
+    });
+    await expect(
+      loadVideoNote({
+        msg: asMessage(fromGhost, { client_request_id: "g-1" }), user: { id: "bob" }, services: bobServices,
+        fetchCiphertext: async () => cipherOf(fromGhost),
+      }),
+    ).rejects.toMatchObject({ code: "sender_changed" });
   });
 
   test("more recipient devices than the server accepts is stopped before anything is encrypted or uploaded", async () => {
@@ -466,10 +510,16 @@ describe("encrypted video message round trip", () => {
 });
 
 describe("receive helpers", () => {
-  test("the cache key comes from the sender and the signature, never from a sender-chosen id", () => {
-    expect(videoNoteKey({ client_request_id: "c1", id: "s1", user_id: "u", e2ee: { sig: "SIG" } })).toBe("u:SIG");
-    expect(videoNoteKey({ client_request_id: "c1", user_id: "u" })).toBe("");
-    expect(videoNoteKey({ user_id: "a", e2ee: { sig: "S" } })).not.toBe(videoNoteKey({ user_id: "b", e2ee: { sig: "S" } }));
+  test("the cache key names the sender, the chat, the request and the signature", () => {
+    const msg = { client_request_id: "c1", chat_id: "g", id: "s1", user_id: "u", e2ee: { sig: "SIG" } };
+    expect(videoNoteKey(msg)).toBe("u:g:c1:SIG");
+    expect(videoNoteKey({ client_request_id: "c1", chat_id: "g", user_id: "u" })).toBe("");
+    expect(videoNoteKey({ ...msg, chat_id: "" })).toBe("");
+    expect(videoNoteKey({ ...msg, client_request_id: "" })).toBe("");
+    expect(videoNoteKey({ ...msg, user_id: "v" })).not.toBe(videoNoteKey(msg));
+    expect(videoNoteKey({ ...msg, e2ee: { sig: "OTHER" } })).not.toBe(videoNoteKey(msg));
+    // The server's own message id plays no part.
+    expect(videoNoteKey({ ...msg, id: "s2" })).toBe(videoNoteKey(msg));
   });
   test("the context is read from the message", () => {
     expect(videoNoteContext({ chat_id: "c", client_request_id: "r", user_id: "u" })).toEqual({
