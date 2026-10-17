@@ -1210,7 +1210,10 @@ registerApiRoutes(app, apiDeps);
 if (isProduction) {
   app.use(staticLimiter);
 
-  const clientDist = path.resolve(serverDir, "..", "client", "dist");
+  // CLIENT_DIST_DIR lets tests and previews serve a build kept elsewhere.
+  const clientDist = process.env.CLIENT_DIST_DIR
+    ? path.resolve(process.env.CLIENT_DIST_DIR)
+    : path.resolve(serverDir, "..", "client", "dist");
   const setStaticCacheHeaders = (res, filePath) => {
     const normalizedPath = String(filePath || "").replace(/\\/g, "/");
     if (
