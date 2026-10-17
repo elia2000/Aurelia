@@ -154,6 +154,7 @@ async function main() {
       if (uniqueChatDeletes.length) {
         for (const chunk of chunkArray(uniqueChatDeletes, 500)) {
           const chunkPlaceholders = chunk.map(() => '?').join(', ')
+          await queryRun(`DELETE FROM message_reactions WHERE message_id IN (SELECT id FROM chat_messages WHERE chat_id IN (${chunkPlaceholders}))`, chunk)
           await queryRun(`DELETE FROM chat_message_reads WHERE message_id IN (SELECT id FROM chat_messages WHERE chat_id IN (${chunkPlaceholders}))`, chunk)
           await queryRun(`DELETE FROM chat_message_files WHERE message_id IN (SELECT id FROM chat_messages WHERE chat_id IN (${chunkPlaceholders}))`, chunk)
           await queryRun(`DELETE FROM chat_messages WHERE chat_id IN (${chunkPlaceholders})`, chunk)
@@ -173,6 +174,7 @@ async function main() {
         const chunkPlaceholders = chunk.map(() => '?').join(', ')
         await queryRun(`DELETE FROM sessions WHERE user_id IN (${chunkPlaceholders})`, chunk)
         await queryRun(`DELETE FROM hidden_chats WHERE user_id IN (${chunkPlaceholders})`, chunk)
+        await queryRun(`DELETE FROM message_reactions WHERE user_id IN (${chunkPlaceholders})`, chunk)
         await queryRun(`DELETE FROM chat_message_reads WHERE user_id IN (${chunkPlaceholders})`, chunk)
         await queryRun(`UPDATE chat_messages SET read_by_user_id = NULL WHERE read_by_user_id IN (${chunkPlaceholders})`, chunk)
         await queryRun(`DELETE FROM chat_left_members WHERE user_id IN (${chunkPlaceholders})`, chunk)

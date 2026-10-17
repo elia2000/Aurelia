@@ -133,6 +133,10 @@ if (remote) {
           `DELETE FROM chat_message_files WHERE message_id IN (${placeholders})`,
           targetMessageIds,
         );
+        await dbApi.run(
+          `DELETE FROM message_reactions WHERE message_id IN (${placeholders})`,
+          targetMessageIds,
+        );
         await dbApi.run(`DELETE FROM chat_messages WHERE id IN (${placeholders})`, targetMessageIds);
       }
       if (avatarRows.length) {

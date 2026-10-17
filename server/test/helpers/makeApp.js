@@ -466,6 +466,11 @@ export function makeApp(overrides = {}) {
     userHasMessageInChat: () => false,
     listE2eeDevicesByUserIds: e2eeStore.listE2eeDevicesByUserIds,
     setMessageE2eeEnvelope: () => {},
+    // ── Message reactions ────────────────────────────────────────────────────
+    isMessageHiddenForUser: () => false,
+    toggleMessageReaction: () => ({ added: null, removed: [] }),
+    listMessageReactionSummaries: () => [],
+    listMessageReactionUsers: () => [],
     callRegistry: createCallRegistry(),
     callsConfig: () => ({
       enabled: true,

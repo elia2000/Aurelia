@@ -212,6 +212,18 @@ export const SETTING_DEFS = [
     max: 64,
     restart: true,
   },
+  {
+    key: "MAX_REACTIONS_PER_USER",
+    type: TYPE_INT,
+    label: "Reactions per person per message",
+    description:
+      "How many different emoji one person can react with on a single message. With 1, reacting with another emoji replaces the previous one (like Telegram).",
+    group: "limits",
+    envKey: "MAX_REACTIONS_PER_USER",
+    defaultVal: 1,
+    min: 1,
+    max: 3,
+  },
 
   // ── Remote Channel ────────────────────────────────────────────────────────────
   {

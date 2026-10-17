@@ -129,6 +129,10 @@ export function createMessageFileJobs({
                 );
 
                 adminRun(
+                  dbKnex("message_reactions").whereIn("message_id", chunk).del(),
+                );
+
+                adminRun(
                   dbKnex("chat_messages").whereIn("id", chunk).del(),
                 );
               });
@@ -354,6 +358,10 @@ export function createMessageFileJobs({
             chunkArray(uniqueMsgIds, 500).forEach((chunk) => {
               adminRun(
                 dbKnex("chat_message_files").whereIn("message_id", chunk).del(),
+              );
+
+              adminRun(
+                dbKnex("message_reactions").whereIn("message_id", chunk).del(),
               );
 
               adminRun(

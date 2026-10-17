@@ -174,6 +174,10 @@ import {
   dbSetSetting,
   dbDeleteSetting,
   dbGetSetting,
+  isMessageHiddenForUser,
+  listMessageReactionSummaries,
+  listMessageReactionUsers,
+  toggleMessageReaction,
 } from "./db.js";
 import { resolveTelegramSecrets } from "./lib/remoteChannelSecrets.js";
 import { createMirrorJobRegistry } from "./lib/remoteMirrorJobs.js";
@@ -1173,6 +1177,14 @@ const remoteChannelManager = createRemoteChannelManager({
 apiDeps.remoteChannelManager = remoteChannelManager;
 apiDeps.mirrorJobRegistry = mirrorJobRegistry;
 
+// Message reactions.
+Object.assign(apiDeps, {
+  isMessageHiddenForUser,
+  listMessageReactionSummaries,
+  listMessageReactionUsers,
+  toggleMessageReaction,
+});
+
 // End-to-end encryption device directory + 1:1 call signaling.
 Object.assign(apiDeps, {
   findE2eeDevice,
@@ -1308,6 +1320,7 @@ async function cleanupExpiredTextOnlyMessages() {
   adminRun("BEGIN");
   try {
     chunkArray(messageIds, 500).forEach((chunk) => {
+      adminRun(dbKnex("message_reactions").whereIn("message_id", chunk).del());
       adminRun(dbKnex("chat_message_reads").whereIn("message_id", chunk).del());
       adminRun(dbKnex("hidden_chat_messages").whereIn("message_id", chunk).del());
       adminRun(dbKnex("chat_messages").whereIn("id", chunk).del());

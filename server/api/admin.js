@@ -166,6 +166,13 @@ function registerAdminRoutes(app, deps) {
             const chunkPlaceholders = chunk.map(() => "?").join(", ");
 
             await adminRun(
+              `DELETE FROM message_reactions WHERE message_id IN (
+                SELECT id FROM chat_messages WHERE chat_id IN (${chunkPlaceholders})
+              )`,
+              chunk,
+            );
+
+            await adminRun(
               `DELETE FROM chat_message_reads WHERE message_id IN (
                 SELECT id FROM chat_messages WHERE chat_id IN (${chunkPlaceholders})
               )`,
@@ -359,6 +366,12 @@ function registerAdminRoutes(app, deps) {
             for (const chunk of chunkArray(uniqueChatDeletes, 500)) {
               const chunkPlaceholders = chunk.map(() => "?").join(", ");
               await transactionRun(
+                `DELETE FROM message_reactions WHERE message_id IN (
+                  SELECT id FROM chat_messages WHERE chat_id IN (${chunkPlaceholders})
+                )`,
+                chunk,
+              );
+              await transactionRun(
                 `DELETE FROM chat_message_reads WHERE message_id IN (
                   SELECT id FROM chat_messages WHERE chat_id IN (${chunkPlaceholders})
                 )`,
@@ -417,6 +430,10 @@ function registerAdminRoutes(app, deps) {
 
           for (const chunk of chunkArray(userIds, 500)) {
             const chunkPlaceholders = chunk.map(() => "?").join(", ");
+            await transactionRun(
+              `DELETE FROM message_reactions WHERE user_id IN (${chunkPlaceholders})`,
+              chunk,
+            );
             await transactionRun(
               `DELETE FROM chat_message_reads WHERE user_id IN (${chunkPlaceholders})`,
               chunk,
@@ -1720,6 +1737,11 @@ function registerAdminRoutes(app, deps) {
               );
 
               adminRun(
+                `DELETE FROM message_reactions WHERE message_id IN (${placeholders})`,
+                chunk,
+              );
+
+              adminRun(
                 `DELETE FROM chat_messages WHERE id IN (${placeholders})`,
                 chunk,
               );
@@ -2104,6 +2126,7 @@ function registerAdminRoutes(app, deps) {
         adminRun("BEGIN");
 
         try {
+          adminRun("DELETE FROM message_reactions");
           adminRun("DELETE FROM chat_message_files");
           adminRun("DELETE FROM chat_messages");
           adminRun("DELETE FROM hidden_chats");

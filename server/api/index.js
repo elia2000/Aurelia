@@ -6,6 +6,7 @@ import { registerE2eeRoutes } from "./e2ee.js";
 import { registerChatRoutes } from "./chats.js";
 import { registerHealthRoutes } from "./health.js";
 import { registerMessageRoutes } from "./messages.js";
+import { registerReactionRoutes } from "./reactions.js";
 import { registerPushRoutes } from "./push.js";
 import { registerPresenceRoutes } from "./presence.js";
 import { registerProfileRoutes } from "./profile.js";
@@ -27,6 +28,7 @@ function registerApiRoutes(app, deps) {
   registerRemoteChannelTickRoutes(app, deps);
   registerRemoteMirrorRoutes(app, deps);
   registerMessageRoutes(app, deps);
+  registerReactionRoutes(app, deps);
   registerRemoteUploadRoutes(app, deps);
   registerPushRoutes(app, deps);
   registerE2eeRoutes(app, deps);

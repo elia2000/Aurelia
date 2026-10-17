@@ -94,6 +94,20 @@ describe("GET /api/app/info", () => {
     });
   });
 
+  // ── Reactions ──────────────────────────────────────────────────────────────
+
+  test('MAX_REACTIONS_PER_USER is exposed as maxReactionsPerUser, default 1', async () => {
+    const res = await request(makeApp().app).get("/api/app/info");
+    expect(res.body.maxReactionsPerUser).toBe(1);
+  });
+
+  test('MAX_REACTIONS_PER_USER=3 → maxReactionsPerUser is 3, and is always clamped to 1-3', async () => {
+    const three = await request(makeApp({ settings: { MAX_REACTIONS_PER_USER: 3 } }).app).get("/api/app/info");
+    expect(three.body.maxReactionsPerUser).toBe(3);
+    const big = await request(makeApp({ settings: { MAX_REACTIONS_PER_USER: 40 } }).app).get("/api/app/info");
+    expect(big.body.maxReactionsPerUser).toBe(3);
+  });
+
   // ── Registration ───────────────────────────────────────────────────────────
 
   test('SIGN_UP=false → accountCreationEnabled is false', async () => {

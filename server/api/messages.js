@@ -10,6 +10,7 @@ import {
   parseVideoNoteEnvelope,
   safeParseStoredEnvelope,
 } from "../lib/e2eeEnvelope.js";
+import { summarizeReactionRows } from "../lib/reactions.js";
 
 function registerMessageRoutes(app, deps) {
   const {
@@ -74,6 +75,7 @@ function registerMessageRoutes(app, deps) {
     markMessageRead,
     findE2eeDevice,
     setMessageE2eeEnvelope,
+    listMessageReactionSummaries,
   } = deps;
 
   const safeBasename = (p) => {
@@ -362,6 +364,21 @@ function registerMessageRoutes(app, deps) {
     const readByMe = new Set(
       readRows.map((row) => row?.message_id).filter(Boolean),
     );
+    // Reactions for the whole page in one query. They are secondary to the
+    // messages themselves, so a failure here must not hide the conversation.
+    let reactionsByMessageId = new Map();
+    if (typeof listMessageReactionSummaries === "function" && messageIds.length) {
+      try {
+        const rawReactionRows = listMessageReactionSummaries(messageIds, user.id);
+        reactionsByMessageId = summarizeReactionRows(
+          rawReactionRows && typeof rawReactionRows.then === "function"
+            ? await rawReactionRows
+            : rawReactionRows,
+        );
+      } catch (error) {
+        console.error("GET /api/messages reactions ERROR:", error);
+      }
+    }
     const rawFiles = listMessageFilesByMessageIds(messageIds);
     const resolvedFiles = (rawFiles && typeof rawFiles.then === "function" ? await rawFiles : rawFiles) || [];
     const files = await hydrateMissingVideoMetadata(resolvedFiles);
@@ -425,6 +442,7 @@ function registerMessageRoutes(app, deps) {
           isMessageAuthoredByUser(message, user.id) ||
           readByMe.has(message.id),
         files: filesByMessageId[message.id] || [],
+        reactions: reactionsByMessageId.get(message.id) || [],
         e2ee: safeParseStoredEnvelope(message.e2ee_envelope),
         // The sender of an encrypted message signed the chat it belongs to;
         // the recipient must know it to verify (message rows carry no chat id).

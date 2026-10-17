@@ -12,6 +12,7 @@ import { setUserColor } from "./settings/colors.js";
 import { generateUuid } from "./lib/uuidUtils.js";
 import { storageEncryption } from "./lib/storageEncryption.js";
 import { ensureSystemSecrets } from "./lib/secrets.js";
+import { REACTION_USERS_CAP, planReactionChange } from "./lib/reactions.js";
 
 const serverDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRootDir = path.resolve(serverDir, "..");
@@ -1954,6 +1955,11 @@ async function deleteChatByIdPostgres(chatId) {
       .map((row) => String(row?.stored_name || "").trim())
       .filter(Boolean);
 
+    await trx("message_reactions")
+      .whereIn("message_id", function () {
+        this.select("id").from("chat_messages").where("chat_id", chatId);
+      })
+      .del();
     await trx("chat_message_reads")
       .whereIn("message_id", function () {
         this.select("id").from("chat_messages").where("chat_id", chatId);
@@ -2003,6 +2009,13 @@ function deleteChatByIdSqlite(chatId) {
   const savepoint = `sp_delete_chat_${Date.now()}`;
   runWithoutSave(`SAVEPOINT ${savepoint}`);
   try {
+    runWithoutSave(
+      dbKnex("message_reactions")
+        .whereIn("message_id", function () {
+          this.select("id").from("chat_messages").where("chat_id", chatId);
+        })
+        .del(),
+    );
     runWithoutSave(
       dbKnex("chat_message_reads")
         .whereIn("message_id", function () {
@@ -2102,6 +2115,11 @@ async function deleteUserByIdPostgres(userId) {
     }
 
     for (const chatId of uniqueChatDeletes) {
+      await trx("message_reactions")
+        .whereIn("message_id", function () {
+          this.select("id").from("chat_messages").where("chat_id", chatId);
+        })
+        .del();
       await trx("chat_message_reads")
         .whereIn("message_id", function () {
           this.select("id").from("chat_messages").where("chat_id", chatId);
@@ -2131,6 +2149,7 @@ async function deleteUserByIdPostgres(userId) {
     await trx("sessions").where("user_id", userId).del();
     await trx("hidden_chats").where("user_id", userId).del();
     await trx("hidden_chat_messages").where("user_id", userId).del();
+    await trx("message_reactions").where("user_id", userId).del();
     await trx("chat_message_reads").where("user_id", userId).del();
     await trx("push_subscriptions").where("user_id", userId).del();
     await trx("e2ee_devices").where("user_id", userId).del();
@@ -2221,6 +2240,13 @@ function deleteUserByIdSqlite(userId) {
     if (uniqueChatDeletes.length) {
       uniqueChatDeletes.forEach((chatId) => {
         runWithoutSave(
+          dbKnex("message_reactions")
+            .whereIn("message_id", function () {
+              this.select("id").from("chat_messages").where("chat_id", chatId);
+            })
+            .del(),
+        );
+        runWithoutSave(
           dbKnex("chat_message_reads")
             .whereIn("message_id", function () {
               this.select("id").from("chat_messages").where("chat_id", chatId);
@@ -2262,6 +2288,7 @@ function deleteUserByIdSqlite(userId) {
     runWithoutSave(dbKnex("sessions").where("user_id", userId).del());
     runWithoutSave(dbKnex("hidden_chats").where("user_id", userId).del());
     runWithoutSave(dbKnex("hidden_chat_messages").where("user_id", userId).del());
+    runWithoutSave(dbKnex("message_reactions").where("user_id", userId).del());
     runWithoutSave(dbKnex("chat_message_reads").where("user_id", userId).del());
     runWithoutSave(dbKnex("push_subscriptions").where("user_id", userId).del());
     runWithoutSave(dbKnex("e2ee_devices").where("user_id", userId).del());
@@ -3428,6 +3455,178 @@ export function recordMessageReads(messageIds = [], readerId) {
   return processRows(rawRows);
 }
 
+// ─── Message reactions ───────────────────────────────────────────────────────
+
+/** True when `userId` removed the message from their own view ("delete for me"). */
+export function isMessageHiddenForUser(messageId, userId) {
+  if (!messageId || !userId) {
+    return isPostgresMode() ? Promise.resolve(false) : false;
+  }
+  const row = getRow(
+    dbKnex("hidden_chat_messages")
+      .select("message_id")
+      .where({ message_id: messageId, user_id: userId })
+      .first(),
+  );
+  if (row && typeof row.then === "function") {
+    return row.then((resolved) => Boolean(resolved));
+  }
+  return Boolean(row);
+}
+
+// Reaction timestamps decide which of a person's reactions is the oldest and
+// who reacted first, so they must be strictly increasing even when two
+// reactions land in the same millisecond.
+let lastReactionTimestampMs = 0;
+function nextReactionTimestamp() {
+  const now = Date.now();
+  lastReactionTimestampMs = now > lastReactionTimestampMs ? now : lastReactionTimestampMs + 1;
+  return new Date(lastReactionTimestampMs).toISOString();
+}
+
+function toggleMessageReactionSqlite({ messageId, userId, emoji, maxPerUser }) {
+  const savepoint = `sp_react_${crypto.randomBytes(4).toString("hex")}`;
+  runWithoutSave(`SAVEPOINT ${savepoint}`);
+  try {
+    const current = getAll(
+      dbKnex("message_reactions")
+        .select("emoji")
+        .where({ message_id: messageId, user_id: userId })
+        .orderBy("created_at", "asc")
+        .orderBy("emoji", "asc"),
+    ).map((row) => row.emoji);
+    const plan = planReactionChange(current, emoji, maxPerUser);
+    if (plan.remove.length) {
+      run(
+        dbKnex("message_reactions")
+          .where({ message_id: messageId, user_id: userId })
+          .whereIn("emoji", plan.remove)
+          .del(),
+      );
+    }
+    if (plan.add) {
+      run(
+        dbKnex("message_reactions").insert({
+          message_id: messageId,
+          user_id: userId,
+          emoji: plan.add,
+          created_at: nextReactionTimestamp(),
+        }),
+      );
+    }
+    runWithoutSave(`RELEASE ${savepoint}`);
+    return { added: plan.add, removed: plan.remove };
+  } catch (error) {
+    try {
+      runWithoutSave(`ROLLBACK TO ${savepoint}`);
+      runWithoutSave(`RELEASE ${savepoint}`);
+    } catch {
+      // ignore rollback failures
+    }
+    throw error;
+  }
+}
+
+async function toggleMessageReactionPostgres({ messageId, userId, emoji, maxPerUser }) {
+  return dbKnex.transaction(async (trx) => {
+    // Serialise one person's reactions on one message so two quick taps cannot
+    // both pass the "room left" check and exceed the limit.
+    await trx.raw("SELECT pg_advisory_xact_lock(hashtext(?))", [
+      `message-reaction:${messageId}:${userId}`,
+    ]);
+    const rows = await trx("message_reactions")
+      .select("emoji")
+      .where({ message_id: messageId, user_id: userId })
+      .orderBy("created_at", "asc")
+      .orderBy("emoji", "asc");
+    const plan = planReactionChange(
+      rows.map((row) => row.emoji),
+      emoji,
+      maxPerUser,
+    );
+    if (plan.remove.length) {
+      await trx("message_reactions")
+        .where({ message_id: messageId, user_id: userId })
+        .whereIn("emoji", plan.remove)
+        .del();
+    }
+    if (plan.add) {
+      await trx("message_reactions").insert({
+        message_id: messageId,
+        user_id: userId,
+        emoji: plan.add,
+        created_at: nextReactionTimestamp(),
+      });
+    }
+    return { added: plan.add, removed: plan.remove };
+  });
+}
+
+/**
+ * Applies one react request atomically (Telegram semantics, see
+ * planReactionChange): the same emoji again removes it, a new emoji beyond
+ * `maxPerUser` pushes out the oldest one, `emoji = null` removes everything the
+ * person has on the message. Returns { added, removed[] }.
+ */
+export function toggleMessageReaction({ messageId, userId, emoji = null, maxPerUser = 1 }) {
+  const args = { messageId, userId, emoji, maxPerUser };
+  if (isPostgresMode()) return toggleMessageReactionPostgres(args);
+  return toggleMessageReactionSqlite(args);
+}
+
+/**
+ * One batched query for a whole page of messages: a row per (message, emoji)
+ * with the number of people, the time of the first reaction and whether
+ * `viewerUserId` is one of them. Group and order with summarizeReactionRows().
+ */
+export function listMessageReactionSummaries(messageIds = [], viewerUserId = null) {
+  const ids = Array.from(
+    new Set((Array.isArray(messageIds) ? messageIds : []).filter(Boolean)),
+  );
+  if (!ids.length) return isPostgresMode() ? Promise.resolve([]) : [];
+  return getAll(
+    dbKnex("message_reactions")
+      .select("message_id", "emoji")
+      .count({ count: "*" })
+      .min({ first_at: "created_at" })
+      .select(
+        dbKnex.raw("MAX(CASE WHEN user_id = ? THEN 1 ELSE 0 END) AS reacted", [
+          viewerUserId || "",
+        ]),
+      )
+      .whereIn("message_id", ids)
+      .groupBy("message_id", "emoji"),
+  );
+}
+
+/**
+ * The people behind the reactions of one message, oldest reaction first,
+ * optionally for one emoji. Capped (default and maximum 200 rows).
+ */
+export function listMessageReactionUsers(messageId, { emoji = null, limit = REACTION_USERS_CAP } = {}) {
+  if (!messageId) return isPostgresMode() ? Promise.resolve([]) : [];
+  const safeLimit = Math.max(1, Math.min(REACTION_USERS_CAP, Math.trunc(Number(limit)) || REACTION_USERS_CAP));
+  let query = dbKnex("message_reactions as mr")
+    .select(
+      "mr.emoji",
+      "mr.created_at",
+      "users.id",
+      "users.username",
+      "users.nickname",
+      "users.avatar_url",
+      "users.color",
+    )
+    .join("users", "users.id", "mr.user_id")
+    .where("mr.message_id", messageId);
+  if (emoji) query = query.andWhere("mr.emoji", emoji);
+  return getAll(
+    query
+      .orderBy("mr.created_at", "asc")
+      .orderBy("users.username", "asc")
+      .limit(safeLimit),
+  );
+}
+
 export function hideChatsForUser(userId, chatIds = []) {
   if (!userId || !Array.isArray(chatIds) || !chatIds.length) {
     return isPostgresMode() ? Promise.resolve() : undefined;
@@ -4390,6 +4589,7 @@ export async function adminClearAllMessages() {
       const storedNames = getPostgresRows(fileResult)
         .map((row) => row.stored_name)
         .filter(Boolean);
+      await trx("message_reactions").del();
       await trx("chat_message_reads").del();
       await trx("hidden_chat_messages").del();
       await trx("chat_message_files").del();
@@ -4402,6 +4602,7 @@ export async function adminClearAllMessages() {
   const storedNames = fileRows.map((row) => row.stored_name).filter(Boolean);
   run("BEGIN");
   try {
+    run(dbKnex("message_reactions").del());
     run(dbKnex("chat_message_reads").del());
     run(dbKnex("hidden_chat_messages").del());
     run(dbKnex("chat_message_files").del());
@@ -4416,6 +4617,7 @@ export async function adminClearAllMessages() {
 }
 
 const RESET_TABLES = [
+  "message_reactions",
   "chat_message_reads",
   "hidden_chat_messages",
   "chat_message_files",

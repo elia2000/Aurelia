@@ -1,5 +1,6 @@
 import { readAppMeta } from "../lib/appMeta.js";
 import { parseThemeDefault, parseThemePalette } from "../lib/themePalette.js";
+import { clampReactionsPerUser } from "../lib/reactions.js";
 
 function registerAppRoutes(app, deps) {
   const { REMOTE_CHANNELS, getSetting, fs, path, projectRootDir, callsConfig } = deps;
@@ -47,6 +48,8 @@ function registerAppRoutes(app, deps) {
       messageMaxChars: Number(getSetting("MESSAGE_MAX_CHARS")) || 4000,
       usernameMaxChars: Number(getSetting("USERNAME_MAX_CHARS")) || 16,
       nicknameMaxChars: Number(getSetting("NICKNAME_MAX_CHARS")) || 24,
+      // How many different reactions one person can leave on a message.
+      maxReactionsPerUser: clampReactionsPerUser(getSetting("MAX_REACTIONS_PER_USER")),
       fileUploadEnabled: Boolean(getSetting("FILE_UPLOAD")),
       // Voice/video calls are switched with CALLS_ENABLED; the client hides the
       // call buttons when this is false.
