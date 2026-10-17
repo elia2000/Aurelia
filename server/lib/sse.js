@@ -5,6 +5,9 @@ const UUID_EVENT_TYPES = new Set([
   "chat_message_updated",
   "chat_message_deleted",
   "message_reactions",
+  "message_pinned",
+  "message_unpinned",
+  "messages_unpinned_all",
   "chat_read",
   "chat_typing",
   "chat_updated",
@@ -19,7 +22,7 @@ function hasValidUuidReferences(payload = {}) {
   const type = String(payload?.type || "");
   if (!UUID_EVENT_TYPES.has(type)) return true;
 
-  const uuidFields = ["chatId", "messageId", "userId", "actorId", "replyToMessageId", "sourceChatId", "sourceUserId"];
+  const uuidFields = ["chatId", "messageId", "userId", "actorId", "pinnedBy", "replyToMessageId", "sourceChatId", "sourceUserId"];
   for (const field of uuidFields) {
     if (payload[field] !== undefined && payload[field] !== null && !isValidUuid(String(payload[field]))) {
       return false;
@@ -30,7 +33,7 @@ function hasValidUuidReferences(payload = {}) {
     return false;
   }
 
-  if (["chat_message", "chat_message_updated", "chat_message_deleted", "message_reactions", "chat_read", "chat_typing", "chat_updated", "chat_deleted"].includes(type) && !isValidUuid(String(payload.chatId || ""))) {
+  if (["chat_message", "chat_message_updated", "chat_message_deleted", "message_reactions", "message_pinned", "message_unpinned", "messages_unpinned_all", "chat_read", "chat_typing", "chat_updated", "chat_deleted"].includes(type) && !isValidUuid(String(payload.chatId || ""))) {
     return false;
   }
   if (type === "presence_update" && !isValidUuid(String(payload.userId || ""))) {

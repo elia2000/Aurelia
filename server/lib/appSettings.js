@@ -224,6 +224,18 @@ export const SETTING_DEFS = [
     min: 1,
     max: 3,
   },
+  {
+    key: "MAX_PINNED_MESSAGES",
+    type: TYPE_INT,
+    label: "Pinned messages per chat",
+    description:
+      "How many messages can be pinned in one chat at the same time. A chat that is full refuses another pin until one is unpinned.",
+    group: "limits",
+    envKey: "MAX_PINNED_MESSAGES",
+    defaultVal: 20,
+    min: 1,
+    max: 100,
+  },
 
   // ── Remote Channel ────────────────────────────────────────────────────────────
   {

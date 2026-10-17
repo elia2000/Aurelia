@@ -1686,7 +1686,7 @@ export function findChatById(chatId) {
   if (!chatId) return isPostgresMode() ? Promise.resolve(null) : null;
   const row = getRow(
     dbKnex("chats")
-      .select("id", "name", "type", "group_username", "group_visibility", "invite_token", "group_color", "allow_member_invites", "group_avatar_url", "created_by_user_id", "verified", "auto_add_new_users")
+      .select("id", "name", "type", "group_username", "group_visibility", "invite_token", "group_color", "allow_member_invites", "allow_member_pins", "group_avatar_url", "created_by_user_id", "verified", "auto_add_new_users")
       .where("id", chatId)
       .first(),
   );
@@ -1730,6 +1730,10 @@ export function updateGroupChat(chatId, payload = {}) {
   }
   if (groupVisibility === "private") {
     updateData.auto_add_new_users = 0;
+  }
+  // Only touched when the caller says so: every other update leaves it alone.
+  if (typeof payload?.allowMemberPins === "boolean") {
+    updateData.allow_member_pins = payload.allowMemberPins ? 1 : 0;
   }
 
   return run(
@@ -1975,6 +1979,7 @@ async function deleteChatByIdPostgres(chatId) {
         this.select("id").from("chat_messages").where("chat_id", chatId);
       })
       .del();
+    await trx("chat_pinned_messages").where("chat_id", chatId).del();
     await trx("chat_messages").where("chat_id", chatId).del();
     await trx("chat_members").where("chat_id", chatId).del();
     await trx("hidden_chats").where("chat_id", chatId).del();
@@ -2037,6 +2042,7 @@ function deleteChatByIdSqlite(chatId) {
         })
         .del(),
     );
+    runWithoutSave(dbKnex("chat_pinned_messages").where("chat_id", chatId).del());
     runWithoutSave(dbKnex("chat_messages").where("chat_id", chatId).del());
     runWithoutSave(dbKnex("chat_members").where("chat_id", chatId).del());
     runWithoutSave(dbKnex("hidden_chats").where("chat_id", chatId).del());
@@ -2130,6 +2136,7 @@ async function deleteUserByIdPostgres(userId) {
           this.select("id").from("chat_messages").where("chat_id", chatId);
         })
         .del();
+      await trx("chat_pinned_messages").where("chat_id", chatId).del();
       await trx("chat_messages").where("chat_id", chatId).del();
       await trx("chat_members").where("chat_id", chatId).del();
       await trx("chat_mutes").where("chat_id", chatId).del();
@@ -2150,6 +2157,8 @@ async function deleteUserByIdPostgres(userId) {
     await trx("hidden_chats").where("user_id", userId).del();
     await trx("hidden_chat_messages").where("user_id", userId).del();
     await trx("message_reactions").where("user_id", userId).del();
+    // Pins belong to the conversation: they stay when the person who pinned goes.
+    await trx("chat_pinned_messages").where("pinned_by", userId).update({ pinned_by: null });
     await trx("chat_message_reads").where("user_id", userId).del();
     await trx("push_subscriptions").where("user_id", userId).del();
     await trx("e2ee_devices").where("user_id", userId).del();
@@ -2260,6 +2269,7 @@ function deleteUserByIdSqlite(userId) {
             })
             .del(),
         );
+        runWithoutSave(dbKnex("chat_pinned_messages").where("chat_id", chatId).del());
         runWithoutSave(dbKnex("chat_messages").where("chat_id", chatId).del());
         runWithoutSave(dbKnex("chat_members").where("chat_id", chatId).del());
         runWithoutSave(dbKnex("chat_mutes").where("chat_id", chatId).del());
@@ -2289,6 +2299,10 @@ function deleteUserByIdSqlite(userId) {
     runWithoutSave(dbKnex("hidden_chats").where("user_id", userId).del());
     runWithoutSave(dbKnex("hidden_chat_messages").where("user_id", userId).del());
     runWithoutSave(dbKnex("message_reactions").where("user_id", userId).del());
+    // Pins belong to the conversation: they stay when the person who pinned goes.
+    runWithoutSave(
+      dbKnex("chat_pinned_messages").where("pinned_by", userId).update({ pinned_by: null }),
+    );
     runWithoutSave(dbKnex("chat_message_reads").where("user_id", userId).del());
     runWithoutSave(dbKnex("push_subscriptions").where("user_id", userId).del());
     runWithoutSave(dbKnex("e2ee_devices").where("user_id", userId).del());
@@ -2334,6 +2348,7 @@ export function listChatsForUser(userId) {
       "c.invite_token",
       "c.group_color",
       "c.allow_member_invites",
+      "c.allow_member_pins",
       "c.group_avatar_url",
       "c.created_by_user_id",
       "c.created_at",
@@ -2419,6 +2434,7 @@ export function listChatsForUser(userId) {
       "mc.invite_token",
       "mc.group_color",
       "mc.allow_member_invites",
+      "mc.allow_member_pins",
       "mc.group_avatar_url",
       "mc.created_by_user_id",
       "mc.verified",
@@ -3139,6 +3155,7 @@ export function getFirstUnreadMessage(chatId, viewerUserId) {
         OR LOWER(COALESCE(cm.client_request_id, '')) LIKE 'remote:%'
       )
       AND cm.hidden_everyone_at IS NULL
+      AND cm.body NOT LIKE '[[system:%]]'
       AND cm.id NOT IN (
         SELECT hidden_chat_messages.message_id
         FROM hidden_chat_messages
@@ -3624,6 +3641,178 @@ export function listMessageReactionUsers(messageId, { emoji = null, limit = REAC
       .orderBy("mr.created_at", "asc")
       .orderBy("users.username", "asc")
       .limit(safeLimit),
+  );
+}
+
+// ─── Pinned messages ─────────────────────────────────────────────────────────
+
+// Pins are listed newest first, so their timestamps must be strictly
+// increasing even when two land in the same millisecond.
+let lastPinTimestampMs = 0;
+function nextPinTimestamp() {
+  const now = Date.now();
+  lastPinTimestampMs = now > lastPinTimestampMs ? now : lastPinTimestampMs + 1;
+  return new Date(lastPinTimestampMs).toISOString();
+}
+
+function pinMessageSqlite({ chatId, messageId, userId, max }) {
+  const savepoint = `sp_pin_${crypto.randomBytes(4).toString("hex")}`;
+  runWithoutSave(`SAVEPOINT ${savepoint}`);
+  try {
+    const existing = getRow(
+      dbKnex("chat_pinned_messages")
+        .select("pinned_at")
+        .where({ chat_id: chatId, message_id: messageId })
+        .first(),
+    );
+    let result;
+    if (existing) {
+      result = { status: "already", pinnedAt: existing.pinned_at };
+    } else {
+      const counted = getRow(
+        dbKnex("chat_pinned_messages").count({ n: "*" }).where({ chat_id: chatId }).first(),
+      );
+      if (Number(counted?.n || 0) >= max) {
+        result = { status: "limit", pinnedAt: null };
+      } else {
+        const pinnedAt = nextPinTimestamp();
+        run(
+          dbKnex("chat_pinned_messages").insert({
+            chat_id: chatId,
+            message_id: messageId,
+            pinned_by: userId || null,
+            pinned_at: pinnedAt,
+          }),
+        );
+        result = { status: "pinned", pinnedAt };
+      }
+    }
+    runWithoutSave(`RELEASE ${savepoint}`);
+    return result;
+  } catch (error) {
+    try {
+      runWithoutSave(`ROLLBACK TO ${savepoint}`);
+      runWithoutSave(`RELEASE ${savepoint}`);
+    } catch {
+      // ignore rollback failures
+    }
+    throw error;
+  }
+}
+
+async function pinMessagePostgres({ chatId, messageId, userId, max }) {
+  return dbKnex.transaction(async (trx) => {
+    // One pin at a time per chat, so two quick requests cannot both pass the
+    // "room left" check and exceed the limit.
+    await trx.raw("SELECT pg_advisory_xact_lock(hashtext(?))", [`chat-pins:${chatId}`]);
+    const existing = await trx("chat_pinned_messages")
+      .select("pinned_at")
+      .where({ chat_id: chatId, message_id: messageId })
+      .first();
+    if (existing) return { status: "already", pinnedAt: existing.pinned_at };
+    const counted = await trx("chat_pinned_messages").count({ n: "*" }).where({ chat_id: chatId }).first();
+    if (Number(counted?.n || 0) >= max) return { status: "limit", pinnedAt: null };
+    const pinnedAt = nextPinTimestamp();
+    await trx("chat_pinned_messages").insert({
+      chat_id: chatId,
+      message_id: messageId,
+      pinned_by: userId || null,
+      pinned_at: pinnedAt,
+    });
+    return { status: "pinned", pinnedAt };
+  });
+}
+
+/**
+ * Pins a message atomically. Pinning an already pinned message changes nothing
+ * ("already"); when the chat has `max` pins the message is not pinned
+ * ("limit"). Returns { status: "pinned" | "already" | "limit", pinnedAt }.
+ */
+export function pinMessage({ chatId, messageId, userId = null, max = 20 }) {
+  const args = { chatId, messageId, userId, max: Math.max(1, Math.trunc(Number(max)) || 1) };
+  if (isPostgresMode()) return pinMessagePostgres(args);
+  return pinMessageSqlite(args);
+}
+
+/** Removes one pin. Resolves to the number of pins removed (0 or 1). */
+export function unpinMessage(chatId, messageId) {
+  if (!chatId || !messageId) return isPostgresMode() ? Promise.resolve(0) : 0;
+  return run(
+    dbKnex("chat_pinned_messages").where({ chat_id: chatId, message_id: messageId }).del(),
+  );
+}
+
+/** Removes every pin of a chat. Resolves to the number of pins removed. */
+export function unpinAllMessages(chatId) {
+  if (!chatId) return isPostgresMode() ? Promise.resolve(0) : 0;
+  return run(dbKnex("chat_pinned_messages").where({ chat_id: chatId }).del());
+}
+
+/**
+ * The pins of a chat as `viewerUserId` may see them, newest pin first, in one
+ * query: messages deleted for everyone or by the viewer for themselves are
+ * left out. Rows carry what lib/pins.js buildPinEntry() needs, including the
+ * attachment facts, so no second query per message is needed.
+ */
+export function listPinnedMessages(chatId, viewerUserId, { limit = 100 } = {}) {
+  if (!chatId) return isPostgresMode() ? Promise.resolve([]) : [];
+  const safeLimit = Math.max(1, Math.min(100, Math.trunc(Number(limit)) || 100));
+  let query = dbKnex("chat_pinned_messages as p")
+    .join("chat_messages as cm", "cm.id", "p.message_id")
+    .leftJoin("users as u", "u.id", "cm.user_id")
+    .select(
+      "p.message_id",
+      "p.pinned_by",
+      "p.pinned_at",
+      "cm.chat_id",
+      "cm.user_id as sender_id",
+      "cm.body",
+      "cm.edited_body",
+      "cm.created_at as message_created_at",
+      "cm.e2ee_envelope",
+      "u.username as sender_username",
+      "u.nickname as sender_nickname",
+      dbKnex.raw(
+        "(SELECT COUNT(*) FROM chat_message_files f WHERE f.message_id = cm.id) AS file_count",
+      ),
+      dbKnex.raw(
+        "(SELECT f.mime_type FROM chat_message_files f WHERE f.message_id = cm.id ORDER BY f.id ASC LIMIT 1) AS first_file_mime",
+      ),
+      dbKnex.raw(
+        "(SELECT f.kind FROM chat_message_files f WHERE f.message_id = cm.id ORDER BY f.id ASC LIMIT 1) AS first_file_kind",
+      ),
+    )
+    .where("p.chat_id", chatId)
+    .where("cm.chat_id", chatId)
+    .whereNull("cm.hidden_everyone_at");
+  if (viewerUserId) {
+    query = query.whereNotExists(
+      dbKnex("hidden_chat_messages as hcm")
+        .select(1)
+        .where("hcm.user_id", viewerUserId)
+        .whereRaw("hcm.message_id = cm.id"),
+    );
+  }
+  const rawRows = getAll(
+    query.orderBy("p.pinned_at", "desc").orderBy("p.message_id", "desc").limit(safeLimit),
+  );
+  if (rawRows && typeof rawRows.then === "function") {
+    return rawRows.then((rows) => (rows || []).map(decryptMessageRow));
+  }
+  return (rawRows || []).map(decryptMessageRow);
+}
+
+/** Which of these messages are pinned in the chat? One batched query: [{ message_id }]. */
+export function listPinnedMessageIds(chatId, messageIds = []) {
+  const ids = Array.from(
+    new Set((Array.isArray(messageIds) ? messageIds : []).filter(Boolean)),
+  );
+  if (!chatId || !ids.length) return isPostgresMode() ? Promise.resolve([]) : [];
+  return getAll(
+    dbKnex("chat_pinned_messages")
+      .select("message_id")
+      .where("chat_id", chatId)
+      .whereIn("message_id", ids),
   );
 }
 
@@ -4590,6 +4779,7 @@ export async function adminClearAllMessages() {
         .map((row) => row.stored_name)
         .filter(Boolean);
       await trx("message_reactions").del();
+      await trx("chat_pinned_messages").del();
       await trx("chat_message_reads").del();
       await trx("hidden_chat_messages").del();
       await trx("chat_message_files").del();
@@ -4603,6 +4793,7 @@ export async function adminClearAllMessages() {
   run("BEGIN");
   try {
     run(dbKnex("message_reactions").del());
+    run(dbKnex("chat_pinned_messages").del());
     run(dbKnex("chat_message_reads").del());
     run(dbKnex("hidden_chat_messages").del());
     run(dbKnex("chat_message_files").del());
@@ -4617,6 +4808,7 @@ export async function adminClearAllMessages() {
 }
 
 const RESET_TABLES = [
+  "chat_pinned_messages",
   "message_reactions",
   "chat_message_reads",
   "hidden_chat_messages",

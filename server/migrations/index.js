@@ -42,6 +42,7 @@ import { migration041AdminAuditLogs } from "./041-admin-audit-logs.js";
 import { migration042E2eeDevices } from "./042-e2ee-devices.js";
 import { migration043MessageE2eeEnvelope } from "./043-message-e2ee-envelope.js";
 import { migration044MessageReactions } from "./044-message-reactions.js";
+import { migration045MessagePins } from "./045-message-pins.js";
 
 export const migrations = [
   migration001InitialSchema,
@@ -88,4 +89,5 @@ export const migrations = [
   migration042E2eeDevices,
   migration043MessageE2eeEnvelope,
   migration044MessageReactions,
+  migration045MessagePins,
 ];

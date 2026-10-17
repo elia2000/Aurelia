@@ -5,6 +5,7 @@ import { createMembershipService } from "../lib/services/membershipService.js";
 import { createDeletionService } from "../lib/services/deletionService.js";
 import { normalizeSongbirdSource, normalizeTelegramSource, resolveSongbirdSource } from "../lib/remoteChannels.js";
 import { resolveThumbUrl } from "../lib/thumbUrl.js";
+import { emitUnpinnedMessages } from "../lib/pins.js";
 import { validateUuidParams, validateUuidBody } from "../lib/uuidMiddleware.js";
 
 function registerChatRoutes(app, deps) {
@@ -390,6 +391,8 @@ function registerChatRoutes(app, deps) {
                 messageIds,
               });
             });
+            // Pins go with their messages.
+            emitUnpinnedMessages(emitChatEvent, cleanup.unpinned);
           }
         } catch {
           // best-effort background cleanup — never crash the server
@@ -1111,6 +1114,7 @@ function registerChatRoutes(app, deps) {
       groupUsername,
       visibility,
       allowMemberInvites = true,
+      allowMemberPins,
       members: memberUsernames = [],
     } = req.body || {};
     if (!username) {
@@ -1141,6 +1145,14 @@ function registerChatRoutes(app, deps) {
       return res
         .status(403)
         .json({ error: `Only ${label.toLowerCase()} owner can edit this ${label.toLowerCase()}.` });
+    }
+
+    // "Members can pin" is only ever changed on purpose: left out, it stays as
+    // it was. It has no meaning in a channel, where only the owner pins.
+    if (allowMemberPins !== undefined && typeof allowMemberPins !== "boolean") {
+      return res
+        .status(400)
+        .json({ error: "Field 'allowMemberPins' must be true or false." });
     }
 
     const normalizedNickname = String(nickname || "").trim();
@@ -1180,6 +1192,9 @@ function registerChatRoutes(app, deps) {
       groupUsername: normalizedGroupUsername,
       groupVisibility: visibility,
       allowMemberInvites: Boolean(allowMemberInvites),
+      ...(chat.type === "group" && typeof allowMemberPins === "boolean"
+        ? { allowMemberPins }
+        : {}),
     });
     if (resUpdate && typeof resUpdate.then === "function") await resUpdate;
 

@@ -7,8 +7,6 @@ export const REACTIONS_PER_USER_MIN = 1;
 export const REACTIONS_PER_USER_MAX = 3;
 export const REACTIONS_PER_USER_DEFAULT = 1;
 
-const SYSTEM_MESSAGE_PREFIX = "[[system:";
-
 // One emoji "element": a pictographic character (with an optional emoji/text
 // variation selector or skin tone) and an optional tag sequence (the England,
 // Scotland and Wales flags). `(?=\p{Emoji})` keeps out the unassigned code
@@ -165,7 +163,5 @@ export function toReactionCounts(reactions) {
   }));
 }
 
-/** Service messages ("X joined", ...) cannot be reacted to. */
-export function isServiceMessageBody(body) {
-  return String(body || "").startsWith(SYSTEM_MESSAGE_PREFIX);
-}
+// Service messages ("X joined", ...) cannot be reacted to; see serviceMessages.js.
+export { isServiceMessageBody } from "./serviceMessages.js";

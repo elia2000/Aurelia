@@ -54,6 +54,7 @@ async function deleteChatsByIds(dbApi, chatIds) {
         )`,
         chunk,
       )
+      await dbApi.run(`DELETE FROM chat_pinned_messages WHERE chat_id IN (${chunkPlaceholders})`, chunk)
       await dbApi.run(
         `DELETE FROM chat_message_files WHERE message_id IN (
           SELECT id FROM chat_messages WHERE chat_id IN (${chunkPlaceholders})

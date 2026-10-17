@@ -471,6 +471,11 @@ export function makeApp(overrides = {}) {
     toggleMessageReaction: () => ({ added: null, removed: [] }),
     listMessageReactionSummaries: () => [],
     listMessageReactionUsers: () => [],
+    pinMessage: () => ({ status: "pinned", pinnedAt: new Date().toISOString() }),
+    unpinMessage: () => 0,
+    unpinAllMessages: () => 0,
+    listPinnedMessages: () => [],
+    listPinnedMessageIds: () => [],
     callRegistry: createCallRegistry(),
     callsConfig: () => ({
       enabled: true,

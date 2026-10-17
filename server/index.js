@@ -25,6 +25,8 @@ import { resolveAppOrigins, ensureBucketCors } from "./lib/bucketCors.js";
 import { resolveWebhookCallbackUrl } from "./lib/webhookUrl.js";
 import { createVideoTranscodeManager } from "./lib/videoTranscode.js";
 import { createMessageFileJobs } from "./lib/messageFileJobs.js";
+import { removePinsOfMessages } from "./lib/pinCleanup.js";
+import { emitUnpinnedMessages } from "./lib/pins.js";
 import { createInspector } from "./lib/inspect.js";
 import { createSessionHelpers } from "./lib/sessions.js";
 import { createRedisClient, createRedisSessionStore } from "./lib/redis.js";
@@ -178,6 +180,11 @@ import {
   listMessageReactionSummaries,
   listMessageReactionUsers,
   toggleMessageReaction,
+  pinMessage,
+  unpinMessage,
+  unpinAllMessages,
+  listPinnedMessages,
+  listPinnedMessageIds,
 } from "./db.js";
 import { resolveTelegramSecrets } from "./lib/remoteChannelSecrets.js";
 import { createMirrorJobRegistry } from "./lib/remoteMirrorJobs.js";
@@ -1185,6 +1192,15 @@ Object.assign(apiDeps, {
   toggleMessageReaction,
 });
 
+// Pinned messages.
+Object.assign(apiDeps, {
+  pinMessage,
+  unpinMessage,
+  unpinAllMessages,
+  listPinnedMessages,
+  listPinnedMessageIds,
+});
+
 // End-to-end encryption device directory + 1:1 call signaling.
 Object.assign(apiDeps, {
   findE2eeDevice,
@@ -1317,10 +1333,13 @@ async function cleanupExpiredTextOnlyMessages() {
     deletedByChat.set(chatId, list);
   });
 
+  const unpinned = [];
   adminRun("BEGIN");
   try {
     chunkArray(messageIds, 500).forEach((chunk) => {
       adminRun(dbKnex("message_reactions").whereIn("message_id", chunk).del());
+      const removedPins = removePinsOfMessages({ adminGetAll, adminRun }, chunk);
+      if (Array.isArray(removedPins)) unpinned.push(...removedPins);
       adminRun(dbKnex("chat_message_reads").whereIn("message_id", chunk).del());
       adminRun(dbKnex("hidden_chat_messages").whereIn("message_id", chunk).del());
       adminRun(dbKnex("chat_messages").whereIn("id", chunk).del());
@@ -1339,6 +1358,7 @@ async function cleanupExpiredTextOnlyMessages() {
       messageIds: ids,
     });
   });
+  emitUnpinnedMessages(emitChatEvent, unpinned);
 
   return { removedMessages: messageIds.length };
 }
@@ -1400,7 +1420,7 @@ try {
   await pruneOrphanAvatarObjects();
   if (getSetting("MESSAGE_FILE_RETENTION") > 0) {
     await backfillMessageFileExpiry();
-    await cleanupExpiredMessageFiles();
+    emitUnpinnedMessages(emitChatEvent, (await cleanupExpiredMessageFiles())?.unpinned);
   }
 } catch (_) {
   // best effort startup cleanup
@@ -1411,7 +1431,7 @@ const expiryCleanupTimer = setInterval(async () => {
     await pruneOrphanRemoteObjects();
     await pruneOrphanAvatarObjects();
     if (getSetting("MESSAGE_FILE_RETENTION") > 0) {
-      await cleanupExpiredMessageFiles();
+      emitUnpinnedMessages(emitChatEvent, (await cleanupExpiredMessageFiles())?.unpinned);
     }
   } catch (_) {
     // keep server alive if cleanup fails

@@ -66,6 +66,7 @@ nano .env
 | `MESSAGE_TEXT_RETENTION` | `integer` | `0` | Auto-delete text-only messages after N days (`0` disables). |
 | `MESSAGE_MAX_CHARS` | `integer` | `4000` | Max message length. |
 | `MAX_REACTIONS_PER_USER` | `integer` | `1` | How many different emoji one person can react with on a single message (`1`-`3`). With `1`, reacting with another emoji replaces the previous one (like Telegram); sending the same emoji again removes it. |
+| `MAX_PINNED_MESSAGES` | `integer` | `20` | How many messages can be pinned at once in one chat (`1`-`100`). A chat that is full refuses another pin until one is unpinned. |
 | `REMOTE_CHANNEL` | `boolean` | `false` | Enable the server-side Remote Channel worker. |
 | `REMOTE_CHANNEL_UI` | `boolean` | `true` | Show Remote Channel settings to channel owners in the UI. When `false`, the section is hidden from regular users (and user API calls are rejected) — only server admins can configure mirroring via the admin panel. |
 | `REMOTE_CHANNEL_MEDIA_STREAM` | `boolean` | `true` | Allow channel owners to enable the "Stream Media Files" option in the UI. When `false`, the option is disabled and locked for all channels. |

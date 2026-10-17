@@ -108,6 +108,22 @@ describe("GET /api/app/info", () => {
     expect(big.body.maxReactionsPerUser).toBe(3);
   });
 
+  // ── Pinned messages ────────────────────────────────────────────────────────
+
+  test('MAX_PINNED_MESSAGES is exposed as maxPinnedMessages, default 20', async () => {
+    const res = await request(makeApp().app).get("/api/app/info");
+    expect(res.body.maxPinnedMessages).toBe(20);
+  });
+
+  test('MAX_PINNED_MESSAGES=5 → maxPinnedMessages is 5, and is always clamped to 1-100', async () => {
+    const five = await request(makeApp({ settings: { MAX_PINNED_MESSAGES: 5 } }).app).get("/api/app/info");
+    expect(five.body.maxPinnedMessages).toBe(5);
+    const big = await request(makeApp({ settings: { MAX_PINNED_MESSAGES: 4000 } }).app).get("/api/app/info");
+    expect(big.body.maxPinnedMessages).toBe(100);
+    const small = await request(makeApp({ settings: { MAX_PINNED_MESSAGES: 0 } }).app).get("/api/app/info");
+    expect(small.body.maxPinnedMessages).toBe(1);
+  });
+
   // ── Registration ───────────────────────────────────────────────────────────
 
   test('SIGN_UP=false → accountCreationEnabled is false', async () => {

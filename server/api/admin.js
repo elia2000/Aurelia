@@ -12,6 +12,8 @@ import { storageEncryption } from "../lib/storageEncryption.js";
 import { generateUuid, isValidUuid } from "../lib/uuidUtils.js";
 import { userEvents } from "../lib/workers/autoAddWorker.js";
 import { dbKnex } from "../db/knex.js";
+import { removePinsOfMessages } from "../lib/pinCleanup.js";
+import { emitUnpinnedMessages } from "../lib/pins.js";
 import crypto from "crypto";
 
 function normalizeTelegramSource(value) {
@@ -169,6 +171,11 @@ function registerAdminRoutes(app, deps) {
               `DELETE FROM message_reactions WHERE message_id IN (
                 SELECT id FROM chat_messages WHERE chat_id IN (${chunkPlaceholders})
               )`,
+              chunk,
+            );
+
+            await adminRun(
+              `DELETE FROM chat_pinned_messages WHERE chat_id IN (${chunkPlaceholders})`,
               chunk,
             );
 
@@ -372,6 +379,10 @@ function registerAdminRoutes(app, deps) {
                 chunk,
               );
               await transactionRun(
+                `DELETE FROM chat_pinned_messages WHERE chat_id IN (${chunkPlaceholders})`,
+                chunk,
+              );
+              await transactionRun(
                 `DELETE FROM chat_message_reads WHERE message_id IN (
                   SELECT id FROM chat_messages WHERE chat_id IN (${chunkPlaceholders})
                 )`,
@@ -432,6 +443,11 @@ function registerAdminRoutes(app, deps) {
             const chunkPlaceholders = chunk.map(() => "?").join(", ");
             await transactionRun(
               `DELETE FROM message_reactions WHERE user_id IN (${chunkPlaceholders})`,
+              chunk,
+            );
+            // Pins belong to the conversation: they stay when the person who pinned goes.
+            await transactionRun(
+              `UPDATE chat_pinned_messages SET pinned_by = NULL WHERE pinned_by IN (${chunkPlaceholders})`,
               chunk,
             );
             await transactionRun(
@@ -1725,6 +1741,7 @@ function registerAdminRoutes(app, deps) {
           }
         }
 
+        const unpinnedByDeletion = [];
         adminRun("BEGIN");
         try {
           if (targetMessageIds.length) {
@@ -1740,6 +1757,9 @@ function registerAdminRoutes(app, deps) {
                 `DELETE FROM message_reactions WHERE message_id IN (${placeholders})`,
                 chunk,
               );
+
+              const removedPins = removePinsOfMessages({ adminGetAll, adminRun }, chunk);
+              if (Array.isArray(removedPins)) unpinnedByDeletion.push(...removedPins);
 
               adminRun(
                 `DELETE FROM chat_messages WHERE id IN (${placeholders})`,
@@ -1799,6 +1819,7 @@ function registerAdminRoutes(app, deps) {
             });
           });
         }
+        emitUnpinnedMessages(emitChatEvent, unpinnedByDeletion);
 
         return res.json({
           ok: true,
@@ -2127,6 +2148,7 @@ function registerAdminRoutes(app, deps) {
 
         try {
           adminRun("DELETE FROM message_reactions");
+          adminRun("DELETE FROM chat_pinned_messages");
           adminRun("DELETE FROM chat_message_files");
           adminRun("DELETE FROM chat_messages");
           adminRun("DELETE FROM hidden_chats");

@@ -11,6 +11,8 @@ import {
   safeParseStoredEnvelope,
 } from "../lib/e2eeEnvelope.js";
 import { summarizeReactionRows } from "../lib/reactions.js";
+import { isServiceMessageBody, parsePinServiceBody } from "../lib/serviceMessages.js";
+import { emitUnpinnedMessages } from "../lib/pins.js";
 
 function registerMessageRoutes(app, deps) {
   const {
@@ -76,6 +78,8 @@ function registerMessageRoutes(app, deps) {
     findE2eeDevice,
     setMessageE2eeEnvelope,
     listMessageReactionSummaries,
+    listPinnedMessageIds,
+    unpinMessage,
   } = deps;
 
   const safeBasename = (p) => {
@@ -328,6 +332,8 @@ function registerMessageRoutes(app, deps) {
               messageIds,
             });
           });
+          // Pins go with their messages.
+          emitUnpinnedMessages(emitChatEvent, cleanup.unpinned);
         }
       } catch (_) {
         // best-effort background cleanup — never crash the server
@@ -377,6 +383,21 @@ function registerMessageRoutes(app, deps) {
         );
       } catch (error) {
         console.error("GET /api/messages reactions ERROR:", error);
+      }
+    }
+    // Which messages of the page are pinned: one query for the whole page. A
+    // failure here must not hide the conversation either.
+    let pinnedMessageIds = new Set();
+    if (typeof listPinnedMessageIds === "function" && messageIds.length) {
+      try {
+        const rawPinnedRows = listPinnedMessageIds(chatId, messageIds);
+        const pinnedRows =
+          (rawPinnedRows && typeof rawPinnedRows.then === "function"
+            ? await rawPinnedRows
+            : rawPinnedRows) || [];
+        pinnedMessageIds = new Set(pinnedRows.map((row) => row?.message_id).filter(Boolean));
+      } catch (error) {
+        console.error("GET /api/messages pins ERROR:", error);
       }
     }
     const rawFiles = listMessageFilesByMessageIds(messageIds);
@@ -443,6 +464,10 @@ function registerMessageRoutes(app, deps) {
           readByMe.has(message.id),
         files: filesByMessageId[message.id] || [],
         reactions: reactionsByMessageId.get(message.id) || [],
+        pinned: pinnedMessageIds.has(message.id),
+        // "X pinned a message" entries carry their structured form; every
+        // other message (and every other service message) has none.
+        service: parsePinServiceBody(message.body, message.user_id),
         e2ee: safeParseStoredEnvelope(message.e2ee_envelope),
         // The sender of an encrypted message signed the chat it belongs to;
         // the recipient must know it to verify (message rows carry no chat id).
@@ -827,6 +852,10 @@ function registerMessageRoutes(app, deps) {
           return res.status(400).json({
             error: `Message must be at most ${maxMessageChars} characters.`,
           });
+        }
+        if (isServiceMessageBody(body)) {
+          removeUploadedFiles(uploadedFiles);
+          return res.status(400).json({ error: "Invalid message body." });
         }
 
         let e2eeEnvelope = null;
@@ -1764,7 +1793,9 @@ function registerMessageRoutes(app, deps) {
       });
     }
     const bodyText = String(body || "");
-    if (bodyText === "[object Object]") {
+    if (bodyText === "[object Object]" || isServiceMessageBody(bodyText)) {
+      // Service entries ("X joined", "X pinned a message") are written by the
+      // server only; a person cannot make their own look like one.
       return res.status(400).json({
         error: "Invalid message body.",
       });
@@ -1885,7 +1916,7 @@ function registerMessageRoutes(app, deps) {
     if (!requireSessionUsernameMatch(res, session, username)) return;
 
     const bodyText = String(body || "");
-    if (bodyText === "[object Object]") {
+    if (bodyText === "[object Object]" || isServiceMessageBody(bodyText)) {
       return res.status(400).json({ error: "Invalid message body." });
     }
     const trimmedBody = bodyText.trim();
@@ -1928,6 +1959,9 @@ function registerMessageRoutes(app, deps) {
     }
     if (!isMessageAuthoredByUser(message, user.id)) {
       return res.status(403).json({ error: "Only the author can edit this message." });
+    }
+    if (isServiceMessageBody(message.body)) {
+      return res.status(400).json({ error: "This message cannot be edited." });
     }
 
     const editRes = editMessage(messageId, trimmedBody);
@@ -1997,11 +2031,28 @@ function registerMessageRoutes(app, deps) {
       }
       const h = hideMessageForEveryone(message.id);
       if (h && typeof h.then === "function") await h;
+      // A message that is gone for everyone cannot stay pinned.
+      let wasPinned = false;
+      if (typeof unpinMessage === "function") {
+        try {
+          const rawRemoved = unpinMessage(chatId, message.id);
+          wasPinned = Number(rawRemoved && typeof rawRemoved.then === "function" ? await rawRemoved : rawRemoved) > 0;
+        } catch (error) {
+          console.error("POST /api/messages/delete unpin ERROR:", error);
+        }
+      }
       emitChatEvent(chatId, {
         type: "chat_message_deleted",
         chatId,
         messageIds: [message.id],
       });
+      if (wasPinned) {
+        emitChatEvent(chatId, {
+          type: "message_unpinned",
+          chatId,
+          messageId: message.id,
+        });
+      }
       return res.json({ ok: true, scope: "everyone", id: message.id });
     }
 
@@ -2052,6 +2103,9 @@ function registerMessageRoutes(app, deps) {
     if (!memberCheck) {
       return res.status(403).json({ error: "You cannot forward from this chat." });
     }
+    if (isServiceMessageBody(sourceMessage.body)) {
+      return res.status(400).json({ error: "This message cannot be forwarded." });
+    }
     const rawSourceChat = findChatById(sourceMessage.chat_id);
     const sourceChat = rawSourceChat && typeof rawSourceChat.then === "function"
       ? await rawSourceChat
@@ -2064,6 +2118,9 @@ function registerMessageRoutes(app, deps) {
     const forwardBody = String(body || "");
     if (!forwardBody.trim()) {
       return res.status(400).json({ error: "Forwarded message body is required." });
+    }
+    if (isServiceMessageBody(forwardBody)) {
+      return res.status(400).json({ error: "Invalid message body." });
     }
 
     const uniqueTargetChatIds = Array.from(
