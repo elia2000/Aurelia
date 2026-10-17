@@ -6,6 +6,7 @@ import { normalizeSongbirdSource, normalizeTelegramSource, resolveSongbirdSource
 import { readInstallerLog, readNginxLog, readServiceLog, readWorkerLog, probeLogSources } from "../lib/systemLogs.js";
 import { userEvents } from "../lib/workers/autoAddWorker.js";
 import { dbKnex } from "../db/knex.js";
+import { createChatPinService } from "../lib/services/chatPinService.js";
 import os from "node:os";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -140,6 +141,10 @@ function registerAdminPanelRoutes(app, deps) {
 
   const resolveMaybePromise = async (value) =>
     value && typeof value.then === "function" ? await value : value;
+
+  // Pins are per person: an admin taking someone out of a chat, or deleting it,
+  // takes the pin away from the people it belonged to.
+  const chatPinService = createChatPinService(deps);
 
   // ─── Remote channel helpers (admin bypasses channel-owner check) ──────────
   // Mirrors normalizeCreateRemoteChannel in server/api/chats.js so the admin
@@ -1522,6 +1527,7 @@ function registerAdminPanelRoutes(app, deps) {
     const userId = req.params.userId;
     const chat = await resolveMaybePromise(findChatById(chatId));
     const user = await resolveMaybePromise(findUserById(userId));
+    if (user) await chatPinService.release({ user, chatIds: [chatId] });
     await resolveMaybePromise(removeChatMember(chatId, userId));
     adminSave();
     // Notify the removed user so the chat disappears from their sidebar.
@@ -1558,7 +1564,9 @@ function registerAdminPanelRoutes(app, deps) {
     if (!session) return;
     const chatId = req.params.id;
     const chat = await resolveMaybePromise(findChatById(chatId));
+    const pinHolders = await chatPinService.holdersOf(chatId);
     const deletion = await resolveMaybePromise(adminDeleteChat(chatId));
+    await chatPinService.announceToHolders(pinHolders);
     const { storedNames } = deletion || {};
     if (Array.isArray(storedNames) && storedNames.length > 0) removeStoredFileNames(storedNames);
     if (chat?.group_avatar_url) removeAvatarByUrl(chat.group_avatar_url);

@@ -16,11 +16,30 @@ const UUID_EVENT_TYPES = new Set([
   "presence_update",
   "profile_updated",
   "user_profile_updated",
+  "chat_pins_changed",
 ]);
+
+// Events about one person's own state. They go to that person's sessions
+// (emitSseEvent) and never to the members of a chat (emitChatEvent): the other
+// members of a chat must not learn who pinned it.
+const USER_ONLY_EVENT_TYPES = new Set(["chat_pins_changed"]);
 
 function hasValidUuidReferences(payload = {}) {
   const type = String(payload?.type || "");
   if (!UUID_EVENT_TYPES.has(type)) return true;
+
+  if (type === "chat_pins_changed") {
+    return (
+      Array.isArray(payload.pinned) &&
+      payload.pinned.every(
+        (pin) =>
+          pin &&
+          typeof pin === "object" &&
+          isValidUuid(String(pin.chatId || "")) &&
+          Number.isInteger(pin.position),
+      )
+    );
+  }
 
   const uuidFields = ["chatId", "messageId", "userId", "actorId", "pinnedBy", "replyToMessageId", "sourceChatId", "sourceUserId"];
   for (const field of uuidFields) {
@@ -140,6 +159,7 @@ export function createSseHub({ listChatMembers }) {
   }
 
   function emitChatEvent(chatId, rawPayload) {
+    if (USER_ONLY_EVENT_TYPES.has(String(rawPayload?.type || ""))) return;
     const payload = withMessageDefaults(rawPayload);
     if (!isValidUuid(String(chatId || "")) || !hasValidUuidReferences(payload)) return;
     const rawMembers = getCachedMembers(chatId);

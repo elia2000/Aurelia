@@ -2,6 +2,7 @@ import { readAppMeta } from "../lib/appMeta.js";
 import { parseThemeDefault, parseThemePalette } from "../lib/themePalette.js";
 import { clampReactionsPerUser } from "../lib/reactions.js";
 import { clampMaxPinnedMessages } from "../lib/pins.js";
+import { clampMaxPinnedChats } from "../lib/chatPins.js";
 
 function registerAppRoutes(app, deps) {
   const { REMOTE_CHANNELS, getSetting, fs, path, projectRootDir, callsConfig } = deps;
@@ -53,6 +54,8 @@ function registerAppRoutes(app, deps) {
       maxReactionsPerUser: clampReactionsPerUser(getSetting("MAX_REACTIONS_PER_USER")),
       // How many messages one chat can have pinned.
       maxPinnedMessages: clampMaxPinnedMessages(getSetting("MAX_PINNED_MESSAGES")),
+      // How many chats one person can pin to the top of their chat list.
+      maxPinnedChats: clampMaxPinnedChats(getSetting("MAX_PINNED_CHATS")),
       fileUploadEnabled: Boolean(getSetting("FILE_UPLOAD")),
       // Voice/video calls are switched with CALLS_ENABLED; the client hides the
       // call buttons when this is false.

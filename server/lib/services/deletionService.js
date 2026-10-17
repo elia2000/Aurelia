@@ -5,6 +5,8 @@
  * Returns a post-commit plan detailing disk files to remove and SSE events to emit.
  */
 
+import { buildPinsChangedEvents } from "../chatPins.js";
+
 export function createDeletionService(dbApi) {
   const {
     deleteChatById,
@@ -13,6 +15,9 @@ export function createDeletionService(dbApi) {
     findUserById,
     listChatMembers,
     listChatsForUser,
+    // Optional: who has the chat pinned, and what they have pinned afterwards.
+    listChatPinHolders,
+    listChatPinsForUsers,
   } = dbApi;
 
   /**
@@ -25,6 +30,14 @@ export function createDeletionService(dbApi) {
       .map((m) => String(m?.username || "").toLowerCase())
       .filter(Boolean);
 
+    // The people who pinned the chat lose the pin with it. Ask before it is gone.
+    let pinHolders = [];
+    try {
+      pinHolders = listChatPinHolders ? (await listChatPinHolders(chatId)) || [] : [];
+    } catch {
+      pinHolders = [];
+    }
+
     const deletion = deleteChatById ? await deleteChatById(chatId) : {};
     const { storedNames = [] } = deletion || {};
 
@@ -35,6 +48,16 @@ export function createDeletionService(dbApi) {
         chatId,
       },
     }));
+
+    // Each of them is told what they still have pinned, for their other devices.
+    if (pinHolders.length && listChatPinsForUsers) {
+      try {
+        const rows = (await listChatPinsForUsers(pinHolders.map((holder) => holder.user_id))) || [];
+        sseEvents.push(...buildPinsChangedEvents(pinHolders, rows));
+      } catch {
+        // The chat is deleted either way; the next chat list fetch is correct.
+      }
+    }
 
     return {
       success: true,

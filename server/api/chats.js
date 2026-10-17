@@ -3,6 +3,7 @@ import path from "node:path";
 import { createInviteToken } from "../lib/inviteTokens.js";
 import { createMembershipService } from "../lib/services/membershipService.js";
 import { createDeletionService } from "../lib/services/deletionService.js";
+import { createChatPinService } from "../lib/services/chatPinService.js";
 import { normalizeSongbirdSource, normalizeTelegramSource, resolveSongbirdSource } from "../lib/remoteChannels.js";
 import { resolveThumbUrl } from "../lib/thumbUrl.js";
 import { emitUnpinnedMessages } from "../lib/pins.js";
@@ -43,6 +44,8 @@ function registerChatRoutes(app, deps) {
     listChatMembers,
     listChatMembersForChats,
     listChatsForUser,
+    listChatPinHolders,
+    listChatPinsForUsers,
     listMessageFilesByMessageIds,
     listUsers,
     removeAvatarByUrl,
@@ -99,7 +102,13 @@ function registerChatRoutes(app, deps) {
     findUserById,
     listChatMembers,
     listChatsForUser,
+    listChatPinHolders,
+    listChatPinsForUsers,
   });
+
+  // Leaving, being removed from and hiding a chat all take it off the person's
+  // pins (and tell their other devices); this is the part the routes call.
+  const chatPinService = createChatPinService(deps);
 
   const resolveClientBaseOrigin = (req) => {
     const referer = String(req.headers?.referer || "").trim();
@@ -368,7 +377,16 @@ function registerChatRoutes(app, deps) {
             ? "online"
             : "offline",
       }));
-      return { ...conv, members };
+      // The person's own pin of this chat came with the list (one join, no
+      // query per chat): expose it as pinned/pinPosition.
+      const { pin_position: pinPosition, ...rest } = conv;
+      const pinned = pinPosition !== null && pinPosition !== undefined;
+      return {
+        ...rest,
+        pinned,
+        pinPosition: pinned ? Number(pinPosition) : null,
+        members,
+      };
     });
 
     const lastMessageIds = chats
@@ -1283,6 +1301,10 @@ function registerChatRoutes(app, deps) {
       return res.status(400).json({ error: "You are not a member of this group." });
     }
 
+    // Whatever happens next (including the chat being deleted because the owner
+    // was alone in it), this person no longer has it pinned.
+    await chatPinService.release({ user, chatIds: [chatId] });
+
     const members = (await resolveMaybePromise(listChatMembers(chatId))) || [];
     const isOwner = members.some(
       (member) =>
@@ -1432,6 +1454,7 @@ function registerChatRoutes(app, deps) {
       return res.status(400).json({ error: "Owner cannot be removed." });
     }
 
+    await chatPinService.release({ user: target, chatIds: [chatId] });
     await resolveMaybePromise(removeChatMember(chatId, target.id));
     await resolveMaybePromise(markGroupMemberRemoved(chatId, target.id, actor.id));
     if (chat.type === "group") {
@@ -1690,7 +1713,10 @@ function registerChatRoutes(app, deps) {
       return res.status(404).json({ error: "User not found." });
     }
 
-    await resolveMaybePromise(hideChatsForUser(user.id, chatIds.filter(Boolean)));
+    const hiddenChatIds = chatIds.filter(Boolean);
+    // A hidden chat is not in the list, so it cannot stay pinned.
+    await chatPinService.release({ user, chatIds: hiddenChatIds });
+    await resolveMaybePromise(hideChatsForUser(user.id, hiddenChatIds));
 
     res.json({ ok: true });
   });

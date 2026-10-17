@@ -185,6 +185,12 @@ import {
   unpinAllMessages,
   listPinnedMessages,
   listPinnedMessageIds,
+  pinChat,
+  removeChatPins,
+  reorderChatPins,
+  listChatPins,
+  listChatPinsForUsers,
+  listChatPinHolders,
 } from "./db.js";
 import { resolveTelegramSecrets } from "./lib/remoteChannelSecrets.js";
 import { createMirrorJobRegistry } from "./lib/remoteMirrorJobs.js";
@@ -1199,6 +1205,16 @@ Object.assign(apiDeps, {
   unpinAllMessages,
   listPinnedMessages,
   listPinnedMessageIds,
+});
+
+// Pinned chats (per person, top of the chat list).
+Object.assign(apiDeps, {
+  pinChat,
+  removeChatPins,
+  reorderChatPins,
+  listChatPins,
+  listChatPinsForUsers,
+  listChatPinHolders,
 });
 
 // End-to-end encryption device directory + 1:1 call signaling.

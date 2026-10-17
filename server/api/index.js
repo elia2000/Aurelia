@@ -8,6 +8,7 @@ import { registerHealthRoutes } from "./health.js";
 import { registerMessageRoutes } from "./messages.js";
 import { registerReactionRoutes } from "./reactions.js";
 import { registerPinRoutes } from "./pins.js";
+import { registerChatPinRoutes } from "./chatPins.js";
 import { registerPushRoutes } from "./push.js";
 import { registerPresenceRoutes } from "./presence.js";
 import { registerProfileRoutes } from "./profile.js";
@@ -31,6 +32,7 @@ function registerApiRoutes(app, deps) {
   registerMessageRoutes(app, deps);
   registerReactionRoutes(app, deps);
   registerPinRoutes(app, deps);
+  registerChatPinRoutes(app, deps);
   registerRemoteUploadRoutes(app, deps);
   registerPushRoutes(app, deps);
   registerE2eeRoutes(app, deps);

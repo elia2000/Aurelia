@@ -13,6 +13,11 @@ import { generateUuid } from "./lib/uuidUtils.js";
 import { storageEncryption } from "./lib/storageEncryption.js";
 import { ensureSystemSecrets } from "./lib/secrets.js";
 import { REACTION_USERS_CAP, planReactionChange } from "./lib/reactions.js";
+import {
+  decideChatPin,
+  planCompaction as planPinCompaction,
+  planReorder as planPinReorder,
+} from "./lib/chatPins.js";
 
 const serverDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRootDir = path.resolve(serverDir, "..");
@@ -1573,11 +1578,19 @@ export function purgeOldRemoteChannelQueueItems(olderThanIso) {
 }
 
 export function removeChatMember(chatId, userId) {
-  return run(
-    dbKnex("chat_members")
-      .where({ chat_id: chatId, user_id: userId })
-      .del(),
-  );
+  const removeMembership = () =>
+    run(
+      dbKnex("chat_members")
+        .where({ chat_id: chatId, user_id: userId })
+        .del(),
+    );
+  // Whoever leaves or is removed loses their pin of the chat with it.
+  const removePin = () => deleteChatPinRows(userId, [chatId]);
+  if (isPostgresMode()) {
+    return Promise.resolve(removePin()).then(removeMembership);
+  }
+  removePin();
+  return removeMembership();
 }
 
 export function markChatMemberLeft(chatId, userId) {
@@ -1980,6 +1993,7 @@ async function deleteChatByIdPostgres(chatId) {
       })
       .del();
     await trx("chat_pinned_messages").where("chat_id", chatId).del();
+    await trx("chat_pins").where("chat_id", chatId).del();
     await trx("chat_messages").where("chat_id", chatId).del();
     await trx("chat_members").where("chat_id", chatId).del();
     await trx("hidden_chats").where("chat_id", chatId).del();
@@ -2043,6 +2057,7 @@ function deleteChatByIdSqlite(chatId) {
         .del(),
     );
     runWithoutSave(dbKnex("chat_pinned_messages").where("chat_id", chatId).del());
+    runWithoutSave(dbKnex("chat_pins").where("chat_id", chatId).del());
     runWithoutSave(dbKnex("chat_messages").where("chat_id", chatId).del());
     runWithoutSave(dbKnex("chat_members").where("chat_id", chatId).del());
     runWithoutSave(dbKnex("hidden_chats").where("chat_id", chatId).del());
@@ -2137,6 +2152,7 @@ async function deleteUserByIdPostgres(userId) {
         })
         .del();
       await trx("chat_pinned_messages").where("chat_id", chatId).del();
+      await trx("chat_pins").where("chat_id", chatId).del();
       await trx("chat_messages").where("chat_id", chatId).del();
       await trx("chat_members").where("chat_id", chatId).del();
       await trx("chat_mutes").where("chat_id", chatId).del();
@@ -2159,6 +2175,7 @@ async function deleteUserByIdPostgres(userId) {
     await trx("message_reactions").where("user_id", userId).del();
     // Pins belong to the conversation: they stay when the person who pinned goes.
     await trx("chat_pinned_messages").where("pinned_by", userId).update({ pinned_by: null });
+    await trx("chat_pins").where("user_id", userId).del();
     await trx("chat_message_reads").where("user_id", userId).del();
     await trx("push_subscriptions").where("user_id", userId).del();
     await trx("e2ee_devices").where("user_id", userId).del();
@@ -2270,6 +2287,7 @@ function deleteUserByIdSqlite(userId) {
             .del(),
         );
         runWithoutSave(dbKnex("chat_pinned_messages").where("chat_id", chatId).del());
+        runWithoutSave(dbKnex("chat_pins").where("chat_id", chatId).del());
         runWithoutSave(dbKnex("chat_messages").where("chat_id", chatId).del());
         runWithoutSave(dbKnex("chat_members").where("chat_id", chatId).del());
         runWithoutSave(dbKnex("chat_mutes").where("chat_id", chatId).del());
@@ -2303,6 +2321,7 @@ function deleteUserByIdSqlite(userId) {
     runWithoutSave(
       dbKnex("chat_pinned_messages").where("pinned_by", userId).update({ pinned_by: null }),
     );
+    runWithoutSave(dbKnex("chat_pins").where("user_id", userId).del());
     runWithoutSave(dbKnex("chat_message_reads").where("user_id", userId).del());
     runWithoutSave(dbKnex("push_subscriptions").where("user_id", userId).del());
     runWithoutSave(dbKnex("e2ee_devices").where("user_id", userId).del());
@@ -2439,6 +2458,7 @@ export function listChatsForUser(userId) {
       "mc.created_by_user_id",
       "mc.verified",
       "mc.muted",
+      "cp.position as pin_position",
       dbKnex.raw("COALESCE(rcs.enabled, 0) AS remote_channel_enabled"),
       "last_vm.id as last_message_id",
       dbKnex.raw("COALESCE(last_vm.edited_body, last_vm.body) AS last_message"),
@@ -2464,6 +2484,14 @@ export function listChatsForUser(userId) {
     .leftJoin("remote_channel_sources as rcs", function () {
       this.on("rcs.chat_id", "=", "mc.id").andOn("rcs.enabled", "=", dbKnex.raw("1"));
     })
+    // The person's own pins: one join, no query per chat. member_chats already
+    // leaves out chats they left or hid, so only live pins can match.
+    .leftJoin("chat_pins as cp", function () {
+      this.on("cp.chat_id", "=", "mc.id").andOn("cp.user_id", "=", dbKnex.raw("?", [userId]));
+    })
+    // Pinned chats first, by position; then the usual order.
+    .orderByRaw('CASE WHEN "cp"."position" IS NULL THEN 1 ELSE 0 END ASC')
+    .orderBy("cp.position", "asc")
     .orderBy("last_vm.created_at", "desc")
     .orderBy("last_vm.id", "desc")
     .orderBy("mc.created_at", "desc");
@@ -3816,6 +3844,376 @@ export function listPinnedMessageIds(chatId, messageIds = []) {
   );
 }
 
+// ─── Pinned chats ────────────────────────────────────────────────────────────
+//
+// `chat_pins` is private to the person who pinned: one row per (person, chat),
+// `position` 0 is the top and a new pin goes to the top. A pin only counts
+// while the person is still a member of the chat and has not hidden it (see
+// effectiveChatPins); the paths that end a membership or hide a chat delete the
+// row too, and a pin that slipped through anyway is swept on the next pin.
+
+const sqliteSavepoint = (label, fn) => {
+  const savepoint = `sp_${label}_${crypto.randomBytes(4).toString("hex")}`;
+  runWithoutSave(`SAVEPOINT ${savepoint}`);
+  try {
+    const result = fn();
+    runWithoutSave(`RELEASE ${savepoint}`);
+    return result;
+  } catch (error) {
+    try {
+      runWithoutSave(`ROLLBACK TO ${savepoint}`);
+      runWithoutSave(`RELEASE ${savepoint}`);
+    } catch {
+      // ignore rollback failures
+    }
+    throw error;
+  }
+};
+
+/** The person's pins that still count: still a member, chat not hidden. */
+function effectiveChatPins(root, userId) {
+  return root("chat_pins as cp")
+    .join("chat_members as m", function () {
+      this.on("m.chat_id", "=", "cp.chat_id").andOn("m.user_id", "=", "cp.user_id");
+    })
+    .where("cp.user_id", userId)
+    .whereNotExists(
+      dbKnex("hidden_chats as h")
+        .select(1)
+        .whereRaw("h.chat_id = cp.chat_id")
+        .whereRaw("h.user_id = cp.user_id"),
+    );
+}
+
+/** The person's pin rows that no longer count (left the chat, hid it). */
+function stalePinChatIds(root, userId) {
+  return root("chat_pins as cp")
+    .select("cp.chat_id")
+    .where("cp.user_id", userId)
+    .where(function () {
+      this.whereNotExists(
+        dbKnex("chat_members as m")
+          .select(1)
+          .whereRaw("m.chat_id = cp.chat_id")
+          .whereRaw("m.user_id = cp.user_id"),
+      ).orWhereExists(
+        dbKnex("hidden_chats as h")
+          .select(1)
+          .whereRaw("h.chat_id = cp.chat_id")
+          .whereRaw("h.user_id = cp.user_id"),
+      );
+    });
+}
+
+const orderedPinRows = (builder) =>
+  builder
+    .select("cp.chat_id", "cp.position")
+    .orderBy("cp.position", "asc")
+    .orderBy("cp.chat_id", "asc");
+
+const chatPinsLockKey = (userId) => `chat-pins:user:${userId}`;
+
+/** Only real, distinct chat ids (strings); anything else cannot be a chat. */
+const pinChatIdList = (chatIds) =>
+  Array.from(
+    new Set((Array.isArray(chatIds) ? chatIds : []).filter((id) => typeof id === "string" && id)),
+  );
+
+/** Keeps a "WHERE chat_id IN (...)" well under the database's variable limit. */
+const chunkPinChatIds = (ids, size = 500) => {
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += size) chunks.push(ids.slice(i, i + size));
+  return chunks;
+};
+
+/**
+ * Deletes the person's pin rows of these chats, nothing else. The cleanup done
+ * when a membership ends or a chat is hidden; the pins that remain keep their
+ * order (their numbers may have a gap, which only the next unpin closes).
+ * removeChatPins() is the same with renumbering, for the pin API.
+ */
+function deleteChatPinRows(userId, chatIds) {
+  const ids = pinChatIdList(chatIds);
+  if (!userId || !ids.length) return isPostgresMode() ? Promise.resolve(0) : 0;
+  const chunks = chunkPinChatIds(ids);
+  const deleteChunk = (chunk) =>
+    run(dbKnex("chat_pins").where("user_id", userId).whereIn("chat_id", chunk).del());
+  if (isPostgresMode()) {
+    return Promise.all(chunks.map(deleteChunk)).then((counts) =>
+      counts.reduce((sum, n) => sum + (Number(n) || 0), 0),
+    );
+  }
+  return chunks.reduce((sum, chunk) => sum + (Number(deleteChunk(chunk)) || 0), 0);
+}
+
+function pinChatSqlite({ userId, chatId, max }) {
+  let wrote = false;
+  const result = sqliteSavepoint("chat_pin", () => {
+    if (!getRow(dbKnex("chat_members").select("chat_id").where({ chat_id: chatId, user_id: userId }).first())) {
+      return { status: "not_member", position: null };
+    }
+    if (getRow(dbKnex("hidden_chats").select("chat_id").where({ chat_id: chatId, user_id: userId }).first())) {
+      return { status: "hidden", position: null };
+    }
+
+    // Sweep pins that stopped counting, then tidy the numbering they left.
+    const stale = getAll(stalePinChatIds(dbKnex, userId)).map((row) => row.chat_id);
+    if (stale.length) {
+      wrote = true;
+      runWithoutSave(dbKnex("chat_pins").where("user_id", userId).whereIn("chat_id", stale).del());
+    }
+
+    let rows = getAll(orderedPinRows(effectiveChatPins(dbKnex, userId)));
+    if (stale.length) {
+      for (const update of planPinCompaction(rows)) {
+        runWithoutSave(
+          dbKnex("chat_pins")
+            .where({ user_id: userId, chat_id: update.chatId })
+            .update({ position: update.position }),
+        );
+      }
+      rows = getAll(orderedPinRows(effectiveChatPins(dbKnex, userId)));
+    }
+    const decision = decideChatPin({ rows, chatId, max });
+    if (decision.action === "already") return { status: "already", position: decision.position };
+    if (decision.action === "limit") return { status: "limit", position: null };
+
+    // The new pin goes to the top; everything else moves one place down.
+    wrote = true;
+    runWithoutSave(
+      dbKnex("chat_pins").where("user_id", userId).update({ position: dbKnex.raw("?? + 1", ["position"]) }),
+    );
+    runWithoutSave(
+      dbKnex("chat_pins").insert({
+        user_id: userId,
+        chat_id: chatId,
+        position: 0,
+        pinned_at: new Date().toISOString(),
+      }),
+    );
+    return { status: "pinned", position: 0 };
+  });
+  if (wrote) scheduleDatabaseSave();
+  return result;
+}
+
+async function pinChatPostgres({ userId, chatId, max }) {
+  return dbKnex.transaction(async (trx) => {
+    // One change at a time per person, so two quick requests cannot both pass
+    // the "room left" check and exceed the limit.
+    await trx.raw("SELECT pg_advisory_xact_lock(hashtext(?))", [chatPinsLockKey(userId)]);
+
+    const member = await trx("chat_members").select("chat_id").where({ chat_id: chatId, user_id: userId }).first();
+    if (!member) return { status: "not_member", position: null };
+    const hidden = await trx("hidden_chats").select("chat_id").where({ chat_id: chatId, user_id: userId }).first();
+    if (hidden) return { status: "hidden", position: null };
+
+    const stale = (await stalePinChatIds(trx, userId)).map((row) => row.chat_id);
+    if (stale.length) {
+      await trx("chat_pins").where("user_id", userId).whereIn("chat_id", stale).del();
+    }
+
+    let rows = await orderedPinRows(effectiveChatPins(trx, userId));
+    if (stale.length) {
+      for (const update of planPinCompaction(rows)) {
+        await trx("chat_pins")
+          .where({ user_id: userId, chat_id: update.chatId })
+          .update({ position: update.position });
+      }
+      rows = await orderedPinRows(effectiveChatPins(trx, userId));
+    }
+    const decision = decideChatPin({ rows, chatId, max });
+    if (decision.action === "already") return { status: "already", position: decision.position };
+    if (decision.action === "limit") return { status: "limit", position: null };
+
+    await trx("chat_pins").where("user_id", userId).update({ position: trx.raw("?? + 1", ["position"]) });
+    await trx("chat_pins").insert({
+      user_id: userId,
+      chat_id: chatId,
+      position: 0,
+      pinned_at: new Date().toISOString(),
+    });
+    return { status: "pinned", position: 0 };
+  });
+}
+
+/**
+ * Pins a chat for a person, at the top of their pins, atomically. Returns
+ * { status, position }:
+ *   "pinned"     the chat is pinned now (position 0)
+ *   "already"    it was pinned; nothing moved (position is where it is)
+ *   "limit"      the person already has `max` pins; nothing changed
+ *   "not_member" the person is not in the chat (or it does not exist)
+ *   "hidden"     the person has hidden the chat
+ */
+export function pinChat({ userId, chatId, max = 5 }) {
+  if (!userId || !chatId) {
+    const refused = { status: "not_member", position: null };
+    return isPostgresMode() ? Promise.resolve(refused) : refused;
+  }
+  const args = { userId, chatId, max: Math.max(1, Math.trunc(Number(max)) || 1) };
+  if (isPostgresMode()) return pinChatPostgres(args);
+  return pinChatSqlite(args);
+}
+
+/**
+ * The person's pins as the chat list uses them, top first:
+ * [{ chat_id, position, pinned_at }].
+ */
+export function listChatPins(userId) {
+  if (!userId) return isPostgresMode() ? Promise.resolve([]) : [];
+  return getAll(
+    effectiveChatPins(dbKnex, userId)
+      .select("cp.chat_id", "cp.position", "cp.pinned_at")
+      .orderBy("cp.position", "asc")
+      .orderBy("cp.chat_id", "asc"),
+  );
+}
+
+/** The pins of several people in one query: [{ user_id, chat_id, position }]. */
+export function listChatPinsForUsers(userIds = []) {
+  const ids = Array.from(new Set((Array.isArray(userIds) ? userIds : []).filter(Boolean)));
+  if (!ids.length) return isPostgresMode() ? Promise.resolve([]) : [];
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += 500) chunks.push(ids.slice(i, i + 500));
+  const query = (chunk) =>
+    getAll(
+      dbKnex("chat_pins as cp")
+        .join("chat_members as m", function () {
+          this.on("m.chat_id", "=", "cp.chat_id").andOn("m.user_id", "=", "cp.user_id");
+        })
+        .select("cp.user_id", "cp.chat_id", "cp.position")
+        .whereIn("cp.user_id", chunk)
+        .whereNotExists(
+          dbKnex("hidden_chats as h")
+            .select(1)
+            .whereRaw("h.chat_id = cp.chat_id")
+            .whereRaw("h.user_id = cp.user_id"),
+        )
+        .orderBy("cp.user_id", "asc")
+        .orderBy("cp.position", "asc")
+        .orderBy("cp.chat_id", "asc"),
+    );
+  if (isPostgresMode()) {
+    return Promise.all(chunks.map(query)).then((parts) => parts.flat());
+  }
+  return chunks.flatMap(query);
+}
+
+/** The people who have this chat pinned: [{ user_id, username }]. */
+export function listChatPinHolders(chatId) {
+  if (!chatId) return isPostgresMode() ? Promise.resolve([]) : [];
+  return getAll(
+    dbKnex("chat_pins as cp")
+      .join("users as u", "u.id", "cp.user_id")
+      .select("cp.user_id", "u.username")
+      .where("cp.chat_id", chatId)
+      .orderBy("cp.user_id", "asc"),
+  );
+}
+
+function removeChatPinsSqlite({ userId, chatIds }) {
+  const removed = sqliteSavepoint("chat_unpin", () => {
+    let present = 0;
+    for (const chunk of chunkPinChatIds(chatIds)) {
+      present += getAll(
+        dbKnex("chat_pins").select("chat_id").where("user_id", userId).whereIn("chat_id", chunk),
+      ).length;
+      runWithoutSave(dbKnex("chat_pins").where("user_id", userId).whereIn("chat_id", chunk).del());
+    }
+    if (!present) return 0;
+    const rows = getAll(orderedPinRows(effectiveChatPins(dbKnex, userId)));
+    for (const update of planPinCompaction(rows)) {
+      runWithoutSave(
+        dbKnex("chat_pins")
+          .where({ user_id: userId, chat_id: update.chatId })
+          .update({ position: update.position }),
+      );
+    }
+    return present;
+  });
+  if (removed) scheduleDatabaseSave();
+  return removed;
+}
+
+async function removeChatPinsPostgres({ userId, chatIds }) {
+  return dbKnex.transaction(async (trx) => {
+    await trx.raw("SELECT pg_advisory_xact_lock(hashtext(?))", [chatPinsLockKey(userId)]);
+    let removed = 0;
+    for (const chunk of chunkPinChatIds(chatIds)) {
+      removed += Number(await trx("chat_pins").where("user_id", userId).whereIn("chat_id", chunk).del()) || 0;
+    }
+    if (!removed) return 0;
+    const rows = await orderedPinRows(effectiveChatPins(trx, userId));
+    for (const update of planPinCompaction(rows)) {
+      await trx("chat_pins")
+        .where({ user_id: userId, chat_id: update.chatId })
+        .update({ position: update.position });
+    }
+    return Number(removed);
+  });
+}
+
+/**
+ * Removes the person's pins of these chats (unpinning, leaving, being removed,
+ * hiding) and closes the gaps. Resolves to the number of pins removed.
+ */
+export function removeChatPins(userId, chatIds = []) {
+  const ids = pinChatIdList(chatIds);
+  if (!userId || !ids.length) return isPostgresMode() ? Promise.resolve(0) : 0;
+  if (isPostgresMode()) return removeChatPinsPostgres({ userId, chatIds: ids });
+  return removeChatPinsSqlite({ userId, chatIds: ids });
+}
+
+function reorderChatPinsSqlite({ userId, chatIds }) {
+  const result = sqliteSavepoint("chat_pin_order", () => {
+    const rows = getAll(orderedPinRows(effectiveChatPins(dbKnex, userId)));
+    const plan = planPinReorder(rows, chatIds);
+    if (!plan.ok) return { status: "mismatch", changed: false };
+    for (const update of plan.updates) {
+      runWithoutSave(
+        dbKnex("chat_pins")
+          .where({ user_id: userId, chat_id: update.chatId })
+          .update({ position: update.position }),
+      );
+    }
+    return { status: "ok", changed: plan.updates.length > 0 };
+  });
+  if (result.changed) scheduleDatabaseSave();
+  return result;
+}
+
+async function reorderChatPinsPostgres({ userId, chatIds }) {
+  return dbKnex.transaction(async (trx) => {
+    await trx.raw("SELECT pg_advisory_xact_lock(hashtext(?))", [chatPinsLockKey(userId)]);
+    const rows = await orderedPinRows(effectiveChatPins(trx, userId));
+    const plan = planPinReorder(rows, chatIds);
+    if (!plan.ok) return { status: "mismatch", changed: false };
+    for (const update of plan.updates) {
+      await trx("chat_pins")
+        .where({ user_id: userId, chat_id: update.chatId })
+        .update({ position: update.position });
+    }
+    return { status: "ok", changed: plan.updates.length > 0 };
+  });
+}
+
+/**
+ * Puts the person's pins in the given order (first = top), atomically. The
+ * list must be exactly their pinned chats, each once; otherwise nothing changes
+ * and the result is { status: "mismatch" }. Returns { status: "ok" | "mismatch",
+ * changed }.
+ */
+export function reorderChatPins(userId, chatIds = []) {
+  const ids = Array.isArray(chatIds) ? chatIds : [];
+  if (!userId) {
+    const refused = { status: "mismatch", changed: false };
+    return isPostgresMode() ? Promise.resolve(refused) : refused;
+  }
+  if (isPostgresMode()) return reorderChatPinsPostgres({ userId, chatIds: ids });
+  return reorderChatPinsSqlite({ userId, chatIds: ids });
+}
+
 export function hideChatsForUser(userId, chatIds = []) {
   if (!userId || !Array.isArray(chatIds) || !chatIds.length) {
     return isPostgresMode() ? Promise.resolve() : undefined;
@@ -3825,17 +4223,21 @@ export function hideChatsForUser(userId, chatIds = []) {
     return isPostgresMode() ? Promise.resolve() : undefined;
   }
   if (isPostgresMode()) {
-    return Promise.all(
-      validChatIds.map((chatId) =>
-        run(
-          dbKnex("hidden_chats")
-            .insert({ user_id: userId, chat_id: chatId })
-            .onConflict(["user_id", "chat_id"])
-            .ignore(),
+    // A chat that is hidden is not in the list, so it cannot stay pinned.
+    return Promise.resolve(deleteChatPinRows(userId, validChatIds)).then(() =>
+      Promise.all(
+        validChatIds.map((chatId) =>
+          run(
+            dbKnex("hidden_chats")
+              .insert({ user_id: userId, chat_id: chatId })
+              .onConflict(["user_id", "chat_id"])
+              .ignore(),
+          ),
         ),
       ),
     );
   }
+  deleteChatPinRows(userId, validChatIds);
   validChatIds.forEach((chatId) => {
     run(
       dbKnex("hidden_chats")
@@ -4808,6 +5210,7 @@ export async function adminClearAllMessages() {
 }
 
 const RESET_TABLES = [
+  "chat_pins",
   "chat_pinned_messages",
   "message_reactions",
   "chat_message_reads",

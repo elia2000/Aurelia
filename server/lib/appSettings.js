@@ -236,6 +236,18 @@ export const SETTING_DEFS = [
     min: 1,
     max: 100,
   },
+  {
+    key: "MAX_PINNED_CHATS",
+    type: TYPE_INT,
+    label: "Pinned chats per person",
+    description:
+      "How many conversations one person can pin to the top of their chat list. Someone who already has more keeps them but cannot pin another until they are under the limit.",
+    group: "limits",
+    envKey: "MAX_PINNED_CHATS",
+    defaultVal: 5,
+    min: 1,
+    max: 30,
+  },
 
   // ── Remote Channel ────────────────────────────────────────────────────────────
   {

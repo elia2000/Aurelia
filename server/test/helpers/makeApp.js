@@ -476,6 +476,13 @@ export function makeApp(overrides = {}) {
     unpinAllMessages: () => 0,
     listPinnedMessages: () => [],
     listPinnedMessageIds: () => [],
+    // ── Pinned chats ─────────────────────────────────────────────────────────
+    pinChat: () => ({ status: "pinned", position: 0 }),
+    removeChatPins: () => 0,
+    reorderChatPins: () => ({ status: "ok", changed: false }),
+    listChatPins: () => [],
+    listChatPinsForUsers: () => [],
+    listChatPinHolders: () => [],
     callRegistry: createCallRegistry(),
     callsConfig: () => ({
       enabled: true,

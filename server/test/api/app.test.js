@@ -124,6 +124,22 @@ describe("GET /api/app/info", () => {
     expect(small.body.maxPinnedMessages).toBe(1);
   });
 
+  // ── Pinned chats ───────────────────────────────────────────────────────────
+
+  test('MAX_PINNED_CHATS is exposed as maxPinnedChats, default 5', async () => {
+    const res = await request(makeApp().app).get("/api/app/info");
+    expect(res.body.maxPinnedChats).toBe(5);
+  });
+
+  test('MAX_PINNED_CHATS=8 → maxPinnedChats is 8, and is always clamped to 1-30', async () => {
+    const eight = await request(makeApp({ settings: { MAX_PINNED_CHATS: 8 } }).app).get("/api/app/info");
+    expect(eight.body.maxPinnedChats).toBe(8);
+    const big = await request(makeApp({ settings: { MAX_PINNED_CHATS: 4000 } }).app).get("/api/app/info");
+    expect(big.body.maxPinnedChats).toBe(30);
+    const small = await request(makeApp({ settings: { MAX_PINNED_CHATS: 0 } }).app).get("/api/app/info");
+    expect(small.body.maxPinnedChats).toBe(1);
+  });
+
   // ── Registration ───────────────────────────────────────────────────────────
 
   test('SIGN_UP=false → accountCreationEnabled is false', async () => {

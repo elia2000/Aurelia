@@ -178,6 +178,10 @@ function registerAdminRoutes(app, deps) {
               `DELETE FROM chat_pinned_messages WHERE chat_id IN (${chunkPlaceholders})`,
               chunk,
             );
+            await adminRun(
+              `DELETE FROM chat_pins WHERE chat_id IN (${chunkPlaceholders})`,
+              chunk,
+            );
 
             await adminRun(
               `DELETE FROM chat_message_reads WHERE message_id IN (
@@ -383,6 +387,10 @@ function registerAdminRoutes(app, deps) {
                 chunk,
               );
               await transactionRun(
+                `DELETE FROM chat_pins WHERE chat_id IN (${chunkPlaceholders})`,
+                chunk,
+              );
+              await transactionRun(
                 `DELETE FROM chat_message_reads WHERE message_id IN (
                   SELECT id FROM chat_messages WHERE chat_id IN (${chunkPlaceholders})
                 )`,
@@ -448,6 +456,10 @@ function registerAdminRoutes(app, deps) {
             // Pins belong to the conversation: they stay when the person who pinned goes.
             await transactionRun(
               `UPDATE chat_pinned_messages SET pinned_by = NULL WHERE pinned_by IN (${chunkPlaceholders})`,
+              chunk,
+            );
+            await transactionRun(
+              `DELETE FROM chat_pins WHERE user_id IN (${chunkPlaceholders})`,
               chunk,
             );
             await transactionRun(
@@ -2149,6 +2161,7 @@ function registerAdminRoutes(app, deps) {
         try {
           adminRun("DELETE FROM message_reactions");
           adminRun("DELETE FROM chat_pinned_messages");
+          adminRun("DELETE FROM chat_pins");
           adminRun("DELETE FROM chat_message_files");
           adminRun("DELETE FROM chat_messages");
           adminRun("DELETE FROM hidden_chats");
