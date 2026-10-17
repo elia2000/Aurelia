@@ -483,6 +483,13 @@ export function makeApp(overrides = {}) {
     listChatPins: () => [],
     listChatPinsForUsers: () => [],
     listChatPinHolders: () => [],
+    // ── Call history entries ─────────────────────────────────────────────────
+    createCallMessage: (args) => ({
+      id: generateUuid(),
+      created: true,
+      createdAt: new Date().toISOString().replace("T", " ").slice(0, 19),
+      callId: args?.callId ?? null,
+    }),
     callRegistry: createCallRegistry(),
     callsConfig: () => ({
       enabled: true,

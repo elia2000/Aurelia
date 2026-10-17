@@ -14,6 +14,7 @@ import {
   summarizeReactionRows,
   toReactionCounts,
 } from "../reactions.js";
+import { isCallMessage } from "../callMessages.js";
 import { createThrottle } from "../throttle.js";
 
 const PUSH_WINDOW_MS = 60 * 1000;
@@ -149,7 +150,7 @@ export function createReactionService(deps) {
   async function react({ user, chatId, messageId, emoji }) {
     const target = await loadTarget({ user, chatId, messageId });
     if (!target.ok) return target;
-    if (isServiceMessageBody(target.message.body)) {
+    if (isServiceMessageBody(target.message.body) || isCallMessage(target.message)) {
       return fail(400, "Reactions are not available for this message.");
     }
 
@@ -215,7 +216,7 @@ export function createReactionService(deps) {
       }
     }
 
-    if (isServiceMessageBody(target.message.body)) {
+    if (isServiceMessageBody(target.message.body) || isCallMessage(target.message)) {
       return { ok: true, status: 200, body: { messageId, reactions: [], truncated: false } };
     }
 

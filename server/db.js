@@ -2465,6 +2465,11 @@ export function listChatsForUser(userId) {
       "last_vm.created_at as last_time",
       "last_vm.user_id as last_sender_id",
       "last_vm.client_request_id as last_message_client_request_id",
+      // A call history entry as the last message: the route words its preview.
+      "last_vm.call_id as last_call_id",
+      "last_vm.call_kind as last_call_kind",
+      "last_vm.call_outcome as last_call_outcome",
+      "last_vm.call_duration_sec as last_call_duration_sec",
       dbKnex.raw(
         "CASE WHEN last_vm.id IS NULL THEN NULL ELSE COALESCE(last_user.username, 'deleted') END AS last_sender_username",
       ),
@@ -2630,6 +2635,111 @@ export function createOrReuseMessage(
   }
 }
 
+// ─── Call history entries ────────────────────────────────────────────────────
+
+function buildCallMessageRow(args, id, createdAt) {
+  const duration = Number(args.durationSec);
+  return {
+    id,
+    chat_id: args.chatId,
+    user_id: args.callerId,
+    body: "",
+    created_at: createdAt,
+    expires_at: args.expiresAt || null,
+    call_id: args.callId,
+    call_kind: args.kind,
+    call_outcome: args.outcome,
+    call_duration_sec:
+      args.durationSec === null || args.durationSec === undefined || !Number.isFinite(duration)
+        ? null
+        : Math.max(0, Math.round(duration)),
+    // An entry that needs no attention is read by the callee from the start.
+    read_at: args.markReadBy ? createdAt : null,
+    read_by_user_id: args.markReadBy || null,
+  };
+}
+
+function createCallMessageSqlite(args) {
+  const id = generateUuid();
+  const createdAt = new Date().toISOString().replace("T", " ").slice(0, 19);
+  const savepoint = `sp_call_msg_${crypto.randomBytes(4).toString("hex")}`;
+  runWithoutSave(`SAVEPOINT ${savepoint}`);
+  try {
+    // The unique index on call_id decides: whoever inserts first wins, every
+    // other attempt for the same call changes nothing.
+    run(
+      dbKnex("chat_messages")
+        .insert(buildCallMessageRow(args, id, createdAt))
+        .onConflict("call_id")
+        .ignore(),
+    );
+    const stored = getRow(
+      dbKnex("chat_messages").select("id", "created_at").where({ call_id: args.callId }).first(),
+    );
+    const created = stored?.id === id;
+    if (created && args.markReadBy) {
+      run(
+        dbKnex("chat_message_reads")
+          .insert({ message_id: id, user_id: args.markReadBy, read_at: createdAt })
+          .onConflict(["message_id", "user_id"])
+          .ignore(),
+      );
+    }
+    runWithoutSave(`RELEASE ${savepoint}`);
+    return { id: stored?.id || null, created, createdAt: stored?.created_at || createdAt };
+  } catch (error) {
+    try {
+      runWithoutSave(`ROLLBACK TO ${savepoint}`);
+      runWithoutSave(`RELEASE ${savepoint}`);
+    } catch {
+      // ignore rollback failures
+    }
+    throw error;
+  }
+}
+
+async function createCallMessagePostgres(args) {
+  const id = generateUuid();
+  const createdAt = new Date().toISOString().replace("T", " ").slice(0, 19);
+  return dbKnex.transaction(async (trx) => {
+    // A second request for the same call waits here for the first one to
+    // finish and then changes nothing.
+    await trx("chat_messages")
+      .insert(buildCallMessageRow(args, id, createdAt))
+      .onConflict("call_id")
+      .ignore();
+    const stored = await trx("chat_messages")
+      .select("id", "created_at")
+      .where({ call_id: args.callId })
+      .first();
+    const created = stored?.id === id;
+    if (created && args.markReadBy) {
+      await trx("chat_message_reads")
+        .insert({ message_id: id, user_id: args.markReadBy, read_at: createdAt })
+        .onConflict(["message_id", "user_id"])
+        .ignore();
+    }
+    return { id: stored?.id || null, created, createdAt: stored?.created_at || createdAt };
+  });
+}
+
+/**
+ * Writes the history entry of a call into its direct chat: an empty message
+ * from the caller carrying the call columns (migration 047). At most one entry
+ * exists per `callId`; asking again returns the existing one with
+ * `created: false`, so only the request that really created it announces it.
+ *
+ * `markReadBy` is the callee for every outcome that needs no attention (it is
+ * stored as already read by them), and null for a missed call, which stays
+ * unread for the callee until they open the chat.
+ *
+ * @returns {{ id: string, created: boolean, createdAt: string }}
+ */
+export function createCallMessage(args) {
+  if (isPostgresMode()) return createCallMessagePostgres(args);
+  return createCallMessageSqlite(args);
+}
+
 export function markMessageRead(messageId, readerId) {
   const processRow = (row) => {
     if (!row) return;
@@ -2778,6 +2888,10 @@ export function findMessageById(messageId) {
         "created_at",
         "expires_at",
         "e2ee_envelope",
+        "call_id",
+        "call_kind",
+        "call_outcome",
+        "call_duration_sec",
       )
       .where("id", messageId)
       .first(),
@@ -3113,6 +3227,10 @@ export function getMessages(chatId, options = {}) {
       chat_messages.created_at,
       chat_messages.expires_at,
       chat_messages.e2ee_envelope,
+      chat_messages.call_id,
+      chat_messages.call_kind,
+      chat_messages.call_outcome,
+      chat_messages.call_duration_sec,
       chat_messages.read_at,
       chat_messages.read_by_user_id,
       chat_messages.reply_to_message_id,

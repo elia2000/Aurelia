@@ -7,6 +7,7 @@ import { createChatPinService } from "../lib/services/chatPinService.js";
 import { normalizeSongbirdSource, normalizeTelegramSource, resolveSongbirdSource } from "../lib/remoteChannels.js";
 import { resolveThumbUrl } from "../lib/thumbUrl.js";
 import { emitUnpinnedMessages } from "../lib/pins.js";
+import { callPreviewText, serializeCall } from "../lib/callMessages.js";
 import { validateUuidParams, validateUuidBody } from "../lib/uuidMiddleware.js";
 
 function registerChatRoutes(app, deps) {
@@ -379,10 +380,38 @@ function registerChatRoutes(app, deps) {
       }));
       // The person's own pin of this chat came with the list (one join, no
       // query per chat): expose it as pinned/pinPosition.
-      const { pin_position: pinPosition, ...rest } = conv;
+      const {
+        pin_position: pinPosition,
+        last_call_id: lastCallId,
+        last_call_kind: lastCallKind,
+        last_call_outcome: lastCallOutcome,
+        last_call_duration_sec: lastCallDurationSec,
+        ...rest
+      } = conv;
       const pinned = pinPosition !== null && pinPosition !== undefined;
+      // A call history entry as the last message has an empty text: say what
+      // it is for THIS person ("Outgoing call" for the one who called,
+      // "Incoming call" for the other) and send the structured call too, so
+      // the client can say it in its own language.
+      const lastCall = serializeCall({
+        call_id: lastCallId,
+        call_kind: lastCallKind,
+        call_outcome: lastCallOutcome,
+        call_duration_sec: lastCallDurationSec,
+      });
       return {
         ...rest,
+        ...(lastCall
+          ? {
+              last_message: callPreviewText({
+                kind: lastCall.kind,
+                outcome: lastCall.outcome,
+                outgoing: String(conv.last_sender_id ?? "") === String(user.id),
+              }),
+            }
+          : {}),
+        last_message_type: lastCall ? "call" : "message",
+        last_call: lastCall,
         pinned,
         pinPosition: pinned ? Number(pinPosition) : null,
         members,

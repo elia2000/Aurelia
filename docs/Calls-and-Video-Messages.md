@@ -52,6 +52,27 @@ When a call cannot be set up, the screen says why and stays for about 10 seconds
 
 Calls are one-to-one and happen in direct chats. You can minimise the call screen and keep browsing.
 
+### Call history in the chat
+
+When a call ends, the direct chat gets **one line about it**, the same for both of you, in order with the messages:
+
+| Line | What happened |
+|---|---|
+| *Outgoing call 0:23* / *Incoming call 0:23* | The call was answered and connected. The time counts from the moment it connected. |
+| *Missed call* (for the caller: *No answer*) | Nobody picked up before the ring ended. |
+| *Declined call* | The other person refused it. |
+| *Cancelled call* | The caller hung up before it was answered. |
+| *Busy* | The other person was already in a call. |
+| *Call failed* | It was answered, but the connection never worked. |
+
+Video calls say *video call*. Good to know:
+
+- There is **one line per call**, however it ends: both of you hanging up at once, or the call timing out, still leaves one.
+- Only a **missed call** counts as unread for the person who did not answer; it clears when they open the chat. The other lines are already read, so they never add to the unread count.
+- Call lines cannot be edited, forwarded, replied to, reacted to or pinned, and they are not searched. Either of you can remove one from your own view with *Delete for me*; it cannot be deleted for both.
+- They expire with the other messages (`MESSAGE_TEXT_RETENTION`) and go with the chat when it is deleted.
+- A call line sends no push notification of its own; the call's own notification is the only one.
+
 ### Video calls and the camera
 
 - In a video call the camera button turns your video on and off at any time. When someone's camera is off the other person sees a **black screen** that says *Camera off* (their name stays visible), and a small black tile stands in for your own picture.
@@ -211,7 +232,7 @@ All call settings are environment variables. See [Environment Variables](./Envir
 ## Limitations
 
 - Calls are **one-to-one** and start from a direct chat. Group calls need a media-forwarding server and are not included.
-- Call signaling state lives in the memory of one app process. If you run several app instances behind a load balancer, use sticky routing for `/api/calls`.
+- Call signaling state lives in the memory of one app process. If you run several app instances behind a load balancer, use sticky routing for `/api/calls`. Restarting the server while a call is running ends it without a line in the chat.
 - Every device of the person you call gets a push notification (if enabled), also when another of their devices has the app open: a phone with the app closed still rings. A chat the callee muted does not ring by push. The ring lasts about 45 seconds. When it ends (answered elsewhere, cancelled, unanswered) the notification is removed, or replaced by a *missed call* one.
 - Calls are limited per person (12 invitations a minute, 5 per two minutes per conversation) so that nobody can ring someone repeatedly.
 - Keep your device clock roughly right: an invitation whose time is more than ten minutes off from the receiving device is refused, and the call screen then says to check the clock.

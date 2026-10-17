@@ -25,7 +25,7 @@ import { resolveAppOrigins, ensureBucketCors } from "./lib/bucketCors.js";
 import { resolveWebhookCallbackUrl } from "./lib/webhookUrl.js";
 import { createVideoTranscodeManager } from "./lib/videoTranscode.js";
 import { createMessageFileJobs } from "./lib/messageFileJobs.js";
-import { removePinsOfMessages } from "./lib/pinCleanup.js";
+import { createTextRetentionJobs } from "./lib/textRetentionJobs.js";
 import { emitUnpinnedMessages } from "./lib/pins.js";
 import { createInspector } from "./lib/inspect.js";
 import { createSessionHelpers } from "./lib/sessions.js";
@@ -191,6 +191,7 @@ import {
   listChatPins,
   listChatPinsForUsers,
   listChatPinHolders,
+  createCallMessage,
 } from "./db.js";
 import { resolveTelegramSecrets } from "./lib/remoteChannelSecrets.js";
 import { createMirrorJobRegistry } from "./lib/remoteMirrorJobs.js";
@@ -1229,6 +1230,8 @@ Object.assign(apiDeps, {
   listE2eeDevicesByUserIds,
   setMessageE2eeEnvelope,
   findDmChat,
+  // The history entry a finished call leaves in the chat.
+  createCallMessage,
   callRegistry: createCallRegistry(),
   callsConfig: () => readCallsConfig(),
   emitToUser: (username, payload) => {
@@ -1313,120 +1316,15 @@ app.use((err, req, res, next) => {
   return next(err);
 });
 
-async function cleanupExpiredTextOnlyMessages() {
-  if (getSetting("MESSAGE_TEXT_RETENTION") <= 0) {
-    return { removedMessages: 0 };
-  }
-
-  const rawRows = adminGetAll(
-    dbKnex("chat_messages")
-      .select("id", "chat_id")
-      .whereNotNull("expires_at")
-      .where("expires_at", "!=", "")
-      .whereNull("hidden_everyone_at")
-      .whereRaw("julianday(expires_at) <= julianday(?)", [new Date().toISOString()])
-      .whereNotExists(
-        dbKnex("chat_message_files")
-          .select(1)
-          .whereRaw("chat_message_files.message_id = chat_messages.id"),
-      ),
-  );
-  const rows = Array.isArray(rawRows) ? rawRows : (await rawRows) || [];
-
-  const messageIds = rows.map((row) => row?.id).filter(Boolean);
-
-  if (!messageIds.length) {
-    return { removedMessages: 0 };
-  }
-
-  const deletedByChat = new Map();
-  rows.forEach((row) => {
-    const chatId = row?.chat_id;
-    const messageId = row?.id;
-    if (!chatId || !messageId) return;
-    const list = deletedByChat.get(chatId) || [];
-    list.push(messageId);
-    deletedByChat.set(chatId, list);
-  });
-
-  const unpinned = [];
-  adminRun("BEGIN");
-  try {
-    chunkArray(messageIds, 500).forEach((chunk) => {
-      adminRun(dbKnex("message_reactions").whereIn("message_id", chunk).del());
-      const removedPins = removePinsOfMessages({ adminGetAll, adminRun }, chunk);
-      if (Array.isArray(removedPins)) unpinned.push(...removedPins);
-      adminRun(dbKnex("chat_message_reads").whereIn("message_id", chunk).del());
-      adminRun(dbKnex("hidden_chat_messages").whereIn("message_id", chunk).del());
-      adminRun(dbKnex("chat_messages").whereIn("id", chunk).del());
-    });
-    adminRun("COMMIT");
-  } catch (error) {
-    adminRun("ROLLBACK");
-    throw error;
-  }
-
-  adminSave();
-  deletedByChat.forEach((ids, chatId) => {
-    emitChatEvent(chatId, {
-      type: "chat_message_deleted",
-      chatId: chatId,
-      messageIds: ids,
-    });
-  });
-  emitUnpinnedMessages(emitChatEvent, unpinned);
-
-  return { removedMessages: messageIds.length };
-}
-
-async function backfillTextMessageExpiry() {
-  const textRetentionDays = getSetting("MESSAGE_TEXT_RETENTION");
-  if (textRetentionDays <= 0) return 0;
-
-  const rawRow = adminGetRow(
-    dbKnex("chat_messages")
-      .count({ n: "*" })
-      .where((builder) => {
-        builder.whereNull("expires_at").orWhere("expires_at", "");
-      })
-      .whereNull("hidden_everyone_at")
-      .whereNotNull("body")
-      .whereRaw("TRIM(body) != ''")
-      .whereRaw("body NOT LIKE '[[system:%]]'")
-      .whereNotExists(
-        dbKnex("chat_message_files")
-          .select(1)
-          .whereRaw("chat_message_files.message_id = chat_messages.id"),
-      )
-      .first(),
-  );
-  const row = rawRow && typeof rawRow.then === "function" ? await rawRow : rawRow;
-
-  const pending = Number(row?.n || 0);
-  if (!pending) return 0;
-
-  adminRun(
-    dbKnex("chat_messages")
-      .where((builder) => {
-        builder.whereNull("expires_at").orWhere("expires_at", "");
-      })
-      .whereNull("hidden_everyone_at")
-      .whereNotNull("body")
-      .whereRaw("TRIM(body) != ''")
-      .whereRaw("body NOT LIKE '[[system:%]]'")
-      .whereNotExists(
-        dbKnex("chat_message_files")
-          .select(1)
-          .whereRaw("chat_message_files.message_id = chat_messages.id"),
-      )
-      .update({
-        expires_at: dbKnex.raw("datetime(created_at, '+' || ? || ' days')", [textRetentionDays]),
-      }),
-  );
-
-  adminSave();
-  return pending;
-}
+// MESSAGE_TEXT_RETENTION jobs (text messages and call history entries).
+const { backfillTextMessageExpiry, cleanupExpiredTextOnlyMessages } = createTextRetentionJobs({
+  getSetting,
+  adminGetRow,
+  adminGetAll,
+  adminRun,
+  adminSave,
+  emitChatEvent,
+});
 
 // Cleanup timers always run — each tick re-reads the live setting, so
 // enabling/disabling retention via the admin panel takes effect without a

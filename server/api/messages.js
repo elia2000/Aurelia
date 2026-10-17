@@ -13,6 +13,7 @@ import {
 import { summarizeReactionRows } from "../lib/reactions.js";
 import { isServiceMessageBody, parsePinServiceBody } from "../lib/serviceMessages.js";
 import { emitUnpinnedMessages } from "../lib/pins.js";
+import { isCallMessage, serializeCall } from "../lib/callMessages.js";
 
 function registerMessageRoutes(app, deps) {
   const {
@@ -468,13 +469,29 @@ function registerMessageRoutes(app, deps) {
         // "X pinned a message" entries carry their structured form; every
         // other message (and every other service message) has none.
         service: parsePinServiceBody(message.body, message.user_id),
+        // Call history entries ("Outgoing call 0:23", "Missed call") are
+        // messages with an empty body and a structured call; `messageType`
+        // is also on realtime events, where `type` is the event's own name.
+        call: serializeCall(message),
+        messageType: isCallMessage(message) ? "call" : "text",
+        ...(isCallMessage(message) ? { type: "call" } : {}),
         e2ee: safeParseStoredEnvelope(message.e2ee_envelope),
         // The sender of an encrypted message signed the chat it belongs to;
         // the recipient must know it to verify (message rows carry no chat id).
         ...(message.e2ee_envelope ? { chat_id: chatId } : {}),
         expiresAt: null,
       }))
-      .map(({ e2ee_envelope: _envelope, ...message }) => message)
+      .map(
+        ({
+          e2ee_envelope: _envelope,
+          // The call is sent structured (`call`), not as raw columns.
+          call_id: _callId,
+          call_kind: _callKind,
+          call_outcome: _callOutcome,
+          call_duration_sec: _callDurationSec,
+          ...message
+        }) => message,
+      )
       .map((message) => ({
         ...message,
         expiresAt:
@@ -971,7 +988,7 @@ function registerMessageRoutes(app, deps) {
         }
         if (replyToMessageId) {
           const replyTarget = await resolveMaybePromise(findMessageById(replyToMessageId));
-          if (!replyTarget || replyTarget.chat_id !== chatId) {
+          if (!replyTarget || replyTarget.chat_id !== chatId || isCallMessage(replyTarget)) {
             removeUploadedFiles(uploadedFiles);
             return res
               .status(400)
@@ -992,6 +1009,10 @@ function registerMessageRoutes(app, deps) {
             return res.status(403).json({
               error: "Only the message author can edit this message.",
             });
+          }
+          if (isCallMessage(editTarget)) {
+            removeUploadedFiles(uploadedFiles);
+            return res.status(400).json({ error: "This message cannot be edited." });
           }
         }
 
@@ -1839,7 +1860,8 @@ function registerMessageRoutes(app, deps) {
     if (replyToMessageId) {
       const rawReplyTarget = findMessageById(replyToMessageId);
       const replyTarget = rawReplyTarget && typeof rawReplyTarget.then === "function" ? await rawReplyTarget : rawReplyTarget;
-      if (!replyTarget || replyTarget.chat_id !== chatId) {
+      // A call history entry has no text to quote.
+      if (!replyTarget || replyTarget.chat_id !== chatId || isCallMessage(replyTarget)) {
         return res
           .status(400)
           .json({ error: "Reply target is not available in this chat." });
@@ -1960,7 +1982,7 @@ function registerMessageRoutes(app, deps) {
     if (!isMessageAuthoredByUser(message, user.id)) {
       return res.status(403).json({ error: "Only the author can edit this message." });
     }
-    if (isServiceMessageBody(message.body)) {
+    if (isServiceMessageBody(message.body) || isCallMessage(message)) {
       return res.status(400).json({ error: "This message cannot be edited." });
     }
 
@@ -2012,6 +2034,13 @@ function registerMessageRoutes(app, deps) {
       : "self";
 
     if (deleteScope === "everyone") {
+      // A call history entry is each person's own record of the call.
+      if (isCallMessage(message)) {
+        return res.status(400).json({
+          error: "Call entries can only be deleted for yourself.",
+          code: "call_message_self_only",
+        });
+      }
       const rawChat = findChatById(chatId);
       const chat = rawChat && typeof rawChat.then === "function" ? await rawChat : rawChat;
       if (!chat) {
@@ -2103,7 +2132,7 @@ function registerMessageRoutes(app, deps) {
     if (!memberCheck) {
       return res.status(403).json({ error: "You cannot forward from this chat." });
     }
-    if (isServiceMessageBody(sourceMessage.body)) {
+    if (isServiceMessageBody(sourceMessage.body) || isCallMessage(sourceMessage)) {
       return res.status(400).json({ error: "This message cannot be forwarded." });
     }
     const rawSourceChat = findChatById(sourceMessage.chat_id);

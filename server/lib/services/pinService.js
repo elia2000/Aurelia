@@ -13,6 +13,7 @@ import {
   chatTypeGetsPinServiceMessage,
   clampMaxPinnedMessages,
 } from "../pins.js";
+import { isCallMessage } from "../callMessages.js";
 import { buildPinServiceBody, isServiceMessageBody } from "../serviceMessages.js";
 
 const maybe = async (value) =>
@@ -149,7 +150,7 @@ export function createPinService(deps) {
     ) {
       return fail(404, "Message not found.");
     }
-    if (isServiceMessageBody(message.body)) {
+    if (isServiceMessageBody(message.body) || isCallMessage(message)) {
       return fail(400, "This message cannot be pinned.");
     }
 

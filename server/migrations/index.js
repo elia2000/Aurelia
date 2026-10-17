@@ -44,6 +44,7 @@ import { migration043MessageE2eeEnvelope } from "./043-message-e2ee-envelope.js"
 import { migration044MessageReactions } from "./044-message-reactions.js";
 import { migration045MessagePins } from "./045-message-pins.js";
 import { migration046ChatPins } from "./046-chat-pins.js";
+import { migration047CallMessages } from "./047-call-messages.js";
 
 export const migrations = [
   migration001InitialSchema,
@@ -92,4 +93,5 @@ export const migrations = [
   migration044MessageReactions,
   migration045MessagePins,
   migration046ChatPins,
+  migration047CallMessages,
 ];
