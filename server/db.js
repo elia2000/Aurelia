@@ -9,7 +9,7 @@ import { dbKnex } from "./db/knex.js";
 import { normalizeSqlForPostgres } from "./lib/sqlNormalizer.js";
 import { migrations } from "./migrations/index.js";
 import { setUserColor } from "./settings/colors.js";
-import { generateUuid } from "./lib/uuidUtils.js";
+import { generateUuid, isValidUuid } from "./lib/uuidUtils.js";
 import { storageEncryption } from "./lib/storageEncryption.js";
 import { ensureSystemSecrets } from "./lib/secrets.js";
 import { REACTION_USERS_CAP, planReactionChange } from "./lib/reactions.js";
@@ -2533,9 +2533,12 @@ export function createMessage(
   replyToMessageId = null,
   expiresAt = null,
   clientRequestId = null,
-  { allowPlaintextSystemMessage = false } = {},
+  { allowPlaintextSystemMessage = false, id: requestedId = null } = {},
 ) {
-  const id = generateUuid();
+  // A caller that writes several messages at once (multi-select forward) hands
+  // in ascending ids so that messages created in the same second keep their
+  // order: a chat sorts equal times by id.
+  const id = isValidUuid(requestedId) ? String(requestedId).trim() : generateUuid();
   const storedBody = storageEncryption.encryptText(body, {
     allowPlaintextSystemMessage,
   });
@@ -2884,31 +2887,34 @@ export function ensureSavedChatForUser(userId) {
   return processExisting(rawExisting);
 }
 
+// What a single message lookup returns (findMessageById / findMessagesByIds).
+const MESSAGE_LOOKUP_COLUMNS = [
+  "id",
+  "chat_id",
+  "user_id",
+  "body",
+  "edited",
+  "edited_body",
+  "hidden_everyone_at",
+  "forwarded_from_chat_id",
+  "forwarded_from_label",
+  "forwarded_from_user_id",
+  "forwarded_from_username",
+  "forwarded_from_avatar_url",
+  "forwarded_from_color",
+  "created_at",
+  "expires_at",
+  "e2ee_envelope",
+  "call_id",
+  "call_kind",
+  "call_outcome",
+  "call_duration_sec",
+];
+
 export function findMessageById(messageId) {
   const rawRow = getRow(
     dbKnex("chat_messages")
-      .select(
-        "id",
-        "chat_id",
-        "user_id",
-        "body",
-        "edited",
-        "edited_body",
-        "hidden_everyone_at",
-        "forwarded_from_chat_id",
-        "forwarded_from_label",
-        "forwarded_from_user_id",
-        "forwarded_from_username",
-        "forwarded_from_avatar_url",
-        "forwarded_from_color",
-        "created_at",
-        "expires_at",
-        "e2ee_envelope",
-        "call_id",
-        "call_kind",
-        "call_outcome",
-        "call_duration_sec",
-      )
+      .select(...MESSAGE_LOOKUP_COLUMNS)
       .where("id", messageId)
       .first(),
   );
@@ -2916,6 +2922,28 @@ export function findMessageById(messageId) {
     return rawRow.then(decryptMessageRow);
   }
   return decryptMessageRow(rawRow);
+}
+
+/**
+ * Several messages by id in one query (the multi-select forward and delete
+ * look up to 100 at once). Same columns as findMessageById, decrypted, in no
+ * particular order; ids that do not exist are simply missing. Messages deleted
+ * for everyone are included, like findMessageById does: the caller decides.
+ */
+export function findMessagesByIds(messageIds = []) {
+  const ids = Array.from(
+    new Set((Array.isArray(messageIds) ? messageIds : []).filter(Boolean)),
+  );
+  if (!ids.length) return isPostgresMode() ? Promise.resolve([]) : [];
+  const rawRows = getAll(
+    dbKnex("chat_messages")
+      .select(...MESSAGE_LOOKUP_COLUMNS)
+      .whereIn("id", ids),
+  );
+  if (rawRows && typeof rawRows.then === "function") {
+    return rawRows.then((rows) => (rows || []).map(decryptMessageRow));
+  }
+  return (rawRows || []).map(decryptMessageRow);
 }
 
 export function setMessageExpiresAt(messageId, expiresAt = null) {
@@ -3654,6 +3682,23 @@ export function isMessageHiddenForUser(messageId, userId) {
     return row.then((resolved) => Boolean(resolved));
   }
   return Boolean(row);
+}
+
+/**
+ * Which of these messages did `userId` remove from their own view? One query:
+ * `[{ message_id }]`.
+ */
+export function listMessageIdsHiddenForUser(messageIds = [], userId) {
+  const ids = Array.from(
+    new Set((Array.isArray(messageIds) ? messageIds : []).filter(Boolean)),
+  );
+  if (!userId || !ids.length) return isPostgresMode() ? Promise.resolve([]) : [];
+  return getAll(
+    dbKnex("hidden_chat_messages")
+      .select("message_id")
+      .where("user_id", userId)
+      .whereIn("message_id", ids),
+  );
 }
 
 // Reaction timestamps decide which of a person's reactions is the oldest and

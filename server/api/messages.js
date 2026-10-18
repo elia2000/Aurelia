@@ -21,6 +21,15 @@ import {
   isAnimationCandidate,
 } from "../lib/animatedImage.js";
 import { createSavedGifService } from "../lib/services/savedGifService.js";
+import { createMessageForwardService } from "../lib/services/messageForwardService.js";
+import { createMessageDeleteService } from "../lib/services/messageDeleteService.js";
+import {
+  FORWARD_MAX_CREATED_MESSAGES,
+  FORWARD_MAX_TARGET_CHATS,
+  commonFailureStatus,
+  parseMessageIdList,
+} from "../lib/batchMessages.js";
+import { isValidUuid } from "../lib/uuidUtils.js";
 
 function registerMessageRoutes(app, deps) {
   const {
@@ -29,7 +38,6 @@ function registerMessageRoutes(app, deps) {
     cleanupMissingMessageFiles,
     computeExpiryIso,
     crypto,
-    createMessage,
     createOrReuseMessage,
     createMessageFiles,
     editMessage,
@@ -43,12 +51,9 @@ function registerMessageRoutes(app, deps) {
     findChatById,
     findMessageIdByClientRequestId,
     findMessageById,
-    findUserById,
     findUserByUsername,
     getMessages,
     getFirstUnreadMessage,
-    hideMessageForEveryone,
-    hideMessageForUser,
     getMessageReadCounts,
     getMessageAuthors,
     getMessageReadByUser,
@@ -77,7 +82,6 @@ function registerMessageRoutes(app, deps) {
     setMessageExpiresAt,
     setMessageForwardOrigin,
     storageEncryption,
-    unhideChat,
     uploadFiles,
     uploadRootDir,
     enqueueVideoTranscodeJob,
@@ -87,7 +91,6 @@ function registerMessageRoutes(app, deps) {
     setMessageE2eeEnvelope,
     listMessageReactionSummaries,
     listPinnedMessageIds,
-    unpinMessage,
   } = deps;
 
   const safeBasename = (p) => {
@@ -162,6 +165,15 @@ function registerMessageRoutes(app, deps) {
     ).toISOString();
   };
 
+  // Forwarding and deleting, one message or many: the same code judges and
+  // handles each message whichever way it was asked for (lib/services).
+  const forwardService = createMessageForwardService(deps, { computeTextExpiryIso });
+  const deleteService = createMessageDeleteService(deps);
+  // Limits are per signed-in person, one token per request however many
+  // messages it names (see lib/throttle.js).
+  const forwardThrottle = createThrottle({ windowMs: 60 * 1000, max: 30 });
+  const deleteThrottle = createThrottle({ windowMs: 60 * 1000, max: 120 });
+
   const canUserPostInChat = async (chatId, userId, chat = null) => {
     const rawChat = chat || findChatById(chatId);
     const resolvedChat = rawChat && typeof rawChat.then === "function" ? await rawChat : rawChat;
@@ -201,91 +213,6 @@ function registerMessageRoutes(app, deps) {
   const isMessageAuthoredByUser = (message, userId) =>
     String(message?.user_id || "") === String(userId) &&
     !isRemoteChannelMessage(message);
-
-  const normalizeForwardOriginAvatarUrl = (userId, avatarUrl) => {
-    const normalized = ensureAvatarExists(userId, avatarUrl);
-    return String(normalized || "").trim() || null;
-  };
-
-  const deriveForwardOrigin = async (sourceMessage, sourceChat) => {
-    if (String(sourceChat?.type || "").toLowerCase() === "channel") {
-      const label =
-        String(sourceChat?.name || "").trim() ||
-        String(sourceChat?.group_username || "").trim() ||
-        "Channel";
-      return {
-        sourceChatId: sourceChat?.id || null,
-        label,
-        sourceUserId: null,
-        sourceUsername: null,
-        sourceAvatarUrl: null,
-        sourceColor: null,
-      };
-    }
-
-    const sourceUserRaw = findUserById(sourceMessage?.user_id);
-    const sourceUser = sourceUserRaw && typeof sourceUserRaw.then === "function"
-      ? await sourceUserRaw
-      : sourceUserRaw;
-    const sourceUserId = sourceUser?.id || sourceMessage?.user_id || null;
-    const sourceUsername = String(sourceUser?.username || "").trim() || null;
-    const label =
-      String(sourceUser?.nickname || "").trim() ||
-      String(sourceUser?.username || "").trim() ||
-      "Deleted user";
-
-    return {
-      sourceChatId: null,
-      label,
-      sourceUserId,
-      sourceUsername,
-      sourceAvatarUrl: sourceUser
-        ? normalizeForwardOriginAvatarUrl(sourceUser.id, sourceUser.avatar_url)
-        : null,
-      sourceColor: String(sourceUser?.color || "").trim() || null,
-    };
-  };
-
-  const reuseMessageFilesForForward = async (sourceMessageId, targetMessageId) => {
-    const rawSourceFiles = listMessageFilesByMessageIds([sourceMessageId]);
-    const sourceFiles = rawSourceFiles && typeof rawSourceFiles.then === "function"
-      ? await rawSourceFiles
-      : rawSourceFiles;
-    if (!sourceFiles?.length) return [];
-
-    const reusedFiles = sourceFiles.flatMap((file) => {
-      const storedName = safeBasename(String(file?.stored_name || "").trim());
-      if (!storedName) return [];
-      const sourcePath = path.join(uploadRootDir, storedName);
-      if (!fs.existsSync(sourcePath)) return [];
-
-      return [
-        {
-          kind: file.kind,
-          originalName: file.original_name,
-          storedName,
-          mimeType: file.mime_type,
-          sizeBytes: Number(file.size_bytes || 0),
-          widthPx: Number.isFinite(Number(file.width_px)) ? Number(file.width_px) : null,
-          heightPx: Number.isFinite(Number(file.height_px)) ? Number(file.height_px) : null,
-          durationSeconds: Number.isFinite(Number(file.duration_seconds))
-            ? Number(file.duration_seconds)
-            : null,
-          expiresAt: file.expires_at || null,
-          isAnimated: animationFlags(file).isAnimated,
-        },
-      ];
-    });
-
-    if (reusedFiles.length) {
-      const rawCreatedFiles = createMessageFiles(targetMessageId, reusedFiles);
-      if (rawCreatedFiles && typeof rawCreatedFiles.then === "function") {
-        await rawCreatedFiles;
-      }
-    }
-
-    return reusedFiles;
-  };
 
   app.get("/api/messages", async (req, res) => {
     const session = await requireSession(req, res);
@@ -2078,251 +2005,215 @@ function registerMessageRoutes(app, deps) {
     res.json({ ok: true, id: messageId });
   });
 
-  app.post("/api/messages/delete", validateUuidBody([{ field: "chatId", required: true }, { field: "messageId", required: true }]), async (req, res) => {
+  // ── Delete and forward: one message or many ──────────────────────────────
+  //
+  // A multi-select request names `messageIds` / `sourceMessageIds` (1 to
+  // BATCH_MESSAGE_LIMIT); the older single request names one `messageId` /
+  // `sourceMessageId` and keeps its answers exactly. Both are handled by the
+  // services in lib/services, so every message gets the same checks.
+
+  const hasValue = (value) => value !== undefined && value !== null && value !== "";
+  const publicFailure = ({ sourceMessageId, targetChatId, code, error }) => ({
+    sourceMessageId,
+    ...(targetChatId ? { targetChatId } : {}),
+    code,
+    error,
+  });
+
+  const validateDeleteChatOnly = validateUuidBody([{ field: "chatId", required: true }]);
+  const validateDeleteSingle = validateUuidBody([
+    { field: "chatId", required: true },
+    { field: "messageId", required: true },
+  ]);
+  const validateDeleteRequest = (req, res, next) =>
+    (hasValue(req.body?.messageIds) ? validateDeleteChatOnly : validateDeleteSingle)(req, res, next);
+
+  app.post("/api/messages/delete", validateDeleteRequest, async (req, res) => {
     const session = await requireSession(req, res);
     if (!session) return;
 
-    const { chatId, username, messageId, scope } = req.body || {};
-    if (!chatId || !username || !messageId) {
+    const { chatId, username, messageId, messageIds, scope } = req.body || {};
+    const isBatch = hasValue(messageIds);
+    if (!chatId || !username || (!isBatch && !messageId)) {
       return res.status(400).json({
-        error: "Chat, username, and message id are required.",
+        error: isBatch
+          ? "Chat, username, and message ids are required."
+          : "Chat, username, and message id are required.",
+      });
+    }
+    if (isBatch && hasValue(messageId)) {
+      return res.status(400).json({
+        error: "Send either 'messageId' or 'messageIds', not both.",
       });
     }
     if (!requireSessionUsernameMatch(res, session, username)) return;
 
-    const rawUser = findUserByUsername(String(username || "").toLowerCase());
-    const user = rawUser && typeof rawUser.then === "function" ? await rawUser : rawUser;
-    if (!user) {
-      return res.status(404).json({ error: "User not found." });
-    }
-    const rawIsMem = isMember(chatId, user.id);
-    const memberCheck = rawIsMem && typeof rawIsMem.then === "function" ? await rawIsMem : rawIsMem;
-    if (!memberCheck) {
-      return res.status(403).json({ error: "Not a member of this chat." });
-    }
-    const rawMessage = findMessageById(messageId);
-    const message = rawMessage && typeof rawMessage.then === "function" ? await rawMessage : rawMessage;
-    if (!message || message.chat_id !== chatId) {
-      return res.status(404).json({ error: "Message not found." });
+    let ids = [messageId];
+    if (isBatch) {
+      const parsed = parseMessageIdList(messageIds, "messageIds");
+      if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+      ids = parsed.ids;
     }
 
-    const deleteScope = String(scope || "").toLowerCase() === "everyone"
-      ? "everyone"
-      : "self";
+    try {
+      const rawUser = findUserByUsername(String(username || "").toLowerCase());
+      const user = rawUser && typeof rawUser.then === "function" ? await rawUser : rawUser;
+      if (!user) {
+        return res.status(404).json({ error: "User not found." });
+      }
+      // Banning ends a person's sessions, but a request already in flight must
+      // not get through. (Postgres returns BIGINT as a string.)
+      if (Number(user.banned)) {
+        return res.status(403).json({ error: "Account is banned." });
+      }
+      if (!deleteThrottle.take(String(user.id))) {
+        return res.status(429).json({ error: "Too many delete requests. Please slow down." });
+      }
 
-    if (deleteScope === "everyone") {
-      // A call history entry is each person's own record of the call.
-      if (isCallMessage(message)) {
-        return res.status(400).json({
-          error: "Call entries can only be deleted for yourself.",
-          code: "call_message_self_only",
-        });
-      }
-      const rawChat = findChatById(chatId);
-      const chat = rawChat && typeof rawChat.then === "function" ? await rawChat : rawChat;
-      if (!chat) {
-        return res.status(404).json({ error: "Chat not found." });
-      }
-      const rawRole = getChatMemberRole(chatId, user.id);
-      const role = String(rawRole && typeof rawRole.then === "function" ? await rawRole : rawRole).toLowerCase();
-      const rawCanPost = canUserPostInChat(chatId, user.id, chat);
-      const canPost = rawCanPost && typeof rawCanPost.then === "function" ? await rawCanPost : rawCanPost;
-      const canDeleteForEveryone =
-        canPost &&
-        (message.user_id === user.id || role === "owner");
-      if (!canDeleteForEveryone) {
-        return res.status(403).json({
-          error: "You cannot delete this message for everyone.",
-        });
-      }
-      const h = hideMessageForEveryone(message.id);
-      if (h && typeof h.then === "function") await h;
-      // A message that is gone for everyone cannot stay pinned.
-      let wasPinned = false;
-      if (typeof unpinMessage === "function") {
-        try {
-          const rawRemoved = unpinMessage(chatId, message.id);
-          wasPinned = Number(rawRemoved && typeof rawRemoved.then === "function" ? await rawRemoved : rawRemoved) > 0;
-        } catch (error) {
-          console.error("POST /api/messages/delete unpin ERROR:", error);
-        }
-      }
-      emitChatEvent(chatId, {
-        type: "chat_message_deleted",
+      const outcome = await deleteService.deleteMessages({
+        user,
         chatId,
-        messageIds: [message.id],
+        messageIds: ids,
+        scope,
       });
-      if (wasPinned) {
-        emitChatEvent(chatId, {
-          type: "message_unpinned",
-          chatId,
-          messageId: message.id,
-        });
+      if (!outcome.ok) {
+        return res.status(outcome.status).json({ error: outcome.error });
       }
-      return res.json({ ok: true, scope: "everyone", id: message.id });
-    }
 
-    const hSelf = hideMessageForUser(message.id, user.id);
-    if (hSelf && typeof hSelf.then === "function") await hSelf;
-    return res.json({ ok: true, scope: "self", id: message.id });
+      if (!isBatch) {
+        const [result] = outcome.results;
+        if (!result.ok) {
+          // The one answer the single request has always carried a code for.
+          return res.status(result.status).json({
+            error: result.error,
+            ...(result.code === "call_message_self_only" ? { code: result.code } : {}),
+          });
+        }
+        return res.json({ ok: true, scope: outcome.scope, id: messageId });
+      }
+
+      const results = outcome.results.map((result) =>
+        result.ok
+          ? { messageId: result.messageId, ok: true }
+          : { messageId: result.messageId, ok: false, code: result.code, error: result.error },
+      );
+      if (results.every((result) => !result.ok)) {
+        // Nothing could be deleted: an error, with the reasons attached.
+        const status = commonFailureStatus(outcome.results.map((result) => result.status));
+        return res.status(status).json({ error: results[0].error, results });
+      }
+      return res.json({ results });
+    } catch (error) {
+      console.error("POST /api/messages/delete ERROR:", error);
+      return res.status(500).json({ error: "Unable to delete message." });
+    }
   });
 
-  app.post("/api/messages/forward", validateUuidBody([{ field: "sourceMessageId", required: true }]), async (req, res) => {
+  const validateForwardSingleId = validateUuidBody([
+    { field: "sourceMessageId", required: true },
+  ]);
+  const validateForwardRequest = (req, res, next) =>
+    hasValue(req.body?.sourceMessageIds)
+      ? next()
+      : validateForwardSingleId(req, res, next);
+
+  app.post("/api/messages/forward", validateForwardRequest, async (req, res) => {
     const session = await requireSession(req, res);
     if (!session) return;
 
     const {
       username,
       sourceMessageId,
+      sourceMessageIds,
       targetChatIds = [],
       body,
     } = req.body || {};
-    if (!username || !sourceMessageId || !Array.isArray(targetChatIds) || !targetChatIds.length) {
+    const isBatch = hasValue(sourceMessageIds);
+    if (!username || !Array.isArray(targetChatIds) || !targetChatIds.length) {
       return res.status(400).json({
         error: "Username, source message, and target chats are required.",
       });
     }
-    if (!requireSessionUsernameMatch(res, session, username)) return;
-
-    const rawUser = findUserByUsername(String(username || "").toLowerCase());
-    const user = rawUser && typeof rawUser.then === "function" ? await rawUser : rawUser;
-    if (!user) {
-      return res.status(404).json({ error: "User not found." });
-    }
-
-    const rawSourceMessage = findMessageById(sourceMessageId);
-    const sourceMessage = rawSourceMessage && typeof rawSourceMessage.then === "function" ? await rawSourceMessage : rawSourceMessage;
-    if (!sourceMessage) {
-      return res.status(404).json({ error: "Source message not found." });
-    }
-    if (sourceMessage.hidden_everyone_at) {
-      return res.status(410).json({ error: "Source message is no longer available." });
-    }
-    if (sourceMessage.e2ee_envelope) {
-      // The content key is wrapped for the original chat's devices only.
+    if (isBatch && hasValue(sourceMessageId)) {
       return res.status(400).json({
-        error: "End-to-end encrypted messages cannot be forwarded.",
+        error: "Send either 'sourceMessageId' or 'sourceMessageIds', not both.",
       });
     }
-    const rawIsMem = isMember(sourceMessage.chat_id, user.id);
-    const memberCheck = rawIsMem && typeof rawIsMem.then === "function" ? await rawIsMem : rawIsMem;
-    if (!memberCheck) {
-      return res.status(403).json({ error: "You cannot forward from this chat." });
-    }
-    if (isServiceMessageBody(sourceMessage.body) || isCallMessage(sourceMessage)) {
-      return res.status(400).json({ error: "This message cannot be forwarded." });
-    }
-    const rawSourceChat = findChatById(sourceMessage.chat_id);
-    const sourceChat = rawSourceChat && typeof rawSourceChat.then === "function"
-      ? await rawSourceChat
-      : rawSourceChat;
-    if (!sourceChat) {
-      return res.status(404).json({ error: "Source chat not found." });
-    }
-    const forwardOrigin = await deriveForwardOrigin(sourceMessage, sourceChat);
+    if (!requireSessionUsernameMatch(res, session, username)) return;
 
-    const forwardBody = String(body || "");
-    if (!forwardBody.trim()) {
-      return res.status(400).json({ error: "Forwarded message body is required." });
-    }
-    if (isServiceMessageBody(forwardBody)) {
-      return res.status(400).json({ error: "Invalid message body." });
+    let sourceIds = [sourceMessageId];
+    if (isBatch) {
+      const parsed = parseMessageIdList(sourceMessageIds, "sourceMessageIds");
+      if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+      sourceIds = parsed.ids;
     }
 
+    if (targetChatIds.some((id) => typeof id !== "string" || !isValidUuid(id))) {
+      return res.status(400).json({ error: "Field 'targetChatIds' contains an invalid UUID." });
+    }
     const uniqueTargetChatIds = Array.from(
-      new Set(
-        targetChatIds
-          .map((id) => String(id || "").trim())
-          .filter(Boolean),
-      ),
+      new Set(targetChatIds.map((id) => id.trim()).filter(Boolean)),
     );
     if (!uniqueTargetChatIds.length) {
       return res.status(400).json({ error: "Choose at least one target chat." });
     }
-
-    const rawSourceFiles = listMessageFilesByMessageIds([sourceMessage.id]);
-    const sourceFiles = rawSourceFiles && typeof rawSourceFiles.then === "function"
-      ? await rawSourceFiles
-      : rawSourceFiles;
-    const forwardExpiresAt = sourceFiles?.length
-      ? null
-      : computeTextExpiryIso(new Date().toISOString());
-
-    const forwardedIds = [];
-    for (const targetChatId of uniqueTargetChatIds) {
-      const rawMemberCheck = isMember(targetChatId, user.id);
-      const targetMemberCheck = rawMemberCheck && typeof rawMemberCheck.then === "function"
-        ? await rawMemberCheck
-        : rawMemberCheck;
-      if (!targetMemberCheck) {
-        return res.status(403).json({ error: "Cannot send to one or more selected chats." });
-      }
-      const rawTargetChat = findChatById(targetChatId);
-      const targetChat = rawTargetChat && typeof rawTargetChat.then === "function"
-        ? await rawTargetChat
-        : rawTargetChat;
-      if (!targetChat) {
-        return res.status(404).json({ error: "One of the selected chats was not found." });
-      }
-      if (String(targetChat.type || "").toLowerCase() === "channel") {
-        const rawRole = getChatMemberRole(targetChatId, user.id);
-        const role = String(rawRole && typeof rawRole.then === "function" ? await rawRole : rawRole).toLowerCase();
-        if (role !== "owner") {
-          return res.status(403).json({
-            error: "You can only forward to channels you own.",
-          });
-        }
-      }
-
-      const rawNextMessageId = createMessage(
-        targetChatId,
-        user.id,
-        forwardBody,
-        null,
-        forwardExpiresAt,
-      );
-      const nextMessageId = rawNextMessageId && typeof rawNextMessageId.then === "function"
-        ? await rawNextMessageId
-        : rawNextMessageId;
-      if (!nextMessageId) {
-        return res.status(500).json({ error: "Unable to forward message." });
-      }
-      await setMessageForwardOrigin(nextMessageId, {
-        sourceChatId: forwardOrigin.sourceChatId,
-        label: forwardOrigin.label,
-        sourceUserId: forwardOrigin.sourceUserId,
-        sourceUsername: forwardOrigin.sourceUsername,
-        sourceAvatarUrl: forwardOrigin.sourceAvatarUrl,
-        sourceColor: forwardOrigin.sourceColor,
+    if (uniqueTargetChatIds.length > FORWARD_MAX_TARGET_CHATS) {
+      return res.status(400).json({
+        error: `You can forward to at most ${FORWARD_MAX_TARGET_CHATS} chats at once.`,
       });
-      await reuseMessageFilesForForward(sourceMessage.id, nextMessageId);
-      const isSavedTargetChat = String(targetChat.type || "").toLowerCase() === "saved";
-      if (isSavedTargetChat) {
-        const rawRead = markMessageRead(nextMessageId, user.id);
-        if (rawRead && typeof rawRead.then === "function") await rawRead;
-        const rawUnhide = unhideChat(user.id, targetChatId);
-        if (rawUnhide && typeof rawUnhide.then === "function") await rawUnhide;
-      }
-
-      emitChatEvent(targetChatId, {
-        type: "chat_message",
-        chatId: targetChatId,
-        messageId: nextMessageId,
-        username: user.username,
-        userId: user.id,
-        body: forwardBody,
-        replyToMessageId: null,
-        ...(isSavedTargetChat
-          ? {
-              read_at: new Date().toISOString(),
-              read_by_user_id: user.id,
-            }
-          : {}),
+    }
+    if (sourceIds.length * uniqueTargetChatIds.length > FORWARD_MAX_CREATED_MESSAGES) {
+      return res.status(400).json({
+        error: `A single request can create at most ${FORWARD_MAX_CREATED_MESSAGES} forwarded messages. Forward fewer messages or to fewer chats.`,
       });
-      forwardedIds.push(nextMessageId);
     }
 
-    return res.json({ ok: true, ids: forwardedIds });
+    try {
+      const rawUser = findUserByUsername(String(username || "").toLowerCase());
+      const user = rawUser && typeof rawUser.then === "function" ? await rawUser : rawUser;
+      if (!user) {
+        return res.status(404).json({ error: "User not found." });
+      }
+      if (Number(user.banned)) {
+        return res.status(403).json({ error: "Account is banned." });
+      }
+      if (!forwardThrottle.take(String(user.id))) {
+        return res.status(429).json({ error: "Too many forward requests. Please slow down." });
+      }
+
+      const outcome = await forwardService.forward({
+        user,
+        sourceMessageIds: sourceIds,
+        targetChatIds: uniqueTargetChatIds,
+        // A multi-select request forwards each message with its own text; the
+        // single request brings the text along (as it always has).
+        clientBody: isBatch ? null : String(body || ""),
+      });
+      if (!outcome.ok) {
+        return res.status(outcome.status).json({ error: outcome.error });
+      }
+      const { forwarded, failed } = outcome;
+
+      if (!isBatch) {
+        if (failed.length) {
+          return res.status(failed[0].status).json({ error: failed[0].error });
+        }
+        return res.json({ ok: true, ids: forwarded.map((message) => message.id) });
+      }
+
+      if (!forwarded.length) {
+        // Nothing could be forwarded: an error, with the reasons attached.
+        return res.status(commonFailureStatus(failed.map((entry) => entry.status))).json({
+          error: failed[0]?.error || "Unable to forward message.",
+          forwarded: [],
+          failed: failed.map(publicFailure),
+        });
+      }
+      return res.json({ forwarded, failed: failed.map(publicFailure) });
+    } catch (error) {
+      console.error("POST /api/messages/forward ERROR:", error);
+      return res.status(500).json({ error: "Unable to forward message." });
+    }
   });
 }
 

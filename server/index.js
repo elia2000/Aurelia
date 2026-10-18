@@ -178,6 +178,8 @@ import {
   dbDeleteSetting,
   dbGetSetting,
   isMessageHiddenForUser,
+  findMessagesByIds,
+  listMessageIdsHiddenForUser,
   listMessageReactionSummaries,
   listMessageReactionUsers,
   toggleMessageReaction,
@@ -1229,6 +1231,12 @@ const remoteChannelManager = createRemoteChannelManager({
 
 apiDeps.remoteChannelManager = remoteChannelManager;
 apiDeps.mirrorJobRegistry = mirrorJobRegistry;
+
+// Multi-select forward and delete look messages up in bulk.
+Object.assign(apiDeps, {
+  findMessagesByIds,
+  listMessageIdsHiddenForUser,
+});
 
 // Message reactions.
 Object.assign(apiDeps, {
