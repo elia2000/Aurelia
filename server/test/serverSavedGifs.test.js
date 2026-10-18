@@ -13,6 +13,10 @@ import { buildGif, buildJpeg } from "./helpers/imageBytes.js";
 // storage, so only this proves that GIFs are connected end to end - uploaded
 // and kept animated, saved per person, evicted oldest first, sent as copies and
 // deleted with the account.
+//
+// It runs on SQLite. To run the same flow on PostgreSQL, point POSTGRES_HOST,
+// POSTGRES_PORT, POSTGRES_USER, POSTGRES_PASSWORD and POSTGRES_DB at a scratch
+// database and set SONGBIRD_TEST_DB_CLIENT=postgres.
 
 const serverDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -133,7 +137,7 @@ describe("saved GIFs on the real server", () => {
         SERVER_PORT: String(port),
         BIND_ADDRESS: "127.0.0.1",
         DATA_DIR: dataDir,
-        DB_CLIENT: "sqlite3",
+        DB_CLIENT: process.env.SONGBIRD_TEST_DB_CLIENT || "sqlite3",
         NODE_ENV: "development",
         MAX_SAVED_GIFS: String(LIMIT),
         STORAGE_DRIVER: "local",
