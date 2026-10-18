@@ -1,6 +1,7 @@
 import { normalizeHexColor, normalizeGroupUsername, normalizeVisibility, normalizeChatType } from "../lib/dbToolHelpers.js";
 import { createInviteToken } from "../lib/inviteTokens.js";
 import { validateUuidParams } from "../lib/uuidMiddleware.js";
+import { removeSavedGifFilesQuietly } from "../lib/savedGifCleanup.js";
 import { isValidUuid, generateUuid } from "../lib/uuidUtils.js";
 import { normalizeSongbirdSource, normalizeTelegramSource, resolveSongbirdSource } from "../lib/remoteChannels.js";
 import { readInstallerLog, readNginxLog, readServiceLog, readWorkerLog, probeLogSources } from "../lib/systemLogs.js";
@@ -998,10 +999,12 @@ function registerAdminPanelRoutes(app, deps) {
     }
 
     const rawDeletion = adminDeleteUser(userId);
-    const { storedNames } = rawDeletion && typeof rawDeletion.then === "function"
+    const { storedNames, savedGifs } = rawDeletion && typeof rawDeletion.then === "function"
       ? await rawDeletion
       : rawDeletion || {};
     if (Array.isArray(storedNames) && storedNames.length > 0) removeStoredFileNames(storedNames);
+    // Their private GIF collection goes with them, files included.
+    await removeSavedGifFilesQuietly(deps.savedGifStorage, savedGifs);
     if (user?.avatar_url) removeAvatarByUrl(user.avatar_url);
     log(session, "user.delete", { targetType: "user", targetLabel: `@${user.username}` });
     res.json({ ok: true });
@@ -1692,8 +1695,9 @@ function registerAdminPanelRoutes(app, deps) {
       return res.status(400).json({ error: "Confirmation phrase required." });
     }
     try {
-      const { storedNames } = (await resolveMaybePromise(adminResetDatabase())) || {};
+      const { storedNames, savedGifs } = (await resolveMaybePromise(adminResetDatabase())) || {};
       if (Array.isArray(storedNames) && storedNames.length > 0) removeStoredFileNames(storedNames);
+      await removeSavedGifFilesQuietly(deps.savedGifStorage, savedGifs);
       log(session, "db.reset", { targetType: "system", details: `${storedNames?.length || 0} files removed` });
       broadcastAll({ type: "session_revoked" });
       res.json({ ok: true });

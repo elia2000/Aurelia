@@ -45,6 +45,7 @@ import { migration044MessageReactions } from "./044-message-reactions.js";
 import { migration045MessagePins } from "./045-message-pins.js";
 import { migration046ChatPins } from "./046-chat-pins.js";
 import { migration047CallMessages } from "./047-call-messages.js";
+import { migration048SavedGifs } from "./048-saved-gifs.js";
 
 export const migrations = [
   migration001InitialSchema,
@@ -94,4 +95,5 @@ export const migrations = [
   migration045MessagePins,
   migration046ChatPins,
   migration047CallMessages,
+  migration048SavedGifs,
 ];

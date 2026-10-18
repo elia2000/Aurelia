@@ -9,6 +9,7 @@ import { resolveWebhookCallbackUrl } from "../lib/webhookUrl.js";
 import { resolveThumbUrl } from "../lib/thumbUrl.js";
 import { isSafeStorageKey } from "../lib/storageKeys.js";
 import { readEnvBool } from "../settings/env.js";
+import { animationFlags } from "../lib/animatedImage.js";
 
 // The session row names the person as `id` (the users row it was joined with).
 const sessionUserId = (session) => session?.id ?? session?.userId ?? null;
@@ -789,6 +790,7 @@ export function registerRemoteUploadRoutes(app, deps) {
               thumbStorageKey: thumbKey || null,
               thumbUrl: thumbUrl || null,
               url: fileUrl,
+              ...animationFlags(f),
             };
           }),
         );

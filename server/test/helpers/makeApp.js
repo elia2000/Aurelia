@@ -483,6 +483,30 @@ export function makeApp(overrides = {}) {
     listChatPins: () => [],
     listChatPinsForUsers: () => [],
     listChatPinHolders: () => [],
+    // ── Saved GIFs ───────────────────────────────────────────────────────────
+    listSavedGifs: () => [],
+    countSavedGifs: () => 0,
+    findSavedGif: () => null,
+    findSavedGifBySource: () => null,
+    findSavedGifByHash: () => null,
+    insertSavedGif: () => {
+      throw new Error("insertSavedGif is not stubbed");
+    },
+    deleteSavedGif: () => null,
+    listSavedGifsForUsers: () => [],
+    listAllSavedGifs: () => [],
+    savedGifStorage: {
+      writeGif: async () => ({ storageDriver: "local" }),
+      readGif: async () => null,
+      removeGifs: async () => ({ removed: 0, failed: 0 }),
+      readMessageFile: async () => null,
+      writeMessageCopy: async () => {
+        throw new Error("savedGifStorage is not stubbed");
+      },
+      removeMessageCopy: async () => {},
+      // No network in tests: a file uploaded straight to a bucket is never inspected.
+      detectStoredAnimation: async () => null,
+    },
     // ── Call history entries ─────────────────────────────────────────────────
     createCallMessage: (args) => ({
       id: generateUuid(),

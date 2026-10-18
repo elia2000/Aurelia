@@ -13,6 +13,7 @@ import { generateUuid } from "./lib/uuidUtils.js";
 import { storageEncryption } from "./lib/storageEncryption.js";
 import { ensureSystemSecrets } from "./lib/secrets.js";
 import { REACTION_USERS_CAP, planReactionChange } from "./lib/reactions.js";
+import { animationFlags } from "./lib/animatedImage.js";
 import {
   decideChatPin,
   planCompaction as planPinCompaction,
@@ -2090,7 +2091,7 @@ function deleteChatByIdSqlite(chatId) {
 
 async function deleteUserByIdPostgres(userId) {
   if (!userId) {
-    return { storedNames: [], deletedChatIds: [], transferredChatIds: [] };
+    return { storedNames: [], deletedChatIds: [], transferredChatIds: [], savedGifs: [] };
   }
 
   const result = await dbKnex.transaction(async (trx) => {
@@ -2169,6 +2170,11 @@ async function deleteUserByIdPostgres(userId) {
         .update({ role: "owner" });
     }
 
+    // The person's own GIF collection goes with them; the caller deletes the files.
+    const savedGifs = await trx("user_gifs")
+      .select("id", "user_id", "storage_key", "storage_driver")
+      .where("user_id", userId);
+    await trx("user_gifs").where("user_id", userId).del();
     await trx("sessions").where("user_id", userId).del();
     await trx("hidden_chats").where("user_id", userId).del();
     await trx("hidden_chat_messages").where("user_id", userId).del();
@@ -2190,6 +2196,7 @@ async function deleteUserByIdPostgres(userId) {
       storedNames: Array.from(storedNames),
       deletedChatIds: uniqueChatDeletes,
       transferredChatIds: ownershipTransfers.map((transfer) => transfer.chatId),
+      savedGifs,
     };
   });
 
@@ -2202,7 +2209,7 @@ export function deleteUserById(userId) {
 }
 function deleteUserByIdSqlite(userId) {
   if (!userId) {
-    return { storedNames: [], deletedChatIds: [], transferredChatIds: [] };
+    return { storedNames: [], deletedChatIds: [], transferredChatIds: [], savedGifs: [] };
   }
 
   const ownerChatRows = getAll(
@@ -2260,6 +2267,13 @@ function deleteUserByIdSqlite(userId) {
     });
   }
 
+  // The person's own GIF collection goes with them; the caller deletes the files.
+  const savedGifs = getAll(
+    dbKnex("user_gifs")
+      .select("id", "user_id", "storage_key", "storage_driver")
+      .where("user_id", userId),
+  );
+
   const savepoint = `sp_delete_user_${Date.now()}`;
   runWithoutSave(`SAVEPOINT ${savepoint}`);
   try {
@@ -2313,6 +2327,7 @@ function deleteUserByIdSqlite(userId) {
       );
     });
 
+    runWithoutSave(dbKnex("user_gifs").where("user_id", userId).del());
     runWithoutSave(dbKnex("sessions").where("user_id", userId).del());
     runWithoutSave(dbKnex("hidden_chats").where("user_id", userId).del());
     runWithoutSave(dbKnex("hidden_chat_messages").where("user_id", userId).del());
@@ -2349,6 +2364,7 @@ function deleteUserByIdSqlite(userId) {
     storedNames: Array.from(storedNames),
     deletedChatIds: uniqueChatDeletes,
     transferredChatIds: ownershipTransfers.map((t) => t.chatId),
+    savedGifs,
   };
 }
 
@@ -2994,6 +3010,8 @@ export function createMessageFiles(messageId, files = []) {
       file.thumbStorageKey || file.thumb_storage_key || null;
     const encryptionType =
       file.encryptionType || file.encryption_type || "none";
+    // Decided by the server from the file's bytes (never taken from a client).
+    const isAnimated = animationFlags(file).isAnimated ? 1 : 0;
 
     return run(
       dbKnex("chat_message_files").insert({
@@ -3014,6 +3032,7 @@ export function createMessageFiles(messageId, files = []) {
         waveform,
         thumb_storage_key: thumbStorageKey,
         encryption_type: encryptionType,
+        is_animated: isAnimated,
       }),
     );
   });
@@ -3332,7 +3351,7 @@ export function findMessageFileById(id) {
           "id", "message_id", "kind", "original_name", "stored_name", "mime_type",
           "size_bytes", "width_px", "height_px", "duration_seconds", "expires_at", "created_at",
           "storage_driver", "storage_key", "processing_status", "blurhash", "waveform",
-          "thumb_storage_key", "encryption_type",
+          "thumb_storage_key", "encryption_type", "is_animated",
         )
         .where("id", Number(id))
         .first(),
@@ -3351,7 +3370,7 @@ export function listMessageFilesByMessageIds(messageIds = []) {
         "id", "message_id", "kind", "original_name", "stored_name", "mime_type",
         "size_bytes", "width_px", "height_px", "duration_seconds", "expires_at", "created_at",
         "storage_driver", "storage_key", "processing_status", "blurhash", "waveform",
-        "thumb_storage_key", "encryption_type",
+        "thumb_storage_key", "encryption_type", "is_animated",
       )
       .whereIn("message_id", messageIds)
       .orderBy("id", "asc"),
@@ -5278,6 +5297,239 @@ export function clearAdminAuditLogs() {
   }
 }
 
+// ─── Saved GIFs ──────────────────────────────────────────────────────────────
+//
+// `user_gifs` is one person's private collection. Every query below names the
+// owner; a GIF of somebody else is simply not found. The oldest GIFs (by
+// created_at) make room when a person is over their limit.
+
+// Saved GIFs are evicted oldest first, so their timestamps must be strictly
+// increasing even when two land in the same millisecond.
+let lastSavedGifTimestampMs = 0;
+function nextSavedGifTimestamp() {
+  const now = Date.now();
+  lastSavedGifTimestampMs = now > lastSavedGifTimestampMs ? now : lastSavedGifTimestampMs + 1;
+  return new Date(lastSavedGifTimestampMs).toISOString();
+}
+
+const SAVED_GIF_COLUMNS = [
+  "id",
+  "user_id",
+  "storage_key",
+  "storage_driver",
+  "mime",
+  "width",
+  "height",
+  "frames",
+  "size_bytes",
+  "sha256",
+  "created_at",
+  "source_message_id",
+  "source_file_id",
+];
+
+const savedGifLockKey = (userId) => `saved-gifs:${userId}`;
+
+const isUniqueViolation = (error) =>
+  error?.code === "SQLITE_CONSTRAINT_UNIQUE" ||
+  error?.code === "SQLITE_CONSTRAINT_PRIMARYKEY" ||
+  error?.code === "23505" ||
+  /UNIQUE constraint failed/i.test(String(error?.message || ""));
+
+/** The person's GIFs, newest first. */
+export function listSavedGifs(userId) {
+  if (!userId) return isPostgresMode() ? Promise.resolve([]) : [];
+  return getAll(
+    dbKnex("user_gifs")
+      .select(SAVED_GIF_COLUMNS)
+      .where("user_id", userId)
+      .orderBy("created_at", "desc")
+      .orderBy("id", "desc"),
+  );
+}
+
+/** How many GIFs the person has. */
+export function countSavedGifs(userId) {
+  if (!userId) return isPostgresMode() ? Promise.resolve(0) : 0;
+  const row = getRow(dbKnex("user_gifs").where("user_id", userId).count({ n: "*" }).first());
+  if (row && typeof row.then === "function") return row.then((r) => Number(r?.n) || 0);
+  return Number(row?.n) || 0;
+}
+
+/** One of the person's own GIFs, or null (also for a GIF that belongs to somebody else). */
+export function findSavedGif(userId, gifId) {
+  if (!userId || !gifId) return isPostgresMode() ? Promise.resolve(null) : null;
+  return getRow(
+    dbKnex("user_gifs").select(SAVED_GIF_COLUMNS).where({ user_id: userId, id: gifId }).first(),
+  );
+}
+
+/** The person's GIF that was saved from this message file, or null. */
+export function findSavedGifBySource(userId, messageId, fileId) {
+  if (!userId || !messageId || fileId === null || fileId === undefined) {
+    return isPostgresMode() ? Promise.resolve(null) : null;
+  }
+  return getRow(
+    dbKnex("user_gifs")
+      .select(SAVED_GIF_COLUMNS)
+      .where({ user_id: userId, source_message_id: messageId, source_file_id: String(fileId) })
+      .first(),
+  );
+}
+
+/** The person's GIF with exactly these bytes (SHA-256, hex), or null. */
+export function findSavedGifByHash(userId, sha256) {
+  if (!userId || !sha256) return isPostgresMode() ? Promise.resolve(null) : null;
+  return getRow(
+    dbKnex("user_gifs").select(SAVED_GIF_COLUMNS).where({ user_id: userId, sha256 }).first(),
+  );
+}
+
+function buildSavedGifRow(args) {
+  return {
+    id: args.id,
+    user_id: args.userId,
+    storage_key: args.storageKey,
+    storage_driver: args.storageDriver || "local",
+    mime: args.mime,
+    width: Number.isFinite(Number(args.width)) ? Math.trunc(Number(args.width)) : null,
+    height: Number.isFinite(Number(args.height)) ? Math.trunc(Number(args.height)) : null,
+    frames: Number.isFinite(Number(args.frames)) ? Math.trunc(Number(args.frames)) : null,
+    size_bytes: Math.max(0, Math.trunc(Number(args.sizeBytes)) || 0),
+    sha256: args.sha256,
+    created_at: nextSavedGifTimestamp(),
+    source_message_id: args.sourceMessageId || null,
+    source_file_id:
+      args.sourceFileId === null || args.sourceFileId === undefined ? null : String(args.sourceFileId),
+  };
+}
+
+function insertSavedGifSqlite(args, limit) {
+  return sqliteSavepoint("saved_gif", () => {
+    const duplicate = getRow(
+      dbKnex("user_gifs")
+        .select(SAVED_GIF_COLUMNS)
+        .where({ user_id: args.userId, sha256: args.sha256 })
+        .first(),
+    );
+    const rows = getAll(
+      dbKnex("user_gifs")
+        .select("id", "user_id", "storage_key", "storage_driver", "created_at")
+        .where("user_id", args.userId)
+        .orderBy("created_at", "asc")
+        .orderBy("id", "asc"),
+    );
+    if (duplicate) return { status: "existing", gif: duplicate, evicted: [], count: rows.length };
+
+    const evicted = rows.slice(0, Math.max(0, rows.length + 1 - limit));
+    if (evicted.length) {
+      run(
+        dbKnex("user_gifs")
+          .where("user_id", args.userId)
+          .whereIn("id", evicted.map((row) => row.id))
+          .del(),
+      );
+    }
+    const row = buildSavedGifRow(args);
+    run(dbKnex("user_gifs").insert(row));
+    return { status: "created", gif: row, evicted, count: rows.length - evicted.length + 1 };
+  });
+}
+
+async function insertSavedGifPostgres(args, limit) {
+  return dbKnex.transaction(async (trx) => {
+    // One change at a time per person, so two quick requests cannot both pass
+    // the "room left" check and leave the person over their limit.
+    await trx.raw("SELECT pg_advisory_xact_lock(hashtext(?))", [savedGifLockKey(args.userId)]);
+    const duplicate = await trx("user_gifs")
+      .select(SAVED_GIF_COLUMNS)
+      .where({ user_id: args.userId, sha256: args.sha256 })
+      .first();
+    const rows = await trx("user_gifs")
+      .select("id", "user_id", "storage_key", "storage_driver", "created_at")
+      .where("user_id", args.userId)
+      .orderBy("created_at", "asc")
+      .orderBy("id", "asc");
+    if (duplicate) return { status: "existing", gif: duplicate, evicted: [], count: rows.length };
+
+    const evicted = rows.slice(0, Math.max(0, rows.length + 1 - limit));
+    if (evicted.length) {
+      await trx("user_gifs")
+        .where("user_id", args.userId)
+        .whereIn("id", evicted.map((row) => row.id))
+        .del();
+    }
+    const row = buildSavedGifRow(args);
+    await trx("user_gifs").insert(row);
+    return { status: "created", gif: row, evicted, count: rows.length - evicted.length + 1 };
+  });
+}
+
+/**
+ * Adds a GIF to the person's collection, atomically. If they already hold
+ * `limit` GIFs, the oldest ones are deleted in the same transaction to make
+ * room (all of them, if the limit was lowered since).
+ *
+ * `args`: { id, userId, storageKey, storageDriver, mime, width, height, frames,
+ * sizeBytes, sha256, sourceMessageId, sourceFileId, limit }.
+ *
+ * Resolves to { status, gif, evicted, count }:
+ *   "created"   `gif` is the new row; `evicted` the rows that were deleted (the
+ *               caller deletes their files); `count` how many the person has now
+ *   "existing"  the person already holds these exact bytes: `gif` is that row,
+ *               nothing was stored or evicted
+ */
+export async function insertSavedGif(args) {
+  const limit = Math.max(1, Math.trunc(Number(args?.limit)) || 1);
+  const run_ = () =>
+    isPostgresMode() ? insertSavedGifPostgres(args, limit) : insertSavedGifSqlite(args, limit);
+  try {
+    return await run_();
+  } catch (error) {
+    // Two requests with the same bytes raced past the duplicate check: the
+    // unique index let one in, the other now finds it.
+    if (isUniqueViolation(error)) {
+      const existing = await findSavedGifByHash(args.userId, args.sha256);
+      if (existing) {
+        return { status: "existing", gif: existing, evicted: [], count: await countSavedGifs(args.userId) };
+      }
+    }
+    throw error;
+  }
+}
+
+/**
+ * Deletes one of the person's own GIFs. Resolves to the deleted row, or null if
+ * they had no such GIF (or another request deleted it first), so a file is
+ * removed, and the person told, exactly once.
+ */
+export async function deleteSavedGif(userId, gifId) {
+  if (!userId || !gifId) return null;
+  const row = await findSavedGif(userId, gifId);
+  if (!row) return null;
+  const deleted = await run(dbKnex("user_gifs").where({ user_id: userId, id: gifId }).del());
+  return Number(deleted) > 0 ? row : null;
+}
+
+/** Every saved GIF's file, for the full resets that wipe all accounts. */
+export function listAllSavedGifs() {
+  return getAll(dbKnex("user_gifs").select("id", "user_id", "storage_key", "storage_driver"));
+}
+
+/** The GIFs of several people, for the bulk tools that delete accounts and must delete their files. */
+export function listSavedGifsForUsers(userIds = []) {
+  const ids = Array.from(new Set((Array.isArray(userIds) ? userIds : []).filter(Boolean)));
+  if (!ids.length) return isPostgresMode() ? Promise.resolve([]) : [];
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += 500) chunks.push(ids.slice(i, i + 500));
+  const query = (chunk) =>
+    getAll(dbKnex("user_gifs").select(SAVED_GIF_COLUMNS).whereIn("user_id", chunk));
+  if (isPostgresMode()) {
+    return Promise.all(chunks.map(query)).then((parts) => parts.flat());
+  }
+  return chunks.flatMap(query);
+}
+
 // ─── Admin Maintenance ─────────────────────────────────────────────────────────
 
 export async function vacuumDatabase() {
@@ -5328,6 +5580,7 @@ export async function adminClearAllMessages() {
 }
 
 const RESET_TABLES = [
+  "user_gifs",
   "chat_pins",
   "chat_pinned_messages",
   "message_reactions",
@@ -5359,13 +5612,19 @@ export async function adminResetDatabase() {
       const storedNames = getPostgresRows(fileResult)
         .map((row) => row.stored_name)
         .filter(Boolean);
+      const savedGifs = getPostgresRows(
+        await trx("user_gifs").select("id", "user_id", "storage_key", "storage_driver"),
+      );
       await trx.raw(`TRUNCATE TABLE ${RESET_TABLES.join(", ")} RESTART IDENTITY CASCADE`);
-      return { storedNames };
+      return { storedNames, savedGifs };
     });
   }
 
   const fileRows = getAll(dbKnex("chat_message_files").select("stored_name"));
   const storedNames = fileRows.map((row) => row.stored_name).filter(Boolean);
+  const savedGifs = getAll(
+    dbKnex("user_gifs").select("id", "user_id", "storage_key", "storage_driver"),
+  );
   run("BEGIN");
   try {
     RESET_TABLES.forEach((table) => run(dbKnex(table).del()));
@@ -5376,7 +5635,7 @@ export async function adminResetDatabase() {
   }
   run("VACUUM");
   saveDatabase();
-  return { storedNames };
+  return { storedNames, savedGifs };
 }
 
 // ─── App Settings ─────────────────────────────────────────────────────────────

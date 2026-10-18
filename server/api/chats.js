@@ -8,6 +8,7 @@ import { normalizeSongbirdSource, normalizeTelegramSource, resolveSongbirdSource
 import { resolveThumbUrl } from "../lib/thumbUrl.js";
 import { emitUnpinnedMessages } from "../lib/pins.js";
 import { callPreviewText, serializeCall } from "../lib/callMessages.js";
+import { animationFlags } from "../lib/animatedImage.js";
 import { validateUuidParams, validateUuidBody } from "../lib/uuidMiddleware.js";
 
 function registerChatRoutes(app, deps) {
@@ -506,6 +507,7 @@ function registerChatRoutes(app, deps) {
         thumbStorageKey: thumbKey || null,
         thumbUrl: thumbUrl || null,
         url: fileUrl,
+        ...animationFlags(file),
       });
     }
 

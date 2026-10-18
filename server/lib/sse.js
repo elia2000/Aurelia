@@ -17,12 +17,15 @@ const UUID_EVENT_TYPES = new Set([
   "profile_updated",
   "user_profile_updated",
   "chat_pins_changed",
+  "saved_gif_added",
+  "saved_gif_removed",
 ]);
 
 // Events about one person's own state. They go to that person's sessions
 // (emitSseEvent) and never to the members of a chat (emitChatEvent): the other
-// members of a chat must not learn who pinned it.
-const USER_ONLY_EVENT_TYPES = new Set(["chat_pins_changed"]);
+// members of a chat must not learn who pinned it. The same goes for a person's
+// saved GIFs.
+const USER_ONLY_EVENT_TYPES = new Set(["chat_pins_changed", "saved_gif_added", "saved_gif_removed"]);
 
 function hasValidUuidReferences(payload = {}) {
   const type = String(payload?.type || "");
@@ -39,6 +42,22 @@ function hasValidUuidReferences(payload = {}) {
           Number.isInteger(pin.position),
       )
     );
+  }
+
+  if (type === "saved_gif_added") {
+    return (
+      Boolean(payload.gif) &&
+      typeof payload.gif === "object" &&
+      isValidUuid(String(payload.gif.id || "")) &&
+      Array.isArray(payload.evicted) &&
+      payload.evicted.every(
+        (entry) => entry && typeof entry === "object" && isValidUuid(String(entry.id || "")),
+      )
+    );
+  }
+
+  if (type === "saved_gif_removed") {
+    return isValidUuid(String(payload.gifId || ""));
   }
 
   const uuidFields = ["chatId", "messageId", "userId", "actorId", "pinnedBy", "replyToMessageId", "sourceChatId", "sourceUserId"];

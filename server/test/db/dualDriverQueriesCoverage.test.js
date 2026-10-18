@@ -377,8 +377,9 @@ describe("Dual Driver Complete DB Functions Coverage", () => {
       const clearRes = await adminClearAllMessages();
       expect(clearRes).toEqual({ storedNames: ["f1.png"] });
 
+      // The reset also reports the saved GIFs it wiped, so their files can follow.
       const resetRes = await adminResetDatabase();
-      expect(resetRes).toEqual({ storedNames: ["f1.png"] });
+      expect(resetRes).toEqual({ storedNames: ["f1.png"], savedGifs: [] });
 
       await bootstrapAdminUsers(["admin1"]);
     });

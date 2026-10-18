@@ -125,6 +125,8 @@ function registerRemoteMirrorRoutes(app, deps) {
           heightPx: heightPx ?? entry.heightPx ?? null,
           durationSeconds: durationSeconds ?? entry.durationSeconds ?? null,
           expiresAt: null,
+          // Decided from the file when it was fetched, before it went to the worker.
+          isAnimated: Boolean(entry.descriptor?.isAnimated),
           storageDriver: storageDriver || "remote",
           storage_driver: storageDriver || "remote",
           storageKey,

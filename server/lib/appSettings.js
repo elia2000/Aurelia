@@ -248,6 +248,18 @@ export const SETTING_DEFS = [
     min: 1,
     max: 30,
   },
+  {
+    key: "MAX_SAVED_GIFS",
+    type: TYPE_INT,
+    label: "Saved GIFs per person",
+    description:
+      "How many GIFs one person can keep in their own GIF collection. When someone saves another one past the limit, their oldest GIF is removed automatically and they are told.",
+    group: "limits",
+    envKey: "MAX_SAVED_GIFS",
+    defaultVal: 50,
+    min: 1,
+    max: 200,
+  },
 
   // ── Remote Channel ────────────────────────────────────────────────────────────
   {

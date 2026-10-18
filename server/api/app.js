@@ -3,6 +3,7 @@ import { parseThemeDefault, parseThemePalette } from "../lib/themePalette.js";
 import { clampReactionsPerUser } from "../lib/reactions.js";
 import { clampMaxPinnedMessages } from "../lib/pins.js";
 import { clampMaxPinnedChats } from "../lib/chatPins.js";
+import { clampMaxSavedGifs } from "../lib/savedGifs.js";
 
 function registerAppRoutes(app, deps) {
   const { REMOTE_CHANNELS, getSetting, fs, path, projectRootDir, callsConfig } = deps;
@@ -56,6 +57,8 @@ function registerAppRoutes(app, deps) {
       maxPinnedMessages: clampMaxPinnedMessages(getSetting("MAX_PINNED_MESSAGES")),
       // How many chats one person can pin to the top of their chat list.
       maxPinnedChats: clampMaxPinnedChats(getSetting("MAX_PINNED_CHATS")),
+      // How many GIFs one person can keep in their own collection.
+      maxSavedGifs: clampMaxSavedGifs(getSetting("MAX_SAVED_GIFS")),
       fileUploadEnabled: Boolean(getSetting("FILE_UPLOAD")),
       // Voice/video calls are switched with CALLS_ENABLED; the client hides the
       // call buttons when this is false.

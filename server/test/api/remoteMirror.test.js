@@ -116,6 +116,50 @@ describe("remote mirror blob + webhook", () => {
     expect(attachMirroredMedia).toHaveBeenCalledTimes(1);
   });
 
+  test("webhook carries the animated flag decided when the file was fetched", async () => {
+    const filePath = path.join(tmpDir, "g.bin");
+    fs.writeFileSync(filePath, "mirror-bytes");
+    const entry = registry.create({
+      filePath,
+      storedName: "g.gif",
+      mimeType: "image/gif",
+      kind: "media",
+      originalName: "party.gif",
+      descriptor: { isAnimated: true },
+      messageId: 43,
+      chatId: "c1",
+      authorId: "u1",
+      authorUsername: "owner",
+    });
+    const { app, attachMirroredMedia } = setupMirrorApp();
+    const res = await request(app)
+      .post("/api/remote-channel/webhook/mirror-done")
+      .send({ jobId: entry.jobId, status: "ready", storageKey: "uploads/messages/g.gif", storageDriver: "remote", sizeBytes: 12 });
+    expect(res.status).toBe(200);
+    expect(attachMirroredMedia.mock.calls[0][0].file.isAnimated).toBe(true);
+  });
+
+  test("webhook marks a file without that decision as not animated", async () => {
+    const filePath = path.join(tmpDir, "h.bin");
+    fs.writeFileSync(filePath, "mirror-bytes");
+    const entry = registry.create({
+      filePath,
+      storedName: "h.jpg",
+      mimeType: "image/jpeg",
+      kind: "media",
+      originalName: "photo.jpg",
+      messageId: 44,
+      chatId: "c1",
+      authorId: "u1",
+      authorUsername: "owner",
+    });
+    const { app, attachMirroredMedia } = setupMirrorApp();
+    await request(app)
+      .post("/api/remote-channel/webhook/mirror-done")
+      .send({ jobId: entry.jobId, status: "ready", storageKey: "uploads/messages/h.jpg", storageDriver: "remote", sizeBytes: 12 });
+    expect(attachMirroredMedia.mock.calls[0][0].file.isAnimated).toBe(false);
+  });
+
   test("webhook skips attach when the file is already on the message", async () => {
     const filePath = path.join(tmpDir, "a.bin");
     fs.writeFileSync(filePath, "mirror-bytes");

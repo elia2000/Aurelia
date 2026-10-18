@@ -140,6 +140,22 @@ describe("GET /api/app/info", () => {
     expect(small.body.maxPinnedChats).toBe(1);
   });
 
+  // ── Saved GIFs ─────────────────────────────────────────────────────────────
+
+  test('MAX_SAVED_GIFS is exposed as maxSavedGifs, default 50', async () => {
+    const res = await request(makeApp().app).get("/api/app/info");
+    expect(res.body.maxSavedGifs).toBe(50);
+  });
+
+  test('MAX_SAVED_GIFS=80 → maxSavedGifs is 80, and is always clamped to 1-200', async () => {
+    const eighty = await request(makeApp({ settings: { MAX_SAVED_GIFS: 80 } }).app).get("/api/app/info");
+    expect(eighty.body.maxSavedGifs).toBe(80);
+    const big = await request(makeApp({ settings: { MAX_SAVED_GIFS: 4000 } }).app).get("/api/app/info");
+    expect(big.body.maxSavedGifs).toBe(200);
+    const small = await request(makeApp({ settings: { MAX_SAVED_GIFS: 0 } }).app).get("/api/app/info");
+    expect(small.body.maxSavedGifs).toBe(1);
+  });
+
   // ── Registration ───────────────────────────────────────────────────────────
 
   test('SIGN_UP=false → accountCreationEnabled is false', async () => {

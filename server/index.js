@@ -25,6 +25,7 @@ import { resolveAppOrigins, ensureBucketCors } from "./lib/bucketCors.js";
 import { resolveWebhookCallbackUrl } from "./lib/webhookUrl.js";
 import { createVideoTranscodeManager } from "./lib/videoTranscode.js";
 import { createMessageFileJobs } from "./lib/messageFileJobs.js";
+import { createGifStorage } from "./lib/gifStorage.js";
 import { createTextRetentionJobs } from "./lib/textRetentionJobs.js";
 import { emitUnpinnedMessages } from "./lib/pins.js";
 import { createInspector } from "./lib/inspect.js";
@@ -192,6 +193,15 @@ import {
   listChatPinsForUsers,
   listChatPinHolders,
   createCallMessage,
+  listSavedGifs,
+  countSavedGifs,
+  findSavedGif,
+  findSavedGifBySource,
+  findSavedGifByHash,
+  insertSavedGif,
+  deleteSavedGif,
+  listSavedGifsForUsers,
+  listAllSavedGifs,
 } from "./db.js";
 import { resolveTelegramSecrets } from "./lib/remoteChannelSecrets.js";
 import { createMirrorJobRegistry } from "./lib/remoteMirrorJobs.js";
@@ -575,6 +585,19 @@ const {
   registerUploadRoutes,
 } = uploadTools;
 
+// Where the bytes of GIFs live: the saved-GIF collection (data/uploads/gifs/<userId>/
+// or gifs/<userId>/ in the bucket), copies sent as attachments, and the check
+// of files uploaded straight to the bucket.
+const savedGifStorage = createGifStorage({
+  fs,
+  path,
+  crypto,
+  storageProvider,
+  storageEncryption,
+  rootDir: path.join(dataDir, "uploads"),
+  uploadRootDir,
+});
+
 const sseHub = createSseHub({ listChatMembers });
 const { addSseClient, removeSseClient, emitSseEvent, emitChatEvent, broadcastAll, getCachedMembers } = sseHub;
 
@@ -794,6 +817,22 @@ async function backfillStorageEncryption() {
       }
     });
 
+    // Saved GIFs are written encrypted when a key is set; this covers a key
+    // that was added later.
+    let encryptedGifs = 0;
+    const gifRoot = path.join(dataDir, "uploads", "gifs");
+    if (fs.existsSync(gifRoot)) {
+      fs.readdirSync(gifRoot, { withFileTypes: true }).forEach((folder) => {
+        if (!folder.isDirectory()) return;
+        fs.readdirSync(path.join(gifRoot, folder.name), { withFileTypes: true }).forEach((entry) => {
+          if (!entry.isFile()) return;
+          if (storageEncryption.encryptFileInPlace(path.join(gifRoot, folder.name, entry.name))) {
+            encryptedGifs += 1;
+          }
+        });
+      });
+    }
+
     let encryptedAvatars = 0;
     if (fs.existsSync(avatarUploadRootDir)) {
       fs.readdirSync(avatarUploadRootDir, { withFileTypes: true }).forEach(
@@ -808,10 +847,10 @@ async function backfillStorageEncryption() {
       );
     }
 
-    if (encryptedFiles > 0 || encryptedAvatars > 0) {
+    if (encryptedFiles > 0 || encryptedAvatars > 0 || encryptedGifs > 0) {
       adminSave();
       console.log(
-        `[storage-encryption] encrypted ${encryptedFiles} file(s) and ${encryptedAvatars} avatar file(s) at rest.`,
+        `[storage-encryption] encrypted ${encryptedFiles} file(s), ${encryptedAvatars} avatar file(s) and ${encryptedGifs} saved GIF(s) at rest.`,
       );
     }
   } catch (error) {
@@ -1206,6 +1245,20 @@ Object.assign(apiDeps, {
   unpinAllMessages,
   listPinnedMessages,
   listPinnedMessageIds,
+});
+
+// Saved GIFs (a private collection per person) and the animated-picture flag.
+Object.assign(apiDeps, {
+  listSavedGifs,
+  countSavedGifs,
+  findSavedGif,
+  findSavedGifBySource,
+  findSavedGifByHash,
+  insertSavedGif,
+  deleteSavedGif,
+  listSavedGifsForUsers,
+  listAllSavedGifs,
+  savedGifStorage,
 });
 
 // Pinned chats (per person, top of the chat list).

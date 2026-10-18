@@ -16,6 +16,16 @@ Aurelle uses the `STORAGE_DRIVER` environment variable to determine where upload
 STORAGE_DRIVER=remote
 ```
 
+### Where files live
+
+| What | Local disk (`data/uploads/...`) | Bucket key |
+|---|---|---|
+| Message attachments | `messages/<name>` | `uploads/messages/<name>` |
+| Avatars | `avatars/<name>` | `uploads/avatars/<name>` |
+| Saved GIFs (each person's private collection) | `gifs/<userId>/<gifId>.<ext>` | `gifs/<userId>/<gifId>.<ext>` |
+
+Saved GIFs are copies, kept apart from message attachments: message retention (`MESSAGE_FILE_RETENTION`) never touches them, and they go away only when the person deletes them, when the oldest one is replaced because of the `MAX_SAVED_GIFS` limit, or when the account is deleted. Sending a saved GIF writes a new copy under `uploads/messages/`.
+
 ## Direct-to-Storage Presigned Upload Architecture
 
 When `STORAGE_DRIVER=remote` is active, Aurelle uses a direct client-to-bucket presigned upload workflow. File content is streamed directly from the user's browser to Cloudflare R2 or AWS S3, completely bypassing the Aurelle Node.js application server.

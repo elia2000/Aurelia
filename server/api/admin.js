@@ -8,6 +8,7 @@ import {
   resolveUserRow,
 } from "../lib/dbToolHelpers.js";
 import { createInviteToken } from "../lib/inviteTokens.js";
+import { removeSavedGifFilesQuietly } from "../lib/savedGifCleanup.js";
 import { storageEncryption } from "../lib/storageEncryption.js";
 import { generateUuid, isValidUuid } from "../lib/uuidUtils.js";
 import { userEvents } from "../lib/workers/autoAddWorker.js";
@@ -372,6 +373,13 @@ function registerAdminRoutes(app, deps) {
           ),
         );
 
+        // Their private GIF collections go with them; the files are removed
+        // once the rows are gone.
+        const savedGifRows =
+          typeof deps.listSavedGifsForUsers === "function"
+            ? (await deps.listSavedGifsForUsers(userIds)) || []
+            : [];
+
         await adminTransaction(async (transactionRun) => {
           if (uniqueChatDeletes.length) {
             for (const chunk of chunkArray(uniqueChatDeletes, 500)) {
@@ -450,6 +458,10 @@ function registerAdminRoutes(app, deps) {
           for (const chunk of chunkArray(userIds, 500)) {
             const chunkPlaceholders = chunk.map(() => "?").join(", ");
             await transactionRun(
+              `DELETE FROM user_gifs WHERE user_id IN (${chunkPlaceholders})`,
+              chunk,
+            );
+            await transactionRun(
               `DELETE FROM message_reactions WHERE user_id IN (${chunkPlaceholders})`,
               chunk,
             );
@@ -494,6 +506,7 @@ function registerAdminRoutes(app, deps) {
         });
 
         removeStoredFileNames(storedNames);
+        await removeSavedGifFilesQuietly(deps.savedGifStorage, savedGifRows);
         adminSave();
 
         return res.json({
@@ -2148,6 +2161,7 @@ function registerAdminRoutes(app, deps) {
         // in SQLite it performs the equivalent transactional row cleanup.
         const resetResult = await adminResetDatabase();
         removeAllMessageUploads();
+        await removeSavedGifFilesQuietly(deps.savedGifStorage, resetResult?.savedGifs);
         adminSave();
         return res.json({
           ok: true,
@@ -2156,9 +2170,13 @@ function registerAdminRoutes(app, deps) {
       }
 
       if (action === "delete_db") {
+        const savedGifRows =
+          typeof deps.listAllSavedGifs === "function" ? (await deps.listAllSavedGifs()) || [] : [];
+
         adminRun("BEGIN");
 
         try {
+          adminRun("DELETE FROM user_gifs");
           adminRun("DELETE FROM message_reactions");
           adminRun("DELETE FROM chat_pinned_messages");
           adminRun("DELETE FROM chat_pins");
@@ -2176,6 +2194,7 @@ function registerAdminRoutes(app, deps) {
         }
 
         removeAllMessageUploads();
+        await removeSavedGifFilesQuietly(deps.savedGifStorage, savedGifRows);
         adminSave();
 
         return res.json({ ok: true, result: { cleared: true } });

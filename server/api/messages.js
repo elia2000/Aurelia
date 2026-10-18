@@ -14,6 +14,13 @@ import { summarizeReactionRows } from "../lib/reactions.js";
 import { isServiceMessageBody, parsePinServiceBody } from "../lib/serviceMessages.js";
 import { emitUnpinnedMessages } from "../lib/pins.js";
 import { isCallMessage, serializeCall } from "../lib/callMessages.js";
+import { createThrottle } from "../lib/throttle.js";
+import {
+  animationFlags,
+  detectAnimatedFile,
+  isAnimationCandidate,
+} from "../lib/animatedImage.js";
+import { createSavedGifService } from "../lib/services/savedGifService.js";
 
 function registerMessageRoutes(app, deps) {
   const {
@@ -140,6 +147,10 @@ function registerMessageRoutes(app, deps) {
   const resolveMaybePromise = async (value) =>
     value && typeof value.then === "function" ? await value : value;
 
+  // Sending a saved GIF copies up to 20 MB, so it is limited per person.
+  const savedGifService = createSavedGifService(deps);
+  const savedGifSendThrottle = createThrottle({ windowMs: 60 * 1000, max: 30 });
+
   const computeTextExpiryIso = (createdAt) => {
     const textRetentionDays = Number(getSetting("MESSAGE_TEXT_RETENTION") || 0);
     if (textRetentionDays <= 0) return null;
@@ -261,6 +272,7 @@ function registerMessageRoutes(app, deps) {
             ? Number(file.duration_seconds)
             : null,
           expiresAt: file.expires_at || null,
+          isAnimated: animationFlags(file).isAnimated,
         },
       ];
     });
@@ -453,6 +465,7 @@ function registerMessageRoutes(app, deps) {
         thumbStorageKey: thumbKey || null,
         thumbUrl: thumbUrl || null,
         url: fileUrl,
+        ...animationFlags(file),
       });
     }
 
@@ -1296,6 +1309,36 @@ function registerMessageRoutes(app, deps) {
           ...normalizedPresignedFiles,
         ];
 
+        // Is a picture an animated one (GIF, animated WebP, APNG)? The server
+        // decides, from the file's own bytes: nothing the client says counts.
+        // Photos, videos and documents are not even opened; a file that cannot
+        // be read for the check is simply not marked, and the message goes out.
+        // The file itself is never re-encoded, so the animation stays intact.
+        // One file at a time, so the memory used is that of one prefix.
+        for (let index = 0; index < normalizedFiles.length; index += 1) {
+          const file = normalizedFiles[index];
+          file.isAnimated = false;
+          if (!isAnimationCandidate({ mimeType: file.mimeType, name: file.originalName })) continue;
+          try {
+            let animated = null;
+            if (index < uploadedFiles.length) {
+              animated = await detectAnimatedFile({ fs, filePath: uploadedFiles[index].path });
+            } else if (typeof deps.savedGifStorage?.detectStoredAnimation === "function") {
+              // Uploaded straight to the bucket: only the start of it is read.
+              animated = await deps.savedGifStorage.detectStoredAnimation({
+                storageKey: file.storageKey,
+                storageDriver: file.storageDriver,
+                size: file.sizeBytes,
+                mimeType: file.mimeType,
+                name: file.originalName,
+              });
+            }
+            file.isAnimated = animated === true;
+          } catch {
+            file.isAnimated = false;
+          }
+        }
+
         const storageProcessingMode = String(
           deps.storageProcessingMode || process.env.STORAGE_PROCESSING_MODE || "auto",
         ).toLowerCase();
@@ -1386,6 +1429,10 @@ function registerMessageRoutes(app, deps) {
             String(file.mimeType || "").toLowerCase().startsWith("audio/"),
           ).length;
           const docCount = Math.max(0, files.length - videoCount - imageCount - audioCount);
+          const gifCount = files.filter((file) => file.isAnimated).length;
+          if (gifCount > 0 && gifCount === files.length) {
+            return gifCount === 1 ? "Sent a GIF" : `Sent ${gifCount} GIFs`;
+          }
           if (files.length === 1) {
             if (videoCount === 1) return "Sent a video";
             if (imageCount === 1) return "Sent a photo";
@@ -1672,6 +1719,7 @@ function registerMessageRoutes(app, deps) {
               thumbStorageKey: thumbKey,
               thumbUrl: resolvedThumbUrl,
               url: resolvedUrl,
+              ...animationFlags(file),
             };
           }),
         );
@@ -1799,16 +1847,22 @@ function registerMessageRoutes(app, deps) {
     },
   );
 
-  app.post("/api/messages", validateUuidBody([{ field: "chatId", required: true }, { field: "replyToMessageId", required: false }]), async (req, res) => {
+  app.post("/api/messages", validateUuidBody([{ field: "chatId", required: true }, { field: "replyToMessageId", required: false }, { field: "savedGifId", required: false }]), async (req, res) => {
     const session = await requireSession(req, res);
     if (!session) return;
 
-    const { chatId, username, body, replyToMessageId } = req.body || {};
+    const { chatId, username, body, replyToMessageId, savedGifId } = req.body || {};
     const clientRequestIdRaw = String(req.body?.clientRequestId || "").trim();
     const clientRequestId = clientRequestIdRaw
       ? clientRequestIdRaw.slice(0, 120)
       : null;
-    if (!chatId || !username || !body) {
+    // A saved GIF from the person's own collection, sent as a picture; the
+    // text, if any, is its caption.
+    const hasSavedGif = savedGifId !== undefined && savedGifId !== null && savedGifId !== "";
+    if (hasSavedGif && (typeof savedGifId !== "string" || savedGifId !== savedGifId.trim())) {
+      return res.status(400).json({ error: "Field 'savedGifId' is not a valid UUID." });
+    }
+    if (!chatId || !username || (!body && !hasSavedGif)) {
       return res.status(400).json({
         error: "Chat, username, and message body are required.",
       });
@@ -1865,6 +1919,29 @@ function registerMessageRoutes(app, deps) {
         return res
           .status(400)
           .json({ error: "Reply target is not available in this chat." });
+      }
+    }
+
+    if (hasSavedGif) {
+      if (Number(user.banned)) {
+        return res.status(403).json({ error: "Account is banned." });
+      }
+      if (!savedGifSendThrottle.take(String(user.id))) {
+        return res.status(429).json({ error: "Too many GIFs sent. Please slow down." });
+      }
+      try {
+        const sent = await savedGifService.sendAsMessage({
+          user,
+          chat,
+          savedGifId,
+          caption: bodyText,
+          replyToMessageId,
+          clientRequestId,
+        });
+        return res.status(sent.status).json(sent.body);
+      } catch (error) {
+        console.error("POST /api/messages (saved GIF) ERROR:", error);
+        return res.status(500).json({ error: "Unable to send the GIF." });
       }
     }
 
