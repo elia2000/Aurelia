@@ -1,0 +1,19 @@
+/* A round video message is only its circle: 240 px on a computer, 70% of the
+   screen on a narrow phone. The ring, the chips and the message time are all
+   placed from this one size. */
+:root {
+  --video-note-size: min(240px, 70vw);
+}
+
+[data-video-note] {
+  width: var(--video-note-size);
+}
+
+/* The message time and read mark belong to the message, which draws them as a
+   chip in the corner of its bubble. A round video has no bubble: its corner is
+   empty air outside the circle, so the chip is brought in until it lies over the
+   rim, like Telegram's. */
+[data-video-note] ~ [data-message-meta="overlay"] {
+  right: calc(var(--video-note-size) * 0.1);
+  bottom: calc(var(--video-note-size) * 0.1);
+}

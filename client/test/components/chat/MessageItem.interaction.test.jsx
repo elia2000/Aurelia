@@ -532,12 +532,30 @@ describe("MessageItem - round video container", () => {
     expect(bubbleEl().querySelector("[data-message-meta]").getAttribute("data-message-meta")).toBe("overlay");
   });
 
-  test("keeps its bubble when a quote needs one to sit in", async () => {
+  test("a quote is a chip above the circle, not a bubble around it", async () => {
     const replyTo = { id: 3, username: "alice", displayName: "Alice", body: "earlier" };
     render(<MessageItem {...BASE_PROPS} msg={videoNote({ replyTo })} />);
     await expect.element(page.getByText("earlier")).toBeInTheDocument();
-    expect(bubbleEl().className).toContain("bg-white");
-    expect(bubbleEl().className).toContain("px-2.5");
+    expect(bubbleEl().className).toContain("p-0");
+    expect(bubbleEl().className).not.toContain("bg-white");
+    const header = bubbleEl().querySelector("[data-video-note-header]");
+    expect(header).not.toBeNull();
+    expect(header.textContent).toContain("earlier");
+    // The chip sits above the circle inside the video block, not in a header of the bubble.
+    expect(header.closest("[data-video-note]")).not.toBeNull();
+  });
+
+  test("the sender name in a group is a chip above the circle", async () => {
+    render(<MessageItem {...BASE_PROPS} isGroupChat msg={videoNote()} />);
+    await expect.element(page.getByText("Bob")).toBeInTheDocument();
+    expect(bubbleEl().className).not.toContain("bg-white");
+    expect(bubbleEl().querySelector("[data-video-note-header]").textContent).toContain("Bob");
+  });
+
+  test("a message without a header has no chip", async () => {
+    render(<MessageItem {...BASE_PROPS} msg={videoNote()} />);
+    await expect.element(page.getByText("12:00")).toBeInTheDocument();
+    expect(bubbleEl().querySelector("[data-video-note-header]")).toBeNull();
   });
 });
 

@@ -985,9 +985,9 @@ export const MessageItem = memo(function MessageItem({
       } ${isRunEnd ? "rounded-bl-[4px]" : "rounded-bl-[5px]"}`;
   const hasBubbleHeader =
     showSenderName || isForwarded || Boolean(replyTarget);
-  // A round video stands on the chat background without a bubble around it,
-  // unless a name, forward line or quote needs a bubble to sit in.
-  const isBareBubble = isVideoNote && !hasBubbleHeader;
+  // A round video always stands on the chat background without a bubble
+  // around it; a name, forward line or quote is a chip above the circle.
+  const isBareBubble = isVideoNote;
   const bubbleSurface = isBareBubble
     ? ""
     : isOwn
@@ -1050,6 +1050,124 @@ export const MessageItem = memo(function MessageItem({
       />
     </ContextMenuSurface>
   );
+
+  // The sender name, forward line and quote. They sit in the bubble above its
+  // content; a round video, which has no bubble, shows them as a chip over
+  // its circle instead.
+  const bubbleHeader = hasBubbleHeader ? (
+    <>
+      {showSenderName ? (
+        <Tooltip label={senderName} asChild>
+          <ContextMenuSurface
+            as="button"
+            type="button"
+            onClick={
+              canOpenSenderProfile
+                ? () => onOpenSenderProfile?.(msg)
+                : undefined
+            }
+            disabled={!canOpenSenderProfile}
+            data-own-context-menu={hasSenderMenu ? "" : undefined}
+            className={`mb-0.5 flex max-w-[60vw] items-center gap-0.5 text-[13px] font-semibold leading-[1.25] transition ${
+              canOpenSenderProfile ? "hover:underline" : ""
+            } sm:max-w-[40vw] md:max-w-[28vw]`}
+            dir="ltr"
+            style={{ color: String(senderColor) }}
+            contextMenu={senderContextMenu}
+          >
+            <span className={`truncate ${hasPersian(senderName) ? "font-fa" : ""}`} dir="auto" style={{ unicodeBidi: "isolate" }}>{senderName}</span>
+            {!isDeletedAuthor && Boolean(msg.user_verified) && (
+              <VerifiedBadge size={14} />
+            )}
+            {!isDeletedAuthor && (
+              <UserRoleBadge role={msg.user_role} size={14} />
+            )}
+          </ContextMenuSurface>
+        </Tooltip>
+      ) : null}
+      {renderForwardedHeader()}
+      {replyTarget ? (
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => onJumpToMessage?.(replyTarget.id)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            onJumpToMessage?.(replyTarget.id);
+          }}
+          className="mb-1 flex w-full min-w-0 max-w-full cursor-pointer gap-2 overflow-hidden rounded-md border-s-2 py-0.5 pe-1.5 ps-2 text-left text-[13px] leading-[1.25] transition hover:brightness-95"
+          style={{
+            borderColor: String(replyColor),
+            backgroundColor: `color-mix(in srgb, ${String(replyColor)} 12%, transparent)`,
+          }}
+          aria-label={`Reply to ${replyDisplayName}`}
+        >
+          <span className="min-w-0 flex-1">
+            <Tooltip label={replyDisplayName} asChild>
+              <span
+                className="flex max-w-full items-center gap-0.5 truncate whitespace-nowrap font-semibold"
+                dir="ltr"
+              >
+                <span
+                  className={`min-w-0 truncate ${
+                    hasPersian(replyDisplayName) ? "font-fa" : ""
+                  }`}
+                  dir="auto"
+                  style={{ color: String(replyColor), unicodeBidi: "isolate" }}
+                >
+                  {replyDisplayName}
+                </span>
+                {Boolean(replyTarget?.verified) && (
+                  <VerifiedBadge size={12} />
+                )}
+                {!isChannelChat && (
+                  <UserRoleBadge role={replyTarget?.role} size={12} />
+                )}
+              </span>
+            </Tooltip>
+            <span
+              className={`flex max-w-full items-start gap-1 ${
+                hasPersian(normalizedReplyPreview) ? "font-fa" : ""
+              }`}
+              dir="ltr"
+              style={{ unicodeBidi: "isolate" }}
+            >
+              {derivedReplyIcon === "voice" ? (
+                <Mic
+                  size={12}
+                  className="mt-[3px] shrink-0 text-slate-500 dark:text-slate-400"
+                />
+              ) : derivedReplyIcon === "video" ? (
+                <Video
+                  size={12}
+                  className="mt-[3px] shrink-0 text-slate-500 dark:text-slate-400"
+                />
+              ) : derivedReplyIcon === "image" ? (
+                <ImageIcon
+                  size={12}
+                  className="mt-[3px] shrink-0 text-slate-500 dark:text-slate-400"
+                />
+              ) : derivedReplyIcon === "document" ? (
+                <File
+                  size={12}
+                  className="mt-[3px] shrink-0 text-slate-500 dark:text-slate-400"
+                />
+              ) : null}
+              <span
+                className="line-clamp-2 min-w-0 break-words"
+                dir="auto"
+                style={{ unicodeBidi: "isolate" }}
+                dangerouslySetInnerHTML={{
+                  __html: String(replyPreviewHtml || ""),
+                }}
+              />
+            </span>
+          </span>
+        </div>
+      ) : null}
+    </>
+  ) : null;
 
   return (
     <div
@@ -1296,123 +1414,14 @@ export const MessageItem = memo(function MessageItem({
                 }
               }}
             >
-              {hasBubbleHeader ? (
+              {hasBubbleHeader && !isVideoNote ? (
                 <div className={hasMediaBubble ? "px-2.5 pt-1.5" : undefined}>
-                  {showSenderName ? (
-                    <Tooltip label={senderName} asChild>
-                      <ContextMenuSurface
-                        as="button"
-                        type="button"
-                        onClick={
-                          canOpenSenderProfile
-                            ? () => onOpenSenderProfile?.(msg)
-                            : undefined
-                        }
-                        disabled={!canOpenSenderProfile}
-                        data-own-context-menu={hasSenderMenu ? "" : undefined}
-                        className={`mb-0.5 flex max-w-[60vw] items-center gap-0.5 text-[13px] font-semibold leading-[1.25] transition ${
-                          canOpenSenderProfile ? "hover:underline" : ""
-                        } sm:max-w-[40vw] md:max-w-[28vw]`}
-                        dir="ltr"
-                        style={{ color: String(senderColor) }}
-                        contextMenu={senderContextMenu}
-                      >
-                        <span className={`truncate ${hasPersian(senderName) ? "font-fa" : ""}`} dir="auto" style={{ unicodeBidi: "isolate" }}>{senderName}</span>
-                        {!isDeletedAuthor && Boolean(msg.user_verified) && (
-                          <VerifiedBadge size={14} />
-                        )}
-                        {!isDeletedAuthor && (
-                          <UserRoleBadge role={msg.user_role} size={14} />
-                        )}
-                      </ContextMenuSurface>
-                    </Tooltip>
-                  ) : null}
-                  {renderForwardedHeader()}
-                  {replyTarget ? (
-                    <div
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => onJumpToMessage?.(replyTarget.id)}
-                      onKeyDown={(event) => {
-                        if (event.key !== "Enter" && event.key !== " ") return;
-                        event.preventDefault();
-                        onJumpToMessage?.(replyTarget.id);
-                      }}
-                      className="mb-1 flex w-full min-w-0 max-w-full cursor-pointer gap-2 overflow-hidden rounded-md border-s-2 py-0.5 pe-1.5 ps-2 text-left text-[13px] leading-[1.25] transition hover:brightness-95"
-                      style={{
-                        borderColor: String(replyColor),
-                        backgroundColor: `color-mix(in srgb, ${String(replyColor)} 12%, transparent)`,
-                      }}
-                      aria-label={`Reply to ${replyDisplayName}`}
-                    >
-                      <span className="min-w-0 flex-1">
-                        <Tooltip label={replyDisplayName} asChild>
-                          <span
-                            className="flex max-w-full items-center gap-0.5 truncate whitespace-nowrap font-semibold"
-                            dir="ltr"
-                          >
-                            <span
-                              className={`min-w-0 truncate ${
-                                hasPersian(replyDisplayName) ? "font-fa" : ""
-                              }`}
-                              dir="auto"
-                              style={{ color: String(replyColor), unicodeBidi: "isolate" }}
-                            >
-                              {replyDisplayName}
-                            </span>
-                            {Boolean(replyTarget?.verified) && (
-                              <VerifiedBadge size={12} />
-                            )}
-                            {!isChannelChat && (
-                              <UserRoleBadge role={replyTarget?.role} size={12} />
-                            )}
-                          </span>
-                        </Tooltip>
-                        <span
-                          className={`flex max-w-full items-start gap-1 ${
-                            hasPersian(normalizedReplyPreview) ? "font-fa" : ""
-                          }`}
-                          dir="ltr"
-                          style={{ unicodeBidi: "isolate" }}
-                        >
-                          {derivedReplyIcon === "voice" ? (
-                            <Mic
-                              size={12}
-                              className="mt-[3px] shrink-0 text-slate-500 dark:text-slate-400"
-                            />
-                          ) : derivedReplyIcon === "video" ? (
-                            <Video
-                              size={12}
-                              className="mt-[3px] shrink-0 text-slate-500 dark:text-slate-400"
-                            />
-                          ) : derivedReplyIcon === "image" ? (
-                            <ImageIcon
-                              size={12}
-                              className="mt-[3px] shrink-0 text-slate-500 dark:text-slate-400"
-                            />
-                          ) : derivedReplyIcon === "document" ? (
-                            <File
-                              size={12}
-                              className="mt-[3px] shrink-0 text-slate-500 dark:text-slate-400"
-                            />
-                          ) : null}
-                          <span
-                            className="line-clamp-2 min-w-0 break-words"
-                            dir="auto"
-                            style={{ unicodeBidi: "isolate" }}
-                            dangerouslySetInnerHTML={{
-                              __html: String(replyPreviewHtml || ""),
-                            }}
-                          />
-                        </span>
-                      </span>
-                    </div>
-                  ) : null}
+                  {bubbleHeader}
                 </div>
               ) : null}
               {isVideoNote ? (
                 <Suspense fallback={<div className="h-56 w-56 max-w-[62vw] animate-pulse rounded-full bg-slate-200/60 dark:bg-slate-700/40" />}>
-                  <VideoNoteBubble msg={msg} user={user} />
+                  <VideoNoteBubble msg={msg} user={user} header={bubbleHeader} />
                 </Suspense>
               ) : (
                 <MessageFiles

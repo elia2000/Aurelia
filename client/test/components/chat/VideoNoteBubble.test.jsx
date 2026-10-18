@@ -382,6 +382,33 @@ describe("VideoNoteBubble layout", () => {
     const root = document.querySelector("[data-video-note]");
     expect(Math.round(circle().getBoundingClientRect().bottom)).toBe(Math.round(root.getBoundingClientRect().bottom));
   });
+
+  test("the message time chip is brought in over the circle's lower right rim, not left in the empty corner", async () => {
+    const { msg, user } = await setup();
+    // (the message draws the chip itself: it is absolutely placed in the corner of its bubble)
+    render(
+      <div data-message-bubble style={{ position: "relative", width: "fit-content" }}>
+        <VideoNoteBubble msg={msg} user={user} />
+        <span data-message-meta="overlay" style={{ position: "absolute", display: "inline-block", width: 56, height: 18 }}>
+          15:14
+        </span>
+      </div>,
+    );
+    await expect.element(page.getByRole("button", { name: /Play video message/ })).toBeInTheDocument();
+    const ring = circle().getBoundingClientRect();
+    const chip = document.querySelector("[data-message-meta]").getBoundingClientRect();
+    const radius = ring.width / 2;
+    const centre = { x: ring.left + radius, y: ring.top + radius };
+    const dist = (x, y) => Math.hypot(x - centre.x, y - centre.y);
+    // Its middle is on the circle and its right end is at the rim: it overlays the circle.
+    expect(dist(chip.left + chip.width / 2, chip.top + chip.height / 2)).toBeLessThan(radius);
+    expect(dist(chip.right, chip.bottom)).toBeGreaterThan(radius * 0.95);
+    // It is at the bottom right, and still inside the message's box.
+    expect(chip.left).toBeGreaterThan(centre.x);
+    expect(chip.top).toBeGreaterThan(centre.y);
+    expect(chip.right).toBeLessThanOrEqual(ring.right);
+    expect(chip.bottom).toBeLessThanOrEqual(ring.bottom);
+  });
 });
 
 describe("VideoNoteBubble loading and failing", () => {
@@ -440,6 +467,27 @@ describe("VideoNoteBubble loading and failing", () => {
     expect(mocks.fetchCiphertext).toHaveBeenCalledTimes(2);
   });
 
+  test("a failure shows the explanation, not a spinner, even while the little poster is still being decrypted", async () => {
+    const { msg, user } = await setup();
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const identity = mocks.services.getIdentity;
+    let calls = 0;
+    mocks.services.getIdentity = async () => {
+      calls += 1;
+      if (calls === 1) await gate; // the poster's decryption is slow
+      return identity();
+    };
+    mocks.fetchCiphertext.mockRejectedValueOnce(new Error("network"));
+    render(<VideoNoteBubble msg={msg} user={user} />);
+    await page.getByRole("button", { name: /Play video message/ }).click();
+    await expect.element(page.getByText("Could not load this video message.")).toBeInTheDocument();
+    expect(document.querySelector("svg.animate-spin")).toBeNull();
+    release();
+  });
+
   test("a download that fails for lack of network says so and can be retried", async () => {
     const { msg, user } = await setup();
     mocks.fetchCiphertext.mockRejectedValueOnce(new Error("network"));
@@ -488,7 +536,13 @@ describe("VideoNoteBubble playing by itself", () => {
     render(<VideoNoteBubble msg={msg} user={user} />);
     await vi.waitFor(() => expect(HTMLMediaElement.prototype.play).toHaveBeenCalled());
     const video = document.querySelector("video");
-    Object.defineProperty(video, "currentTime", { configurable: true, get: () => at, set: (v) => (at = v) });
+    Object.defineProperty(video, "currentTime", {
+      configurable: true,
+      get: () => at,
+      set: (v) => {
+        at = v;
+      },
+    });
     at = 7; // the loop is somewhere in the middle
     await page.getByRole("button", { name: /Play video message/ }).click();
     await expect.element(page.getByRole("button", { name: /Pause video message/ })).toBeInTheDocument();

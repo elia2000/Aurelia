@@ -11,6 +11,7 @@ import {
   videoNoteKey,
 } from "../../../videoNote/receive.js";
 import { useAutoplayAllowed, useOnScreen } from "./useVideoNoteAutoplay.js";
+import "./videoNote.css";
 
 // Only loaded when the sender's keys need a look.
 const SafetyNumberModal = lazy(() => import("../../calls/SafetyNumberModal.jsx"));
@@ -356,14 +357,14 @@ export default function VideoNoteBubble({ msg, user, header = null }) {
   const remainingMs = Math.ceil(Math.max(0, durationMs - (engaged ? progress * durationMs : 0)) / 1000) * 1000;
   const placeholder = !poster && !frame;
   // What sits on the middle of the circle.
-  const centre = loading || (placeholder && posterPending) ? "spinner" : error ? "" : !playing ? "play" : engaged ? "pause" : "";
+  const centre = error ? "" : loading || (placeholder && posterPending) ? "spinner" : !playing ? "play" : engaged ? "pause" : "";
 
   return (
-    <div className="flex flex-col gap-1" data-video-note style={{ width: "min(240px, 70vw)" }}>
+    <div className="flex flex-col gap-1" data-video-note>
       {header ? (
         <div
           data-video-note-header
-          className={`min-w-0 max-w-full rounded-2xl px-2.5 py-1 text-[13px] leading-[1.25] shadow-xs ${
+          className={`min-w-0 max-w-full self-start rounded-2xl px-2.5 py-1 text-[13px] leading-[1.25] shadow-xs ${
             own
               ? "bg-emerald-200 text-emerald-950 dark:bg-emerald-800 dark:text-white"
               : "bg-white/90 text-slate-800 dark:bg-slate-800/75 dark:text-slate-100"
@@ -503,28 +504,6 @@ export default function VideoNoteBubble({ msg, user, header = null }) {
           className="rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
           style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
         />
-        <span
-          data-video-note-duration
-          className="pointer-events-none absolute left-[22%] top-[13%] inline-flex items-center gap-1 rounded-full bg-black/45 px-1.5 py-[3px] text-[11px] font-semibold leading-none tabular-nums text-white backdrop-blur-sm"
-        >
-          <span>{formatDurationMs(remainingMs)}</span>
-          {engaged ? null : <VolumeX size={11} aria-label="Sound off" role="img" />}
-        </span>
-        <span
-          data-video-note-lock
-          title="End-to-end encrypted"
-          className="pointer-events-none absolute bottom-[16%] left-[16%] inline-flex h-[18px] w-[18px] items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm"
-        >
-          <Lock size={10} aria-label="End-to-end encrypted" role="img" />
-        </span>
-        {hint && !error ? (
-          <p
-            role="status"
-            className="pointer-events-none absolute inset-x-[18%] bottom-[16%] rounded-full bg-black/55 px-2 py-1 text-center text-[11px] leading-tight text-white"
-          >
-            {hint}
-          </p>
-        ) : null}
         {error ? (
           <div
             role="alert"
@@ -542,6 +521,27 @@ export default function VideoNoteBubble({ msg, user, header = null }) {
               Retry
             </button>
           </div>
+        ) : null}
+        <span
+          data-video-note-duration
+          className="pointer-events-none absolute left-[22%] top-[13%] inline-flex items-center gap-1 rounded-full bg-black/45 px-1.5 py-[3px] text-[11px] font-semibold leading-none tabular-nums text-white backdrop-blur-sm"
+        >
+          <span>{formatDurationMs(remainingMs)}</span>
+          {engaged ? null : <VolumeX size={11} aria-label="Sound off" role="img" />}
+        </span>
+        <span
+          data-video-note-lock
+          className="pointer-events-none absolute bottom-[16%] left-[16%] inline-flex h-[18px] w-[18px] items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm"
+        >
+          <Lock size={10} aria-label="End-to-end encrypted" role="img" />
+        </span>
+        {hint && !error ? (
+          <p
+            role="status"
+            className="pointer-events-none absolute inset-x-[18%] bottom-[16%] rounded-full bg-black/55 px-2 py-1 text-center text-[11px] leading-tight text-white"
+          >
+            {hint}
+          </p>
         ) : null}
       </div>
       {reviewOpen ? (

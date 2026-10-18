@@ -35,7 +35,7 @@ features:
     link: /Admin-Panel
   - icon: 😀
     title: Emoji and themes
-    details: A Telegram-style emoji picker with Apple-style pictures, and a theme colour for everyone, including a random colour that changes every day.
+    details: A Telegram-style emoji picker with Apple-style pictures, big emoji for messages of up to three emoji (Large, Medium or Normal, your choice in Settings → Appearance), and a theme colour for everyone, including a random colour that changes every day.
     link: /Environment-Variables
   - icon: 🔧
     title: Configurable

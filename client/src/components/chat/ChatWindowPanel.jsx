@@ -1018,6 +1018,8 @@ export default function ChatWindowPanel({
       isOffline={isOffline}
       sseConnected={sseConnected}
       isFirstInGroup={options.isFirstInGroup}
+      isRunStart={options.isRunStart}
+      isRunEnd={options.isRunEnd}
       user={user}
       formatTime={formatTime}
       unreadMarkerId={unreadMarkerId}
