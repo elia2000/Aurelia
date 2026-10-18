@@ -182,6 +182,42 @@ select,
   -webkit-touch-callout: default;
 }
 
+/*
+  Message text can be selected with a mouse: drag (also across several
+  messages), double click for a word, triple click for a paragraph. The rule
+  above that switches selection off for everything under #root is what used to
+  block this, so these selectors repeat #root to win over it. Touch screens keep
+  selection off because a long press opens the message menu there. Buttons, the
+  time and status line and the media inside a bubble stay unselectable.
+*/
+@media (any-hover: hover) and (any-pointer: fine) {
+  #root [data-message-bubble],
+  #root [data-message-bubble] * {
+    -webkit-user-select: text;
+    user-select: text;
+    -webkit-touch-callout: default;
+  }
+
+  #root [data-message-bubble] button,
+  #root [data-message-bubble] button *,
+  #root [data-message-bubble] [data-no-select],
+  #root [data-message-bubble] [data-no-select] * {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* A drag that starts on a link selects text instead of dragging the link away. */
+  #root [data-message-bubble] .sb-markdown a {
+    -webkit-user-drag: none;
+    user-drag: none;
+  }
+
+  /* An emoji picture cannot start a selection itself, so a press on it goes to the text under it. */
+  #root [data-message-bubble] .sb-markdown img.emoji {
+    pointer-events: none;
+  }
+}
+
 /* Handle safe areas on notch devices */
 @supports (padding: max(0px)) {
   body {
@@ -907,6 +943,35 @@ label:hover .sb-dash-br {
 .sb-markdown,
 .sb-markdown-inline {
   line-height: 1.45;
+}
+
+/* Tighter lines inside a message bubble (the shared 1.45 above stays for other uses). */
+[data-message-bubble] .sb-markdown {
+  line-height: 1.35;
+}
+
+/*
+  The time is drawn over the bubble's bottom corner (MessageMeta). These rules
+  keep the end of the last text line free for it: a hidden copy of the time text
+  (--sb-meta-text) plus room for the icons (--sb-meta-extra). A short message
+  stays on one tight line ("ok  12:31"), a long one wraps and the time lands on
+  its last line, or on a new line when that line is full.
+*/
+[data-message-bubble] .sb-meta-inline::after,
+[data-message-bubble] .sb-meta-p > p:last-child::after {
+  content: var(--sb-meta-text, "");
+  display: inline-block;
+  visibility: hidden;
+  padding-inline: 8px var(--sb-meta-extra, 0px);
+  font-size: 11px;
+  line-height: 14px;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+/* A list, quote or code block ends the text: the time gets its own row under it. */
+[data-message-bubble] .sb-meta-block {
+  padding-bottom: 16px;
 }
 
 .sb-markdown p {

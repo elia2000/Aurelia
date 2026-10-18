@@ -67,7 +67,7 @@ describe("MessageComposer — idle state", () => {
       .toBeInTheDocument();
   });
 
-  test("mic button shows when there is no text and no pending files", async () => {
+  test("the record button (voice by default) shows when there is no text and no pending files", async () => {
     render(<MessageComposer {...BASE_PROPS} />);
     await expect
       .element(page.getByRole("button", { name: /record voice message/i }))
@@ -83,9 +83,9 @@ describe("MessageComposer — idle state", () => {
       .toBeInTheDocument();
   });
 
-  test("send button is disabled when textarea is empty", async () => {
+  test("there is no send button when the field is empty", async () => {
     render(<MessageComposer {...BASE_PROPS} />);
-    // Mic mode when empty — the submit button doesn't exist, mic button does
+    // The one primary button is the record button when empty, not a disabled send
     await expect
       .element(page.getByRole("button", { name: /send message/i }))
       .not.toBeInTheDocument();
@@ -234,7 +234,7 @@ describe("MessageComposer — pending uploads", () => {
     await expect.element(page.getByText("photo.jpg")).toBeInTheDocument();
   });
 
-  test("send button is shown (not mic) when files are pending with no text", async () => {
+  test("send button is shown (not the record button) when files are pending with no text", async () => {
     render(
       <MessageComposer
         {...BASE_PROPS}
@@ -264,6 +264,14 @@ describe("MessageComposer — upload progress", () => {
   test("shows rounded percentage value", async () => {
     render(<MessageComposer {...BASE_PROPS} activeUploadProgress={73.6} />);
     await expect.element(page.getByText("74%")).toBeInTheDocument();
+  });
+
+  test("is a progressbar that reports its value, kept out of the layout", async () => {
+    render(<MessageComposer {...BASE_PROPS} activeUploadProgress={40} />);
+    const bar = page.getByRole("progressbar");
+    await expect.element(bar).toHaveAttribute("aria-valuenow", "40");
+    // Laid over the top edge of the composer: uploading never changes its height.
+    expect(bar.element().className).toContain("absolute");
   });
 
   test("does not show progress bar when activeUploadProgress is null", async () => {
@@ -528,5 +536,49 @@ describe("MessageComposer — emoji", () => {
     await page.getByRole("button", { name: "Emoji" }).click();
     await page.getByRole("button", { name: "grinning", exact: true }).click();
     expect(document.querySelector("textarea").value).toBe("abc");
+  });
+});
+
+// ─── Touch scrolling on a phone ───────────────────────────────────────────────
+
+describe("MessageComposer — touch scrolling on a phone", () => {
+  const swipe = (target) => {
+    const point = new Touch({ identifier: 1, target, clientX: 20, clientY: 20 });
+    const event = new TouchEvent("touchmove", {
+      bubbles: true,
+      cancelable: true,
+      touches: [point],
+      targetTouches: [point],
+      changedTouches: [point],
+    });
+    target.dispatchEvent(event);
+    return event;
+  };
+  const files = [
+    { id: "a", name: "a.png", mimeType: "image/png", previewUrl: "data:image/gif;base64,R0lGODlhAQABAAAAACw=" },
+    { id: "b", name: "b.png", mimeType: "image/png", previewUrl: "data:image/gif;base64,R0lGODlhAQABAAAAACw=" },
+  ];
+
+  test("a swipe on the buttons does not scroll the page behind the composer", async () => {
+    render(<MessageComposer {...BASE_PROPS} isDesktop={false} />);
+    await expect.element(page.getByRole("button", { name: "Emoji" })).toBeInTheDocument();
+    expect(swipe(page.getByRole("button", { name: "Emoji" }).element()).defaultPrevented).toBe(true);
+  });
+
+  test("the row of pending files can still be swiped sideways", async () => {
+    render(<MessageComposer {...BASE_PROPS} isDesktop={false} pendingUploadFiles={files} />);
+    await expect.element(page.getByRole("button", { name: "Remove file" }).first()).toBeInTheDocument();
+    const thumb = document.querySelector("form img");
+    expect(swipe(thumb).defaultPrevented).toBe(false);
+    // The row must also allow panning sideways: .chat-scroll only allows vertical panning.
+    const row = thumb.closest("[data-touch-scroll]");
+    expect(row.classList.contains("touch-pan-x")).toBe(true);
+    expect(row.classList.contains("chat-scroll")).toBe(false);
+  });
+
+  test("a long message can still be swiped up and down inside its field", async () => {
+    render(<MessageComposer {...BASE_PROPS} isDesktop={false} />);
+    await expect.element(page.getByRole("textbox", { name: /type a message/i })).toBeInTheDocument();
+    expect(swipe(document.querySelector("textarea")).defaultPrevented).toBe(false);
   });
 });

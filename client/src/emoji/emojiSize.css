@@ -1,0 +1,37 @@
+/*
+  How big a message of only one to three emoji is drawn (the choice is made in
+  Settings -> Appearance, see emojiSize.js). The choice sits on <html> as
+  data-emoji-size, and the settings screen puts the same attribute on each
+  sample so that it can show all three sizes at once. The sizes are custom
+  properties, which the nearest data-emoji-size inherits, so a sample is drawn
+  at its own size whatever is chosen for the app.
+
+  With no data-emoji-size anywhere, the plain img.emoji-jumbo rule in
+  index.css (the Large size) applies.
+*/
+
+/* Large, which is also what an unknown value means. */
+[data-emoji-size] {
+  --emoji-jumbo-size: 3.4rem;
+  --emoji-jumbo-margin: 0.1rem 0.12rem;
+  --emoji-jumbo-align: middle;
+}
+
+[data-emoji-size="medium"] {
+  --emoji-jumbo-size: 2.25rem;
+  --emoji-jumbo-margin: 0.1rem 0.1rem;
+}
+
+/* The same as an emoji inside a line of text (img.emoji in index.css). */
+[data-emoji-size="normal"] {
+  --emoji-jumbo-size: 1.3em;
+  --emoji-jumbo-margin: 0 0.04em;
+  --emoji-jumbo-align: -0.3em;
+}
+
+[data-emoji-size] img.emoji-jumbo {
+  width: var(--emoji-jumbo-size);
+  height: var(--emoji-jumbo-size);
+  margin: var(--emoji-jumbo-margin);
+  vertical-align: var(--emoji-jumbo-align);
+}

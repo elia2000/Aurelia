@@ -135,7 +135,8 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
   const [pictureSize, setPictureSize] = useState({ remote: null, local: null });
   const [box, setBox] = useState(null);
   const hideTimer = useRef(null);
-  const lastPointer = useRef("touch");
+  // A click or tap that hid the details: moving the mouse does not bring them back.
+  const pinnedHidden = useRef(false);
   const [audioElement, setAudioElement] = useState(null);
   const settingsButtonRef = useRef(null);
   // One stable callback, so the element is only reported when it appears or goes.
@@ -239,9 +240,11 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
   const mainFit = objectFitFor(fit, swappedView ? pictureSize.local : pictureSize.remote, box);
   const mainPicture = `${MAIN_PICTURE} ${mainFit === "contain" ? "object-contain" : "object-cover"}`;
 
-  // ── the details of a video call get out of the way of the picture: a tap
-  // hides them (and brings them back), and they hide by themselves after a
-  // few seconds. They stay while something needs reading or choosing, and
+  // ── the details of a video call get out of the way of the picture: a tap or
+  // a mouse click hides them (and brings them back), and they hide by
+  // themselves after a few seconds. A mouse showing them by moving is the
+  // exception to a click: what a click hid stays hidden until the next click or
+  // a key press. They stay while something needs reading or choosing, and
   // while there is no picture to look at instead.
   const videoOnScreen = kind === "video" && connected && !minimized && (showRemoteVideo || swappedView);
   const mustStay = settingsOpen || safetyOpen || trust?.status === TRUST.DEVICES_ADDED || Boolean(networkPaused);
@@ -271,9 +274,12 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
   }, [videoOnScreen, mustStay, chromeHidden, armHide]);
   // A call that is not a video picture (or is over) always shows everything.
   useEffect(() => {
-    if (!videoOnScreen) setChromeHidden(false);
+    if (videoOnScreen) return;
+    pinnedHidden.current = false;
+    setChromeHidden(false);
   }, [videoOnScreen]);
   const wake = useCallback(() => {
+    pinnedHidden.current = false;
     setChromeHidden(false);
     if (videoOnScreen && !mustStay) armHide();
   }, [videoOnScreen, mustStay, armHide]);
@@ -301,13 +307,11 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
       wake();
       return;
     }
-    // A mouse already shows the details by moving and hides them by resting;
-    // only a tap (touch or pen) toggles them.
-    if (lastPointer.current === "mouse") {
-      wake();
-      return;
-    }
-    setChromeHidden((hidden) => !hidden);
+    // A click on the picture hides what is showing and shows what is hidden.
+    // What it hid stays hidden: the mouse moving over the picture does not undo it.
+    const hide = !chromeHidden;
+    pinnedHidden.current = hide;
+    setChromeHidden(hide);
   };
 
   useEffect(() => {
@@ -428,11 +432,8 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
         role="dialog"
         aria-label={`${statusText} with ${peerName}`}
         onClick={onStageClick}
-        onPointerDown={(event) => {
-          lastPointer.current = event.pointerType;
-        }}
         onKeyDown={wake}
-        onPointerMove={(event) => event.pointerType === "mouse" && wake()}
+        onPointerMove={(event) => event.pointerType === "mouse" && !pinnedHidden.current && wake()}
         className={`fixed inset-0 z-[340] flex flex-col overflow-hidden ${videoStage ? "bg-black" : "bg-slate-950"} text-slate-50 outline-none md:inset-auto md:bottom-6 md:right-6 md:h-[560px] md:w-[360px] md:rounded-3xl md:border md:border-emerald-500/30 md:shadow-2xl md:shadow-emerald-500/20`}
       >
         {showRemoteVideo ? (

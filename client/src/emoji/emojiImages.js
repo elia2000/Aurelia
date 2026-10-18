@@ -1,4 +1,7 @@
 import emojiRegex from "emoji-regex";
+// A message of only a few emoji is shown big; how big is the person's choice
+// (Settings -> Appearance). Loading this also puts that choice on the page.
+import "./emojiSize.js";
 
 // Emoji are shown as Apple-style pictures (like Telegram does) instead of
 // whatever the device draws. The pictures are served from /emoji/apple/64/ (the
@@ -6,7 +9,8 @@ import emojiRegex from "emoji-regex";
 // missing the browser shows the alt text, which is the plain emoji.
 
 export const EMOJI_IMAGE_BASE = "/emoji/apple/64/";
-const MAX_JUMBO = 3;
+/** A message of at most this many emoji (and nothing else) is a "jumbo" one. */
+export const MAX_JUMBO_EMOJI = 3;
 
 const SEQUENCE = emojiRegex();
 
@@ -74,7 +78,7 @@ export function isJumboEmojiText(text) {
     count += 1;
     return "";
   });
-  return count > 0 && count <= MAX_JUMBO && rest.trim() === "";
+  return count > 0 && count <= MAX_JUMBO_EMOJI && rest.trim() === "";
 }
 
 /**

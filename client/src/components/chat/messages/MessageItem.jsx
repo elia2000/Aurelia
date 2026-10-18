@@ -1,11 +1,5 @@
 import { Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertCircle,
-  Check,
-  CheckCheck,
-  Clock12,
-  ClockFading,
-  Eye,
   File,
   Forward,
   Ghost,
@@ -20,6 +14,7 @@ import { getAvatarInitials } from "../../../utils/avatarInitials.js";
 import { formatCompactCount, formatDayLabel } from "../../../utils/chatFormat.js";
 import ContextMenuSurface from "../../context-menu/ContextMenuSurface.jsx";
 import { MessageFiles } from "../media/MessageFiles.jsx";
+import { MessageMeta } from "./MessageMeta.jsx";
 
 // Encrypted round video messages pull in the decryption code, so they load on demand.
 const VideoNoteBubble = lazy(() => import("../videoNote/VideoNoteBubble.jsx"));
@@ -28,6 +23,20 @@ import {
   renderMarkdownInlinePlain,
 } from "../../../utils/markdown.js";
 import { copyTextToClipboard } from "../../../utils/clipboard.js";
+import {
+  getBodyTailKind,
+  getMediaAspectKey,
+  getMediaBubbleWidthPx,
+  getMetaSpacer,
+  getTextDirection,
+  MEDIA_MAX_WIDTH_PX,
+  resolveMediaAspectRatio,
+} from "../../../utils/messageLayout.js";
+import {
+  getSelectedTextWithin,
+  hasActiveTextSelection,
+  isDragSelectionClick,
+} from "../../../utils/messageSelection.js";
 import {
   extractMessageBodyText,
   FILE_SUMMARY_PATTERN,
@@ -146,7 +155,10 @@ const getMessageRenderSignature = (msg) => {
 
 export const MessageItem = memo(function MessageItem({
   msg,
-  isFirstInGroup,
+  isRunStart = true,
+  isRunEnd = true,
+  leadingSlot = null,
+  reactionsSlot = null,
   user,
   formatTime,
   unreadMarkerId,
@@ -596,7 +608,7 @@ export const MessageItem = memo(function MessageItem({
       : replyTarget?.color || "#10b981";
   const replyPreviewRaw =
     extractMessageBodyText(replyTarget?.body).trim() || "Message";
-  const truncateReplyPreview = (value, maxChars = 90) => {
+  const truncateReplyPreview = (value, maxChars = 140) => {
     const text = String(value || "");
     if (text.length <= maxChars) return text;
     return `${text.slice(0, maxChars).trimEnd()}...`;
@@ -691,11 +703,16 @@ export const MessageItem = memo(function MessageItem({
         },
       }),
   };
+  // The sender's name and avatar have a menu of their own; the row's message
+  // menu must not open on top of it.
+  const hasSenderMenu = !senderContextMenu.disabled;
   const computedIsOffline =
     isOffline ||
     sseConnected === false ||
     (typeof navigator !== "undefined" && navigator.onLine === false);
 
+  // The whole message row is the context menu surface, not only the bubble, so
+  // a right click on the empty space beside a bubble (or on the gutter) works.
   const messageContextMenu = {
     disabled: !onOpenContextMenu,
     isMobile: contextMenuMobileEnabled,
@@ -703,28 +720,45 @@ export const MessageItem = memo(function MessageItem({
       contextMenuMobileEnabled && canSwipeReply ? 650 : undefined,
     moveTolerancePx:
       contextMenuMobileEnabled && canSwipeReply ? 0 : undefined,
-    onOpen: ({ event, targetEl, isMobile }) =>
+    onOpen: ({ event, source, targetEl, isMobile }) => {
+      // The sender's name and avatar open their own menu; do not replace it.
+      const eventTarget = event?.target;
+      if (
+        eventTarget instanceof Element &&
+        eventTarget.closest("[data-own-context-menu]")
+      ) {
+        return;
+      }
+      const bubble = targetEl?.querySelector?.("[data-message-bubble]") || null;
+      let menuEvent = event;
+      if (source === "keyboard" && bubble) {
+        // No pointer position: open the menu at the bottom of the bubble.
+        const rect = bubble.getBoundingClientRect();
+        menuEvent = {
+          clientX: rect.left + Math.min(rect.width / 2, 64),
+          clientY: rect.bottom - 6,
+          target: eventTarget,
+        };
+      }
       onOpenContextMenu?.({
         kind: "message",
-        event,
+        event: menuEvent,
         targetEl,
         isMobile,
         data: {
           message: msg,
           isOffline: computedIsOffline,
+          selectedText: getSelectedTextWithin(bubble),
         },
-      }),
+      });
+    },
   };
   const renderForwardedHeader = () => {
     if (!isForwarded) return null;
     return (
-      <div className="mb-2 flex w-full flex-col items-start gap-1 self-start text-[11px] text-sky-400">
-        <div className="flex items-center gap-1.5">
-          <Forward size={14} className="shrink-0" />
-          <span className="shrink-0 text-[10px] font-semibold italic">
-            Forwarded from
-          </span>
-        </div>
+      <div className="mb-0.5 flex w-full min-w-0 items-center gap-1 text-[13px] leading-[1.25] text-sky-400">
+        <Forward size={13} className="shrink-0" />
+        <span className="shrink-0 italic">Forwarded from</span>
         <button
           type="button"
           onClick={
@@ -733,7 +767,7 @@ export const MessageItem = memo(function MessageItem({
               : undefined
           }
           disabled={!canOpenForwardedOrigin}
-          className={`inline-flex max-w-full items-center gap-1.5 text-left font-semibold not-italic transition ${
+          className={`inline-flex min-w-0 max-w-full items-center gap-1 text-left font-semibold not-italic transition ${
             canOpenForwardedOrigin ? "hover:text-sky-300" : "cursor-default"
           }`}
           aria-label={forwardedOriginButtonLabel}
@@ -787,6 +821,8 @@ export const MessageItem = memo(function MessageItem({
     );
   };
 
+  // Where the mouse went down, to tell a click from the end of a drag selection.
+  const mouseDownRef = useRef(null);
   const touchStartXRef = useRef(0);
   const touchStartYRef = useRef(0);
   const touchDxRef = useRef(0);
@@ -884,6 +920,137 @@ export const MessageItem = memo(function MessageItem({
     };
   }, [handleSwipeEnd, resetSwipe]);
 
+  // ---- time, edited and delivery status: drawn once, placed by MessageMeta ----
+  const timeLabel = msg._timeLabel || formatTime(msg.created_at);
+  const showDeliveryStatus = isOwn || isChannelChat;
+  const metaStatus = !showDeliveryStatus
+    ? null
+    : isSending
+      ? "sending"
+      : isFailed
+        ? "failed"
+        : isChannelChat
+          ? "views"
+          : isRead
+            ? "read"
+            : "sent";
+  const viewsLabel = isChannelChat ? formatSeenCount(seenCount) : "";
+  const showBody = !shouldHideGeneratedFileBody;
+  const lastFile = messageFiles[messageFiles.length - 1];
+  const lastFileIsMedia = Boolean(
+    lastFile &&
+      (getFileRenderType
+        ? ["image", "video"].includes(getFileRenderType(lastFile))
+        : true),
+  );
+  // Under a caption (or plain text) the time sits at the end of the last line.
+  // A picture without a caption gets it as a chip over its corner; a file or
+  // voice message gets its own row.
+  const metaVariant = isVideoNote
+    ? "overlay"
+    : showBody || !hasFiles
+      ? "inline"
+      : hasMediaFiles && lastFileIsMedia
+        ? "overlay"
+        : "row";
+  const bodyDirection = getTextDirection(bodyText);
+  const metaSide = metaVariant === "inline" && bodyDirection === "rtl" ? "left" : "right";
+  const metaSpacer = getMetaSpacer({
+    timeLabel,
+    isEdited,
+    expiryLabel: expiryBadge?.label || "",
+    viewsLabel,
+    hasStatusIcon: Boolean(metaStatus),
+  });
+  const bodyTailKind = showBody ? getBodyTailKind(markdownHtml) : "inline";
+  const bodyTailClass =
+    metaVariant !== "inline"
+      ? ""
+      : bodyTailKind === "p"
+        ? "sb-meta-p"
+        : bodyTailKind === "block"
+          ? "sb-meta-block"
+          : "sb-meta-inline";
+
+  // ---- bubble shape: Telegram-like corners, small at the tail ----
+  const hasMediaBubble = hasFiles && hasMediaFiles && !isVideoNote;
+  const showSenderName = !isOwn && isGroupChat && !isChannelChat && isRunStart;
+  const showAvatarGutter = !isOwn && isGroupChat && !isChannelChat;
+  const bubbleCorners = isOwn
+    ? `rounded-tl-[16px] rounded-bl-[16px] ${
+        isRunStart ? "rounded-tr-[16px]" : "rounded-tr-[5px]"
+      } ${isRunEnd ? "rounded-br-[4px]" : "rounded-br-[5px]"}`
+    : `rounded-tr-[16px] rounded-br-[16px] ${
+        isRunStart ? "rounded-tl-[16px]" : "rounded-tl-[5px]"
+      } ${isRunEnd ? "rounded-bl-[4px]" : "rounded-bl-[5px]"}`;
+  const hasBubbleHeader =
+    showSenderName || isForwarded || Boolean(replyTarget);
+  // A round video stands on the chat background without a bubble around it,
+  // unless a name, forward line or quote needs a bubble to sit in.
+  const isBareBubble = isVideoNote && !hasBubbleHeader;
+  const bubbleSurface = isBareBubble
+    ? ""
+    : isOwn
+      ? "bg-emerald-200 text-emerald-950 shadow-xs dark:bg-emerald-800 dark:text-white"
+      : "bg-white/90 text-slate-800 shadow-xs dark:bg-slate-800/75 dark:text-slate-100";
+  // A single picture or video gives the bubble its shape; an album, or a
+  // picture next to a file, gets the full media width.
+  const soleMediaFile =
+    hasMediaBubble && messageFiles.length === 1 ? messageFiles[0] : null;
+  const mediaBubbleWidthPx = hasMediaBubble
+    ? soleMediaFile
+      ? getMediaBubbleWidthPx({
+          ratio: resolveMediaAspectRatio({
+            file: soleMediaFile,
+            cachedRatio:
+              messageFilesProps?.mediaAspectByKey?.[getMediaAspectKey(soleMediaFile)],
+            isVideo: getFileRenderType?.(soleMediaFile) === "video",
+          }),
+          isDesktop,
+        })
+      : MEDIA_MAX_WIDTH_PX
+    : null;
+  const bubbleSize = hasMediaBubble
+    ? "overflow-hidden p-0"
+    : isBareBubble
+      ? "w-fit p-0"
+      : `w-fit px-2.5 py-1.5 ${hasMarkdownCodeBlock ? "min-w-36" : "min-w-0"}`;
+
+  const renderSenderAvatar = () => (
+    <ContextMenuSurface
+      as="button"
+      type="button"
+      data-message-avatar
+      data-own-context-menu={hasSenderMenu ? "" : undefined}
+      onClick={
+        canOpenSenderProfile ? () => onOpenSenderProfile?.(msg) : undefined
+      }
+      className={`shrink-0 ${canOpenSenderProfile ? "group" : ""}`}
+      disabled={!canOpenSenderProfile}
+      contextMenu={senderContextMenu}
+    >
+      <Avatar
+        src={!isDeletedAuthor ? msg.avatar_url : ""}
+        alt={senderName}
+        name={senderName}
+        color={senderColor}
+        initials={senderInitials}
+        placeholderContent={
+          isDeletedAuthor ? (
+            <Ghost size={14} className="text-slate-600" />
+          ) : (
+            senderInitials
+          )
+        }
+        className={`h-8 w-8 shrink-0 text-xs transition ${
+          canOpenSenderProfile
+            ? "group-hover:ring-2 group-hover:ring-emerald-300"
+            : ""
+        }`}
+      />
+    </ContextMenuSurface>
+  );
+
   return (
     <div
       id={`message-${msg.id}`}
@@ -891,27 +1058,26 @@ export const MessageItem = memo(function MessageItem({
       data-msg-day-key={msg?._dayKey || ""}
       style={{ scrollMarginTop: "96px" }}
       ref={visibilityRef}
-      className={`w-full max-w-full overflow-x-hidden px-0 pb-3 md:px-3 ${
-        isFirstInGroup ? "pt-2" : ""
-      }`}
+      className="w-full max-w-full overflow-x-clip"
     >
       {String(unreadMarkerId || "") === String(msg.id || "") ? (
         <div
           id={`unread-divider-${msg.id}`}
-          className="flex items-center gap-3 py-3"
+          data-no-select
+          className="flex items-center gap-3 px-3 py-2"
           style={{ scrollMarginTop: "96px" }}
         >
           <span className="h-px flex-1 bg-emerald-200/70 dark:bg-emerald-500/30" />
-          <span className="rounded-full border border-emerald-200/60 bg-white/90 px-3 py-1 text-[11px] font-semibold text-emerald-700 dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-200">
+          <span className="rounded-full border border-emerald-200/60 bg-white/90 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700 dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-200">
             Unread Messages
           </span>
           <span className="h-px flex-1 bg-emerald-200/70 dark:bg-emerald-500/30" />
         </div>
       ) : null}
       {msg?._systemEvent ? (
-        <div className="flex justify-center px-3 py-1 md:px-0">
+        <div data-no-select className="flex justify-center px-3 py-1">
           <span
-            className="inline-flex max-w-full items-center justify-center rounded-full border border-emerald-200/60 bg-white/90 px-3 py-1 text-center text-[11px] font-semibold text-emerald-700 dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-200"
+            className="inline-flex max-w-full items-center justify-center rounded-full border border-emerald-200/60 bg-white/90 px-2.5 py-0.5 text-center text-[11px] font-semibold text-emerald-700 dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-200"
             style={{ lineHeight: 1.35 }}
           >
             <span className="min-w-0 truncate">
@@ -935,18 +1101,23 @@ export const MessageItem = memo(function MessageItem({
         </div>
       ) : null}
       {!msg?._systemEvent ? (
-        <div
-          className={`relative flex w-full max-w-full px-3 md:px-0 ${
+        <ContextMenuSurface
+          as="div"
+          data-message-row
+          tabIndex={-1}
+          className={`relative flex w-full max-w-full items-end gap-2 px-2 outline-none md:px-4 ${
             isOwn ? "justify-end" : "justify-start"
-          }`}
+          } ${isRunStart ? "pt-[7px]" : "pt-px"} pb-px`}
           style={{
             touchAction: "pan-y",
-            userSelect: isSwiping ? "none" : "text",
+            userSelect: isSwiping ? "none" : undefined,
           }}
+          contextMenu={messageContextMenu}
           onPointerDownCapture={(event) => {
             if (isDesktop || !isMobileTouchDevice || !onReply) return;
             if (!canSwipeReply) return;
-            if (event.pointerType !== "touch") return;
+            // Swipe to reply is for fingers and pens; the mouse is never captured.
+            if (event.pointerType === "mouse") return;
             const target = event.target;
             if (
               target &&
@@ -978,7 +1149,7 @@ export const MessageItem = memo(function MessageItem({
           }}
           onPointerMoveCapture={(event) => {
             if (!trackingSwipeRef.current || !canSwipeReply) return;
-            if (event.pointerType !== "touch") return;
+            if (event.pointerType === "mouse") return;
             if (activeSwipePointerIdRef.current !== event.pointerId) return;
             const dx = event.clientX - touchStartXRef.current;
             const dy = event.clientY - touchStartYRef.current;
@@ -1012,7 +1183,7 @@ export const MessageItem = memo(function MessageItem({
           }}
           onPointerUpCapture={(event) => {
             if (!trackingSwipeRef.current) return;
-            if (event.pointerType !== "touch") return;
+            if (event.pointerType === "mouse") return;
             if (activeSwipePointerIdRef.current !== event.pointerId) return;
             if (swipeGestureActiveRef.current) {
               suppressCodeClickUntilRef.current = Date.now() + 320;
@@ -1020,7 +1191,7 @@ export const MessageItem = memo(function MessageItem({
             handleSwipeEnd();
           }}
           onPointerCancelCapture={(event) => {
-            if (event.pointerType !== "touch") return;
+            if (event.pointerType === "mouse") return;
             if (activeSwipePointerIdRef.current !== event.pointerId) return;
             if (swipeGestureActiveRef.current) {
               suppressCodeClickUntilRef.current = Date.now() + 320;
@@ -1029,7 +1200,7 @@ export const MessageItem = memo(function MessageItem({
           }}
         >
           {showSwipeHint ? (
-            <div className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2">
+            <div className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2">
               <div
                 className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-500 text-white shadow-lg shadow-emerald-500/30"
                 style={{
@@ -1043,314 +1214,201 @@ export const MessageItem = memo(function MessageItem({
               </div>
             </div>
           ) : null}
-          {!isOwn && isGroupChat && !isChannelChat ? (
-            <div className="flex min-w-0 max-w-full items-end gap-2">
-              <ContextMenuSurface
-                as="button"
-                type="button"
-                onClick={
-                  canOpenSenderProfile
-                    ? () => onOpenSenderProfile?.(msg)
-                    : undefined
-                }
-                className={canOpenSenderProfile ? "group" : ""}
-                disabled={!canOpenSenderProfile}
-                contextMenu={senderContextMenu}
-              >
-                <Avatar
-                  src={!isDeletedAuthor ? msg.avatar_url : ""}
-                  alt={senderName}
-                  name={senderName}
-                  color={senderColor}
-                  initials={senderInitials}
-                  placeholderContent={
-                    isDeletedAuthor ? (
-                      <Ghost size={12} className="text-slate-600" />
-                    ) : (
-                      senderInitials
-                    )
-                  }
-                  className={`h-7 w-7 shrink-0 text-[10px] transition ${
-                    canOpenSenderProfile
-                      ? "group-hover:ring-2 group-hover:ring-emerald-300"
-                      : ""
-                  }`}
-                />
-              </ContextMenuSurface>
-              <ContextMenuSurface
-                as="div"
-                data-message-bubble
-                className={`relative rounded-2xl px-4 py-3 text-sm shadow-xs overflow-visible max-w-[calc(100vw-5.5rem)] sm:max-w-[86%] md:max-w-[min(84%,calc(100%-2rem))] ${
-                  hasMarkdownCodeBlock ? "min-w-36" : "min-w-0"
-                } ${
-                  hasFiles
-                    ? hasMediaFiles
-                      ? "w-[min(52vw,18rem)] md:w-[min(44vw,22rem)] md:min-w-48"
-                      : "w-fit max-w-full"
-                    : "w-fit max-w-full"
-                } bg-white/90 text-slate-800 rounded-bl-md dark:bg-slate-800/75 dark:text-slate-100`}
-                onDoubleClick={() => {
-                  if (!isDesktop || !onReply) return;
-                  onReply(msg);
-                }}
-                style={{
-                  transform: swipeOffset
-                    ? `translateX(${swipeOffset}px)`
-                    : undefined,
-                  transition: isSwiping ? "none" : "transform 160ms ease",
-                  willChange: isSwiping ? "transform" : "auto",
-                }}
-                contextMenu={messageContextMenu}
-              >
-                <Tooltip label={senderName} asChild>
-                  <ContextMenuSurface
-                    as="button"
-                    type="button"
-                    onClick={
-                      canOpenSenderProfile
-                        ? () => onOpenSenderProfile?.(msg)
-                        : undefined
-                    }
-                    disabled={!canOpenSenderProfile}
-                    className={`mb-1 inline-flex max-w-[60vw] items-center gap-0.5 text-[11px] font-semibold transition ${
-                      canOpenSenderProfile ? "hover:underline" : ""
-                    } sm:max-w-[40vw] md:max-w-[28vw]`}
-                    dir="ltr"
-                    style={{ color: String(senderColor) }}
-                    contextMenu={senderContextMenu}
-                  >
-                    <span className={`truncate ${hasPersian(senderName) ? "font-fa" : ""}`} dir="auto">{senderName}</span>
-                    {!isDeletedAuthor && Boolean(msg.user_verified) && (
-                      <VerifiedBadge size={14} />
-                    )}
-                    {!isDeletedAuthor && (
-                      <UserRoleBadge role={msg.user_role} size={14} />
-                    )}
-                  </ContextMenuSurface>
-                </Tooltip>
-                {renderForwardedHeader()}
-                {replyTarget ? (
-                  <button
-                    type="button"
-                    onClick={() => onJumpToMessage?.(replyTarget.id)}
-                    className="group mb-2 inline-flex w-full max-w-full min-w-0 items-center gap-2 overflow-hidden rounded-xl border border-emerald-200/70 bg-white/70 px-3 py-2.5 text-left text-xs text-slate-700 transition hover:border-emerald-300 hover:bg-white hover:shadow-[0_0_16px_color-mix(in_srgb,var(--color-emerald-500)_18%,transparent)] dark:border-emerald-500/30 dark:bg-slate-900/50 dark:text-slate-200 dark:hover:bg-slate-900/70 dark:hover:shadow-[0_0_16px_color-mix(in_srgb,var(--color-emerald-500)_14%,transparent)]"
-                    aria-label={`Reply to ${replyDisplayName}`}
-                  >
-                    <span className="min-w-0 flex-1">
-                      <Tooltip label={replyDisplayName} asChild>
-                        <span
-                          className="flex max-w-full items-center gap-0.5 truncate whitespace-nowrap"
-                          dir="ltr"
-                        >
-                          <span
-                            className={`min-w-0 truncate text-[10px] font-semibold ${
-                              hasPersian(replyDisplayName) ? "font-fa" : ""
-                            }`}
-                            dir="auto"
-                            style={{ color: String(replyColor), unicodeBidi: "isolate" }}
-                          >
-                          {replyDisplayName}
-                          </span>
-                          {Boolean(replyTarget?.verified) && (
-                            <VerifiedBadge size={12} />
-                          )}
-                          {!isChannelChat && (
-                            <UserRoleBadge role={replyTarget?.role} size={12} />
-                          )}
-                        </span>
-                      </Tooltip>
-                      <span
-                        className={`flex max-w-full items-baseline gap-1 truncate whitespace-nowrap ${
-                          hasPersian(normalizedReplyPreview) ? "font-fa" : ""
-                        }`}
-                        dir="ltr"
-                        style={{ unicodeBidi: "isolate" }}
-                      >
-                        {derivedReplyIcon === "voice" ? (
-                          <Mic
-                            size={11}
-                            className="translate-y-[3px] shrink-0 text-slate-500 dark:text-slate-400"
-                          />
-                        ) : derivedReplyIcon === "video" ? (
-                          <Video
-                            size={11}
-                            className="translate-y-[3px] shrink-0 text-slate-500 dark:text-slate-400"
-                          />
-                        ) : derivedReplyIcon === "image" ? (
-                          <ImageIcon
-                            size={11}
-                            className="translate-y-[3px] shrink-0 text-slate-500 dark:text-slate-400"
-                          />
-                        ) : derivedReplyIcon === "document" ? (
-                          <File
-                            size={11}
-                            className="translate-y-[3px] shrink-0 text-slate-500 dark:text-slate-400"
-                          />
-                        ) : null}
-                        <span
-                          className="min-w-0 truncate"
-                          dir="auto"
-                          style={{ unicodeBidi: "isolate" }}
-                          dangerouslySetInnerHTML={{
-                            __html: String(replyPreviewHtml || ""),
-                          }}
-                        />
-                      </span>
-                    </span>
-                  </button>
-                ) : null}
-                {isVideoNote ? (
-                  <Suspense fallback={<div className="h-56 w-56 max-w-[62vw] animate-pulse rounded-full bg-slate-200/60 dark:bg-slate-700/40" />}>
-                    <VideoNoteBubble msg={msg} user={user} />
-                  </Suspense>
-                ) : (
-                  <MessageFiles
-                    files={messageFiles}
-                    docFullWidth={isGroupChat && !isOwn && !isDesktop}
-                    {...messageFilesProps}
-                  />
-                )}
-                {!shouldHideGeneratedFileBody ? (
-                  <div
-                    ref={messageBodyRef}
-                    dir="auto"
-                    className={`sb-markdown mt-1 wrap-break-word wrap-anywhere ${
-                      hasPersian(bodyText) ? "font-fa" : ""
-                    }`}
-                    style={{ unicodeBidi: "plaintext", textAlign: "start" }}
-                    dangerouslySetInnerHTML={{
-                      __html: String(markdownHtml || ""),
-                    }}
-                  />
-                ) : null}
-                {mentionDebugEnabled ? (
-                  <div className="sb-mention-debug" aria-hidden="true">
-                    @{mentionDebug?.active ?? 0}/{mentionDebug?.total ?? 0}
-                  </div>
-                ) : null}
-                <div className="mt-2 flex items-center gap-1 text-[10px] text-slate-500 dark:text-slate-400">
-                  <span>{msg._timeLabel || formatTime(msg.created_at)}</span>
-                  {isEdited ? <span>edited</span> : null}
-                </div>
-              </ContextMenuSurface>
-            </div>
-          ) : (
-            <ContextMenuSurface
-              as="div"
+          {/* Leading gutter: room for a selection checkbox. */}
+          <div data-slot="leading" className="flex shrink-0 items-center empty:hidden">
+            {leadingSlot}
+          </div>
+          {showAvatarGutter
+            ? isRunEnd
+              ? renderSenderAvatar()
+              : <div className="h-8 w-8 shrink-0" aria-hidden="true" />
+            : null}
+          <div
+            className={`relative flex min-w-0 max-w-[85%] flex-col md:max-w-[min(480px,78%)] ${
+              isOwn ? "items-end" : "items-start"
+            }`}
+            style={{
+              transform: swipeOffset
+                ? `translateX(${swipeOffset}px)`
+                : undefined,
+              transition: isSwiping ? "none" : "transform 160ms ease",
+              willChange: isSwiping ? "transform" : "auto",
+            }}
+          >
+            <div
               data-message-bubble
-              className={`relative rounded-2xl px-4 py-3 text-sm shadow-xs overflow-visible max-w-[78%] sm:max-w-[82%] md:max-w-[75%] ${
-                hasMarkdownCodeBlock ? "min-w-36" : "min-w-0"
-              } ${
-                hasFiles
-                  ? hasMediaFiles
-                    ? "w-[min(52vw,18rem)] max-w-[72%] md:w-[min(44vw,22rem)] md:max-w-[68%] md:min-w-48"
-                    : "w-fit max-w-[82%] sm:max-w-[86%] md:max-w-[80%]"
-                  : "max-w-[82%] sm:max-w-[86%] md:max-w-[80%]"
-              } ${
-                isOwn
-                  ? "rounded-br-md bg-emerald-200 text-emerald-950 dark:bg-emerald-800 dark:text-white"
-                  : "bg-white/90 text-slate-800 rounded-bl-md dark:bg-slate-800/75 dark:text-slate-100"
-              }`}
+              className={`relative max-w-full text-[15px] leading-[1.35] ${bubbleSize} ${bubbleCorners} ${bubbleSurface}`}
+              style={{
+                ...(mediaBubbleWidthPx ? { width: `${mediaBubbleWidthPx}px` } : null),
+                ...(metaVariant === "inline"
+                  ? {
+                      "--sb-meta-text": `"${metaSpacer.text}"`,
+                      "--sb-meta-extra": `${metaSpacer.extraPx}px`,
+                    }
+                  : null),
+              }}
               onDoubleClick={() => {
                 if (!isDesktop || !onReply) return;
+                // A double click on text selects a word; only a double click
+                // that selected nothing (padding, a picture) replies.
+                if (hasActiveTextSelection()) return;
                 onReply(msg);
               }}
-              style={{
-                transform: swipeOffset
-                  ? `translateX(${swipeOffset}px)`
-                  : undefined,
-                transition: isSwiping ? "none" : "transform 160ms ease",
-                willChange: isSwiping ? "transform" : "auto",
+              onMouseDownCapture={(event) => {
+                mouseDownRef.current =
+                  event.button === 0
+                    ? { x: event.clientX, y: event.clientY }
+                    : null;
+                // The time lets mouse events through to the bubble. A double or
+                // triple click on it would select hidden text around it.
+                if (event.button === 0 && event.detail > 1) {
+                  const meta = event.currentTarget.querySelector("[data-message-meta]");
+                  const box = meta?.getBoundingClientRect();
+                  if (
+                    box &&
+                    event.clientX >= box.left &&
+                    event.clientX <= box.right &&
+                    event.clientY >= box.top &&
+                    event.clientY <= box.bottom
+                  ) {
+                    event.preventDefault();
+                  }
+                }
               }}
-              contextMenu={messageContextMenu}
+              onClickCapture={(event) => {
+                const down = mouseDownRef.current;
+                mouseDownRef.current = null;
+                if (
+                  isDragSelectionClick({
+                    down,
+                    clientX: event.clientX,
+                    clientY: event.clientY,
+                    selectionText:
+                      typeof window !== "undefined"
+                        ? window.getSelection?.()?.toString() || ""
+                        : "",
+                  })
+                ) {
+                  // The mouse was released after selecting text: not a click on
+                  // the link, inline code or quoted message under it.
+                  event.preventDefault();
+                  event.stopPropagation();
+                }
+              }}
             >
-              {!isOwn && isGroupChat && !isChannelChat ? (
-                <Tooltip label={senderName} asChild>
-                  <p
-                    className={`mb-1 flex max-w-[60vw] items-center gap-0.5 truncate text-[11px] font-semibold sm:max-w-[40vw] md:max-w-[28vw]`}
-                    dir="ltr"
-                    style={{ color: String(senderColor) }}
-                  >
-                    <span className={`truncate ${hasPersian(senderName) ? "font-fa" : ""}`} dir="auto" style={{ unicodeBidi: "isolate" }}>{senderName}</span>
-                    {!isDeletedAuthor && Boolean(msg.user_verified) && (
-                      <VerifiedBadge size={14} />
-                    )}
-                    {!isDeletedAuthor && (
-                      <UserRoleBadge role={msg.user_role} size={14} />
-                    )}
-                  </p>
-                </Tooltip>
-              ) : null}
-              {renderForwardedHeader()}
-              {replyTarget ? (
-                <button
-                  type="button"
-                  onClick={() => onJumpToMessage?.(replyTarget.id)}
-                  className="group mb-2 inline-flex w-full max-w-full min-w-0 items-center gap-2 overflow-hidden rounded-xl border border-emerald-200/70 bg-white/70 px-3 py-2.5 text-left text-xs text-slate-700 transition hover:border-emerald-300 hover:bg-white hover:shadow-[0_0_16px_color-mix(in_srgb,var(--color-emerald-500)_18%,transparent)] dark:border-emerald-500/30 dark:bg-slate-900/50 dark:text-slate-200 dark:hover:bg-slate-900/70 dark:hover:shadow-[0_0_16px_color-mix(in_srgb,var(--color-emerald-500)_14%,transparent)]"
-                  aria-label={`Reply to ${replyDisplayName}`}
-                >
-                  <span className="min-w-0 flex-1">
-                    <Tooltip label={replyDisplayName} asChild>
-                      <span
-                        className="flex max-w-full items-center gap-0.5 truncate whitespace-nowrap"
+              {hasBubbleHeader ? (
+                <div className={hasMediaBubble ? "px-2.5 pt-1.5" : undefined}>
+                  {showSenderName ? (
+                    <Tooltip label={senderName} asChild>
+                      <ContextMenuSurface
+                        as="button"
+                        type="button"
+                        onClick={
+                          canOpenSenderProfile
+                            ? () => onOpenSenderProfile?.(msg)
+                            : undefined
+                        }
+                        disabled={!canOpenSenderProfile}
+                        data-own-context-menu={hasSenderMenu ? "" : undefined}
+                        className={`mb-0.5 flex max-w-[60vw] items-center gap-0.5 text-[13px] font-semibold leading-[1.25] transition ${
+                          canOpenSenderProfile ? "hover:underline" : ""
+                        } sm:max-w-[40vw] md:max-w-[28vw]`}
                         dir="ltr"
+                        style={{ color: String(senderColor) }}
+                        contextMenu={senderContextMenu}
                       >
-                        <span
-                          className={`min-w-0 truncate text-[10px] font-semibold ${
-                            hasPersian(replyDisplayName) ? "font-fa" : ""
-                          }`}
-                          dir="auto"
-                          style={{ color: String(replyColor), unicodeBidi: "isolate" }}
-                        >
-                          {replyDisplayName}
-                        </span>
-                        {Boolean(replyTarget?.verified) && (
-                          <VerifiedBadge size={12} />
+                        <span className={`truncate ${hasPersian(senderName) ? "font-fa" : ""}`} dir="auto" style={{ unicodeBidi: "isolate" }}>{senderName}</span>
+                        {!isDeletedAuthor && Boolean(msg.user_verified) && (
+                          <VerifiedBadge size={14} />
                         )}
-                        {!isChannelChat && (
-                          <UserRoleBadge role={replyTarget?.role} size={12} />
+                        {!isDeletedAuthor && (
+                          <UserRoleBadge role={msg.user_role} size={14} />
                         )}
-                      </span>
+                      </ContextMenuSurface>
                     </Tooltip>
-                    <span
-                      className={`flex max-w-full items-baseline gap-1 truncate whitespace-nowrap ${
-                        hasPersian(normalizedReplyPreview) ? "font-fa" : ""
-                      }`}
-                      dir="ltr"
-                      style={{ unicodeBidi: "isolate" }}
+                  ) : null}
+                  {renderForwardedHeader()}
+                  {replyTarget ? (
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => onJumpToMessage?.(replyTarget.id)}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter" && event.key !== " ") return;
+                        event.preventDefault();
+                        onJumpToMessage?.(replyTarget.id);
+                      }}
+                      className="mb-1 flex w-full min-w-0 max-w-full cursor-pointer gap-2 overflow-hidden rounded-md border-s-2 py-0.5 pe-1.5 ps-2 text-left text-[13px] leading-[1.25] transition hover:brightness-95"
+                      style={{
+                        borderColor: String(replyColor),
+                        backgroundColor: `color-mix(in srgb, ${String(replyColor)} 12%, transparent)`,
+                      }}
+                      aria-label={`Reply to ${replyDisplayName}`}
                     >
-                        {derivedReplyIcon === "voice" ? (
-                          <Mic
-                            size={11}
-                            className="translate-y-[3px] shrink-0 text-slate-500 dark:text-slate-400"
+                      <span className="min-w-0 flex-1">
+                        <Tooltip label={replyDisplayName} asChild>
+                          <span
+                            className="flex max-w-full items-center gap-0.5 truncate whitespace-nowrap font-semibold"
+                            dir="ltr"
+                          >
+                            <span
+                              className={`min-w-0 truncate ${
+                                hasPersian(replyDisplayName) ? "font-fa" : ""
+                              }`}
+                              dir="auto"
+                              style={{ color: String(replyColor), unicodeBidi: "isolate" }}
+                            >
+                              {replyDisplayName}
+                            </span>
+                            {Boolean(replyTarget?.verified) && (
+                              <VerifiedBadge size={12} />
+                            )}
+                            {!isChannelChat && (
+                              <UserRoleBadge role={replyTarget?.role} size={12} />
+                            )}
+                          </span>
+                        </Tooltip>
+                        <span
+                          className={`flex max-w-full items-start gap-1 ${
+                            hasPersian(normalizedReplyPreview) ? "font-fa" : ""
+                          }`}
+                          dir="ltr"
+                          style={{ unicodeBidi: "isolate" }}
+                        >
+                          {derivedReplyIcon === "voice" ? (
+                            <Mic
+                              size={12}
+                              className="mt-[3px] shrink-0 text-slate-500 dark:text-slate-400"
+                            />
+                          ) : derivedReplyIcon === "video" ? (
+                            <Video
+                              size={12}
+                              className="mt-[3px] shrink-0 text-slate-500 dark:text-slate-400"
+                            />
+                          ) : derivedReplyIcon === "image" ? (
+                            <ImageIcon
+                              size={12}
+                              className="mt-[3px] shrink-0 text-slate-500 dark:text-slate-400"
+                            />
+                          ) : derivedReplyIcon === "document" ? (
+                            <File
+                              size={12}
+                              className="mt-[3px] shrink-0 text-slate-500 dark:text-slate-400"
+                            />
+                          ) : null}
+                          <span
+                            className="line-clamp-2 min-w-0 break-words"
+                            dir="auto"
+                            style={{ unicodeBidi: "isolate" }}
+                            dangerouslySetInnerHTML={{
+                              __html: String(replyPreviewHtml || ""),
+                            }}
                           />
-                        ) : derivedReplyIcon === "video" ? (
-                          <Video
-                            size={11}
-                            className="translate-y-[3px] shrink-0 text-slate-500 dark:text-slate-400"
-                          />
-                        ) : derivedReplyIcon === "image" ? (
-                          <ImageIcon
-                            size={11}
-                            className="translate-y-[3px] shrink-0 text-slate-500 dark:text-slate-400"
-                          />
-                        ) : derivedReplyIcon === "document" ? (
-                          <File
-                            size={11}
-                            className="translate-y-[3px] shrink-0 text-slate-500 dark:text-slate-400"
-                          />
-                        ) : null}
-                      <span
-                        className="min-w-0 truncate"
-                        dir="auto"
-                        style={{ unicodeBidi: "isolate" }}
-                        dangerouslySetInnerHTML={{
-                          __html: String(replyPreviewHtml || ""),
-                        }}
-                      />
-                    </span>
-                  </span>
-                </button>
+                        </span>
+                      </span>
+                    </div>
+                  ) : null}
+                </div>
               ) : null}
               {isVideoNote ? (
                 <Suspense fallback={<div className="h-56 w-56 max-w-[62vw] animate-pulse rounded-full bg-slate-200/60 dark:bg-slate-700/40" />}>
@@ -1363,12 +1421,18 @@ export const MessageItem = memo(function MessageItem({
                   {...messageFilesProps}
                 />
               )}
-              {!shouldHideGeneratedFileBody ? (
+              {showBody ? (
                 <div
                   ref={messageBodyRef}
                   dir="auto"
-                  className={`sb-markdown mt-1 wrap-break-word wrap-anywhere ${
+                  className={`sb-markdown wrap-break-word wrap-anywhere ${
                     hasPersian(bodyText) ? "font-fa" : ""
+                  } ${bodyTailClass} ${
+                    hasMediaBubble
+                      ? "px-2.5 pb-1.5 pt-1"
+                      : hasFiles
+                        ? "mt-1"
+                        : ""
                   }`}
                   style={{ unicodeBidi: "plaintext", textAlign: "start" }}
                   dangerouslySetInnerHTML={{
@@ -1381,102 +1445,33 @@ export const MessageItem = memo(function MessageItem({
                   @{mentionDebug?.active ?? 0}/{mentionDebug?.total ?? 0}
                 </div>
               ) : null}
-              <div
-                className={`mt-2 flex w-full items-center text-[10px] ${
-                  isOwn
-                    ? "text-emerald-900/80 dark:text-emerald-50/80"
-                    : "text-slate-500 dark:text-slate-400"
-                }`}
+              <MessageMeta
+                variant={metaVariant}
+                side={metaSide}
+                tone={isOwn ? "own" : "other"}
+                timeLabel={timeLabel}
+                isEdited={isEdited}
+                expiryBadge={expiryBadge}
+                status={metaStatus}
+                viewsLabel={viewsLabel}
+              />
+            </div>
+            {/* Room under the bubble for reaction chips. */}
+            <div data-slot="reactions" className="empty:hidden">
+              {reactionsSlot}
+            </div>
+            {isChannelChat && typeof onForwardMessage === "function" ? (
+              <button
+                type="button"
+                onClick={() => onForwardMessage(msg)}
+                className="absolute bottom-1 -right-11 inline-flex h-9 w-9 items-center justify-center rounded-full border border-emerald-200 bg-white text-emerald-700 shadow-xs transition hover:border-emerald-300 hover:bg-emerald-50 hover:shadow-[0_0_14px_color-mix(in_srgb,var(--color-emerald-500)_20%,transparent)] dark:border-emerald-500/30 dark:bg-slate-900 dark:text-emerald-200 dark:hover:bg-emerald-500/10"
+                aria-label="Forward message"
               >
-                <span className="inline-flex items-center gap-1">
-                  <span>{msg._timeLabel || formatTime(msg.created_at)}</span>
-                  {isEdited ? <span>edited</span> : null}
-                  {isOwn || isChannelChat ? (
-                    <span
-                      className={`inline-flex items-center gap-1 ${
-                        isSending
-                          ? "text-emerald-900/80 dark:text-emerald-50/80"
-                          : isFailed
-                            ? "text-rose-500"
-                            : isChannelChat
-                              ? "text-slate-500 dark:text-slate-400"
-                              : isRead
-                                ? "text-sky-400"
-                                : "text-emerald-900/80 dark:text-emerald-50/80"
-                      }`}
-                    >
-                      {isSending ? (
-                        <>
-                          <Clock12
-                            size={15}
-                            strokeWidth={2.4}
-                            className="animate-spin"
-                            aria-hidden="true"
-                          />
-                          <span className="sr-only">Sending</span>
-                        </>
-                      ) : isFailed ? (
-                        <>
-                          <AlertCircle
-                            size={15}
-                            strokeWidth={2.4}
-                            aria-hidden="true"
-                          />
-                          <span className="sr-only">Failed to send</span>
-                        </>
-                      ) : isChannelChat ? (
-                        <>
-                          <Eye
-                            size={13}
-                            strokeWidth={2.4}
-                            aria-hidden="true"
-                            className="-translate-y-px"
-                          />
-                          <span>{formatSeenCount(seenCount)}</span>
-                          <span className="sr-only">views</span>
-                        </>
-                      ) : isRead ? (
-                        <>
-                          <CheckCheck
-                            size={15}
-                            strokeWidth={2.5}
-                            aria-hidden="true"
-                          />
-                          <span className="sr-only">Read</span>
-                        </>
-                      ) : (
-                        <>
-                          <Check size={15} strokeWidth={2.5} aria-hidden="true" />
-                          <span className="sr-only">Sent</span>
-                        </>
-                      )}
-                    </span>
-                  ) : null}
-                </span>
-                {expiryBadge ? (
-                  <span
-                    className={`ms-auto inline-flex items-center gap-1 ${
-                      expiryBadge.danger ? "text-rose-500" : "text-current"
-                    }`}
-                  >
-                    <ClockFading size={12} className="-translate-y-px" />
-                    <span>{expiryBadge.label}</span>
-                  </span>
-                ) : null}
-              </div>
-              {isChannelChat && typeof onForwardMessage === "function" ? (
-                <button
-                  type="button"
-                  onClick={() => onForwardMessage(msg)}
-                  className="absolute bottom-2 -right-12 inline-flex h-9 w-9 items-center justify-center rounded-full border border-emerald-200 bg-white text-emerald-700 shadow-xs transition hover:border-emerald-300 hover:bg-emerald-50 hover:shadow-[0_0_14px_color-mix(in_srgb,var(--color-emerald-500)_20%,transparent)] dark:border-emerald-500/30 dark:bg-slate-900 dark:text-emerald-200 dark:hover:bg-emerald-500/10"
-                  aria-label="Forward message"
-                >
-                  <Forward size={15} className="icon-anim-pop" />
-                </button>
-              ) : null}
-            </ContextMenuSurface>
-          )}
-        </div>
+                <Forward size={15} className="icon-anim-pop" />
+              </button>
+            ) : null}
+          </div>
+        </ContextMenuSurface>
       ) : null}
     </div>
   );
@@ -1485,7 +1480,10 @@ export const MessageItem = memo(function MessageItem({
     return false;
   }
   if (prev.unreadMarkerId !== next.unreadMarkerId) return false;
-  if (prev.isFirstInGroup !== next.isFirstInGroup) return false;
+  if (prev.isRunStart !== next.isRunStart) return false;
+  if (prev.isRunEnd !== next.isRunEnd) return false;
+  if (prev.leadingSlot !== next.leadingSlot) return false;
+  if (prev.reactionsSlot !== next.reactionsSlot) return false;
   if (prev.isDesktop !== next.isDesktop) return false;
   if (prev.isMobileTouchDevice !== next.isMobileTouchDevice) return false;
   if (prev.isGroupChat !== next.isGroupChat) return false;

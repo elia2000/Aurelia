@@ -160,9 +160,6 @@ const NewGroupModal = lazy(loadNewGroupModal);
 const DesktopSettingsModal = lazy(loadDesktopSettingsModal);
 const NotificationsSettingsModal = lazy(loadNotificationsSettingsModal);
 const WhatsNewModal = lazy(loadWhatsNewModal);
-const VideoNoteRecorder = lazy(
-  () => import("../components/chat/videoNote/VideoNoteRecorder.jsx"),
-);
 
 const preloadChatPageCriticalChunks = () =>
   Promise.allSettled([
@@ -368,7 +365,6 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   const [uploadError, setUploadError] = useState("");
   const [activeUploadProgress, setActiveUploadProgress] = useState(null);
   const [replyTarget, setReplyTarget] = useState(null);
-  const [videoNoteOpen, setVideoNoteOpen] = useState(false);
   const [videoNoteBusy, setVideoNoteBusy] = useState(false);
   // Why the most recent sendPendingMessage call did not deliver (for dialogs
   // that need to show it next to what they were sending).
@@ -6918,7 +6914,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         copyToastVisible={copyToastVisible}
         microphonePermissionStatus={microphonePermission}
         onRequestMicrophonePermission={requestMicrophonePermission}
-        onRequestVideoNote={canRecordVideoNote ? () => setVideoNoteOpen(true) : null}
+        onSendVideoNote={canRecordVideoNote ? handleVideoNoteSend : null}
         registerMessageRef={registerMessageRef}
         showFloatingLabel={showFloatingLabel}
       />
@@ -6936,19 +6932,6 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         }}
         onSettings={() => setMobileTab("settings")}
       />
-
-      {videoNoteOpen ? (
-        <Suspense fallback={null}>
-          <VideoNoteRecorder
-            open={videoNoteOpen}
-            busy={videoNoteBusy}
-            chatId={activeChatId}
-            selfUser={user}
-            onClose={() => setVideoNoteOpen(false)}
-            onSend={handleVideoNoteSend}
-          />
-        </Suspense>
-      ) : null}
 
       {newChatOpen ? (
         <Suspense fallback={null}>

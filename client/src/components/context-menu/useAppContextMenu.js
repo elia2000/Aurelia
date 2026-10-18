@@ -106,7 +106,19 @@ export function useAppContextMenu({
         const hasText = hasMessageText(message);
         const linkTarget = findContextMenuLinkTarget(event?.target, targetEl);
         const files = getMessageFiles(message);
+        // Text the user selected with the mouse inside (or across) this message.
+        const selectedText = String(data?.selectedText || "");
         items.push(
+          ...(selectedText.trim()
+            ? [
+                {
+                  id: "copy-selection",
+                  label: "Copy selected text",
+                  icon: Copy,
+                  onSelect: () => copyTextToClipboard(selectedText),
+                },
+              ]
+            : []),
           ...(canReplyToMessage
             ? [
                 {

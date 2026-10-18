@@ -10,6 +10,12 @@ import {
 } from "../../../icons/lucide.js";
 import Tooltip from "../../common/Tooltip.jsx";
 import { isCrossOriginUrl, saveMedia } from "../../../utils/fileDownload.js";
+import { useViewerChrome, VIEWER_IDLE_MS } from "../../../hooks/chat/useViewerChrome.js";
+
+// Anything that is not the picture: it fades out of the way of a video, and
+// cannot be reached (by pointer or keyboard) while it is out of the way.
+const chromeFade = (visible) =>
+  `transition-all duration-200 ${visible ? "opacity-100 translate-y-0" : "pointer-events-none opacity-0 -translate-y-2"}`;
 
 export function FocusedMediaModal({
   focusedMedia,
@@ -39,7 +45,19 @@ export function FocusedMediaModal({
   formatSeconds,
   focusExpiryWarning,
   getFocusAspectRatio,
+  chromeIdleMs = VIEWER_IDLE_MS,
 }) {
+  const rootRef = useRef(null);
+  const isVideo = focusedMedia?.type === "video";
+  const chrome = useViewerChrome({
+    enabled: isVideo,
+    playing: focusedVideoPlaying,
+    // A video that is still loading or cannot be played has nothing to look at yet.
+    hold: !focusedMediaLoaded || Boolean(focusedVideoDecodeIssue) || Boolean(focusedMedia?.processing),
+    rootRef,
+    resetKey: focusedMedia?.url,
+    idleMs: chromeIdleMs,
+  });
   const [zoomScale, setZoomScale] = useState(1);
   const zoomScaleRef = useRef(1);
   const zoomOffsetRef = useRef({ x: 0, y: 0 });
@@ -333,13 +351,36 @@ export function FocusedMediaModal({
     }
   };
 
+  // Escape closes the viewer and nothing behind it (the page would close the
+  // open chat on it). Space plays and pauses, since a click on the picture
+  // now only shows or hides the buttons.
+  const isOpen = Boolean(focusedMedia);
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const onKey = (event) => {
+      if (event.key === "Escape") {
+        event.stopImmediatePropagation();
+        event.preventDefault();
+        closeFocusMedia();
+        return;
+      }
+      if (event.key !== " " || !isVideo || event.defaultPrevented) return;
+      if (event.target?.closest?.("button, a, input, select, textarea, [contenteditable='true']")) return;
+      event.preventDefault();
+      toggleFocusedVideoPlay();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [isOpen, isVideo, closeFocusMedia, toggleFocusedVideoPlay]);
+
   if (!focusedMedia) return null;
 
   const controlsHidden = zoomScale > 1.01;
-  const controlsVisible = focusVisible && !controlsHidden;
+  const controlsVisible = focusVisible && !controlsHidden && !chrome.hidden;
 
   return (
     <div
+      ref={rootRef}
       className={`fixed inset-0 z-200 transition-opacity duration-200 ${
         isDesktop ? "bg-black/80" : "bg-black"
       } ${focusVisible ? "opacity-100" : "opacity-0"}`}
@@ -347,6 +388,9 @@ export function FocusedMediaModal({
         minHeight: "100dvh",
         height: "100dvh",
       }}
+      onPointerMove={chrome.onPointerMove}
+      onPointerLeave={chrome.onPointerLeave}
+      onPointerDown={chrome.poke}
       onClick={() => {
         if (isDesktop) {
           closeFocusMedia();
@@ -355,11 +399,9 @@ export function FocusedMediaModal({
     >
       {!isDesktop ? (
         <div
-          className={`pointer-events-auto absolute left-0 right-0 z-50 flex items-center justify-between px-6 py-4 transition-all duration-200 ${
-            controlsVisible
-              ? "opacity-100 translate-y-0"
-              : "opacity-0 -translate-y-2 pointer-events-none"
-          }`}
+          data-viewer-chrome
+          inert={!controlsVisible}
+          className={`pointer-events-auto absolute left-0 right-0 z-50 flex items-center justify-between px-6 py-4 ${chromeFade(controlsVisible)}`}
           style={{ top: "max(0px, env(safe-area-inset-top))" }}
         >
           <button
@@ -383,11 +425,9 @@ export function FocusedMediaModal({
       {isDesktop ? (
         <>
           <div
-            className={`pointer-events-auto absolute left-6 top-4 z-50 transition-all duration-200 ${
-              controlsVisible
-                ? "opacity-100 translate-y-0"
-                : "opacity-0 -translate-y-2 pointer-events-none"
-            }`}
+            data-viewer-chrome
+            inert={!controlsVisible}
+            className={`pointer-events-auto absolute left-6 top-4 z-50 ${chromeFade(controlsVisible)}`}
           >
             <button
               type="button"
@@ -399,11 +439,9 @@ export function FocusedMediaModal({
             </button>
           </div>
           <div
-            className={`pointer-events-auto absolute right-6 top-4 z-50 transition-all duration-200 ${
-              controlsVisible
-                ? "opacity-100 translate-y-0"
-                : "opacity-0 -translate-y-2 pointer-events-none"
-            }`}
+            data-viewer-chrome
+            inert={!controlsVisible}
+            className={`pointer-events-auto absolute right-6 top-4 z-50 ${chromeFade(controlsVisible)}`}
           >
             <a
               href={focusedMedia.downloadUrl || focusedMedia.url}
@@ -497,7 +535,7 @@ export function FocusedMediaModal({
                       preload="auto"
                       src={focusedMedia.url}
                       poster={focusedMedia.poster || undefined}
-                      onClick={toggleFocusedVideoPlay}
+                      onClick={chrome.toggle}
                       onLoadedMetadata={handleFocusedVideoLoadedMetadata}
                       onLoadedData={handleFocusedVideoLoadedData}
                       onCanPlay={handleFocusedVideoCanPlay}
@@ -573,6 +611,8 @@ export function FocusedMediaModal({
       </div>
       {focusedMedia?.type === "video" ? (
         <div
+          data-viewer-chrome
+          inert={!controlsVisible}
           className={`absolute inset-x-0 bottom-0 z-20 px-4 pb-4 transition-all duration-200 md:px-6 ${
             controlsVisible
               ? "opacity-100 translate-y-0"
@@ -645,11 +685,9 @@ export function FocusedMediaModal({
       ) : null}
       {focusExpiryWarning ? (
         <div
-          className={`absolute inset-x-0 top-0 z-10 flex justify-center px-4 pt-5 transition-all duration-200 md:px-6 ${
-            controlsVisible
-              ? "opacity-100 translate-y-0"
-              : "opacity-0 -translate-y-2 pointer-events-none"
-          }`}
+          data-viewer-chrome
+          inert={!controlsVisible}
+          className={`absolute inset-x-0 top-0 z-10 flex justify-center px-4 pt-5 md:px-6 ${chromeFade(controlsVisible)}`}
           onClick={(event) => event.stopPropagation()}
         >
           <Tooltip label={focusExpiryWarning.title || ""} placement="bottom">

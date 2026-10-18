@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  cloneElement,
+  isValidElement,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { computeMessageRuns } from "../../../utils/messageRuns.js";
 import { OfflineHistoryBanner } from "./MessageList.jsx";
 
 const BOTTOM_STRETCH_MAX_PX = 84;
@@ -50,7 +59,11 @@ export function MessageTimeline({
         dayKey,
         dayLabel: group?.dayLabel || "",
       });
-      (group?.items || []).forEach((msg, messageIndex) => {
+      const dayItems = group?.items || [];
+      // Which bubbles start and end a run of one sender (name on the first,
+      // avatar on the last, tight spacing inside the run).
+      const runs = computeMessageRuns(dayItems);
+      dayItems.forEach((msg, messageIndex) => {
         const stableKey =
           msg?._clientId ??
           msg?._serverId ??
@@ -61,6 +74,8 @@ export function MessageTimeline({
           key: `message-${stableKey}`,
           msg,
           isFirstInGroup: messageIndex === 0,
+          isRunStart: runs[messageIndex].isRunStart,
+          isRunEnd: runs[messageIndex].isRunEnd,
         });
       });
     });
@@ -243,6 +258,72 @@ export function MessageTimeline({
     [handleScrollIntent, scheduleStretchRelease],
   );
 
+  // The scroll area keeps a strip on each side for its scrollbar. A right click
+  // there (or anywhere else that is not inside a row) is handed to the message
+  // row at the same height, so the whole width of the chat opens the menu.
+  const handleTimelineContextMenu = useCallback((event) => {
+    if (event.defaultPrevented || event.target !== event.currentTarget) return;
+    const rows = event.currentTarget.querySelectorAll("[data-message-row]");
+    for (const row of rows) {
+      const rect = row.getBoundingClientRect();
+      if (event.clientY < rect.top || event.clientY > rect.bottom) continue;
+      event.preventDefault();
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          button: 2,
+          clientX: event.clientX,
+          clientY: event.clientY,
+        }),
+      );
+      return;
+    }
+  }, []);
+
+  // A click on empty chat space drops a text selection, like in Telegram. The
+  // rows and the gutters cannot be selected, so the browser would keep it.
+  const handleTimelineMouseDown = useCallback((event) => {
+    if (event.button !== 0) return;
+    const container = event.currentTarget;
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    // A press on the scrollbar (right of the area the rows fill) is not a click on the chat.
+    const { left } = container.getBoundingClientRect();
+    if (event.clientX > left + container.clientLeft + container.clientWidth) return;
+    // A press inside a bubble starts (or keeps) a selection of its own. A double
+    // or triple click on what cannot be selected (the time, a button, the gutter)
+    // would still select hidden text around it, so it does nothing.
+    if (target.closest("[data-message-bubble]")) {
+      if (event.detail > 1 && target.closest("[data-no-select], button")) {
+        event.preventDefault();
+      }
+      return;
+    }
+    if (event.detail > 1) event.preventDefault();
+    const selection = window.getSelection?.();
+    if (!selection || selection.isCollapsed || !container.contains(selection.anchorNode)) return;
+    selection.removeAllRanges();
+  }, []);
+
+  // renderMessageItem builds the MessageItem; the run info is added to it here
+  // unless the caller already passed it on.
+  const renderRowMessage = (row) => {
+    const element = renderMessageItem(row.msg, {
+      isFirstInGroup: row.isFirstInGroup,
+      isRunStart: row.isRunStart,
+      isRunEnd: row.isRunEnd,
+    });
+    if (isValidElement(element) && element.props.isRunStart === undefined) {
+      return cloneElement(element, {
+        isRunStart: row.isRunStart,
+        isRunEnd: row.isRunEnd,
+      });
+    }
+    return element;
+  };
+
   const setScrollRef = useCallback(
     (node) => {
       scrollContainerRef.current = node;
@@ -316,6 +397,8 @@ export function MessageTimeline({
       <div
         ref={setScrollRef}
         onScroll={handleTimelineScroll}
+        onContextMenu={handleTimelineContextMenu}
+        onMouseDown={handleTimelineMouseDown}
         onTouchStartCapture={handleScrollIntent}
         onTouchMoveCapture={handleScrollIntent}
         onWheelCapture={handleScrollIntent}
@@ -323,7 +406,7 @@ export function MessageTimeline({
         aria-live="polite"
         aria-label="Messages"
         aria-relevant="additions"
-        className="chat-scroll h-full overflow-y-auto overflow-x-hidden px-0 pb-3 pt-1 md:px-2"
+        className="chat-scroll h-full overflow-y-auto overflow-x-hidden px-0 pb-2 pt-1"
         style={chatScrollStyle}
       >
         <div className="flex min-h-full flex-col justify-end">
@@ -351,12 +434,12 @@ export function MessageTimeline({
                 }
               >
                 {row.type === "day" ? (
-                  <div className="flex justify-center">
+                  <div className="flex justify-center py-1">
                     <button
                       type="button"
                       onClick={() => handleGroupChipClick(row.dayKey)}
                       aria-label={`Jump to messages from ${row.dayLabel || row.dayKey}`}
-                      className="inline-flex w-max items-center justify-center rounded-full border border-emerald-200/60 bg-white/90 px-3 py-1 text-[11px] font-semibold text-emerald-700 shadow-xs transition hover:border-emerald-300 hover:shadow-md dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-200"
+                      className="inline-flex w-max items-center justify-center rounded-full border border-emerald-200/60 bg-white/90 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700 shadow-xs transition hover:border-emerald-300 hover:shadow-md dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-200"
                     >
                       <span
                         data-day-chip={row.dayLabel || ""}
@@ -367,11 +450,7 @@ export function MessageTimeline({
                     </button>
                   </div>
                 ) : (
-                  <div>
-                    {renderMessageItem(row.msg, {
-                      isFirstInGroup: row.isFirstInGroup,
-                    })}
-                  </div>
+                  <div>{renderRowMessage(row)}</div>
                 )}
               </div>
             ))}

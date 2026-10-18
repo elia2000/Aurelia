@@ -2,6 +2,7 @@ import { memo } from "react";
 import { useThemeSnapshot } from "../../../hooks/useThemeColor.js";
 import { setThemePreference } from "../../../utils/themeStore.js";
 import { DEFAULT_THEME_COLOR, dailyColor } from "../../../utils/themeColor.js";
+import EmojiSizeSetting from "../common/EmojiSizeSetting.jsx";
 
 const swatch = (selected) =>
   `h-9 w-9 rounded-full border-2 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
@@ -9,9 +10,10 @@ const swatch = (selected) =>
   }`;
 
 /**
- * The accent colour of the app: what the server suggests ("Default"), "Random"
- * (a new colour of the admin's palette every day, the same for everybody), the
- * built-in green, any colour of the palette, or a colour of your own.
+ * How the app looks on this device: the accent colour (what the server suggests
+ * ("Default"), "Random" (a new colour of the admin's palette every day, the same
+ * for everybody), the built-in green, any colour of the palette, or a colour of
+ * your own), and how big a message of only a few emoji is drawn.
  */
 export const AppearanceSettingsPanel = memo(function AppearanceSettingsPanel({ onDone, variant = "desktop" }) {
   const { palette, preference, color, themeDefault } = useThemeSnapshot();
@@ -99,6 +101,8 @@ export const AppearanceSettingsPanel = memo(function AppearanceSettingsPanel({ o
         />
         <span className="min-w-0 flex-1">Your own colour</span>
       </label>
+
+      <EmojiSizeSetting variant={variant} />
 
       {onDone ? (
         <div className="flex items-center justify-end">

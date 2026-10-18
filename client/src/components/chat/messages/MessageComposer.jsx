@@ -1,52 +1,45 @@
 import { Suspense, lazy, useEffect, useRef, useState, useCallback } from "react";
-import {
-  Camera,
-  Check,
-  Pencil,
-  File,
-  ImageIcon,
-  Mic,
-  Paperclip,
-  Play,
-  Reply,
-  Send,
-  Smile,
-  Close,
-  Video,
-} from "../../../icons/lucide.js";
+import { Smile } from "../../../icons/lucide.js";
+import { useRecordingSession } from "../../../hooks/chat/useRecordingSession.js";
 import { hasPersian } from "../../../utils/fontUtils.js";
-import { renderMarkdownInlinePlain } from "../../../utils/markdown.js";
 // Loaded when the emoji button is first used (the emoji list is large).
 const EmojiPicker = lazy(() => import("../emoji/EmojiPicker.jsx"));
-import VerifiedBadge from "../../common/VerifiedBadge.jsx";
-import UserRoleBadge from "../../common/UserRoleBadge.jsx";
-import Tooltip from "../../common/Tooltip.jsx";
+// The round camera is loaded the first time video messages are used.
+const loadVideoNoteRecorder = () => import("../videoNote/VideoNoteRecorder.jsx");
+const VideoNoteRecorder = lazy(loadVideoNoteRecorder);
+import AttachButton from "./composer/AttachButton.jsx";
+import {
+  EditBar,
+  PendingUploads,
+  PendingVoiceBar,
+  ReplyBar,
+  UploadProgressBar,
+} from "./composer/ComposerBars.jsx";
+import { isGeneratedFileSummary, normalizeComposerBody } from "./composer/composerText.js";
+import { createFocusKeeper } from "./composer/focusKeeper.js";
+import PrimaryButton from "./composer/PrimaryButton.jsx";
+import { PreviewBar, RecordingBar } from "./composer/RecordingBar.jsx";
+
+// One text line is 22 px; the field is 40 px tall with one line and grows to
+// six lines before it scrolls.
+const MIN_TEXTAREA_HEIGHT = 38;
+const MAX_TEXTAREA_HEIGHT = 148;
 
 function applyTextareaSize({
   textareaEl,
-  maxTextareaHeight,
   composerEl,
   onComposerResize,
   onComposerHeightChange,
 }) {
   if (!textareaEl) return;
   textareaEl.style.height = "0px";
-  const nextHeight = Math.min(textareaEl.scrollHeight, maxTextareaHeight);
-  textareaEl.style.height = `${Math.max(44, nextHeight)}px`;
+  const nextHeight = Math.min(textareaEl.scrollHeight, MAX_TEXTAREA_HEIGHT);
+  textareaEl.style.height = `${Math.max(MIN_TEXTAREA_HEIGHT, nextHeight)}px`;
   textareaEl.style.overflowY =
-    textareaEl.scrollHeight > maxTextareaHeight ? "auto" : "hidden";
+    textareaEl.scrollHeight > MAX_TEXTAREA_HEIGHT ? "auto" : "hidden";
   onComposerResize?.();
   if (composerEl) {
     onComposerHeightChange?.(Number(composerEl.offsetHeight || 0));
-  }
-}
-
-function focusElementPreventScroll(element) {
-  if (!element) return;
-  try {
-    element.focus({ preventScroll: true });
-  } catch {
-    element.focus();
   }
 }
 
@@ -84,15 +77,25 @@ export function MessageComposer({
   composerInputRef,
   microphonePermissionStatus = "unknown",
   onRequestMicrophonePermission,
-  onRequestVideoNote = null,
+  onSendVideoNote = null,
+  selfUser = null,
 }) {
   const composerRef = useRef(null);
   const fallbackInputRef = useRef(null);
   const messageInputRef = composerInputRef || fallbackInputRef;
-  const keepFocusRef = useRef(false);
+  const [focusKeeper] = useState(createFocusKeeper);
+  const setMessageInput = useCallback(
+    (node) => {
+      messageInputRef.current = node;
+      focusKeeper.setInput(node);
+    },
+    [messageInputRef, focusKeeper],
+  );
   const previousEditIdRef = useRef(0);
   const appliedEditIdRef = useRef(0);
+  const voiceHandoffSubmittedRef = useRef(false);
   const [messageValue, setMessageValue] = useState("");
+  const [voiceHandoff, setVoiceHandoff] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
   const emojiRef = useRef(null);
 
@@ -104,17 +107,7 @@ export function MessageComposer({
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [showEmoji]);
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordingMs, setRecordingMs] = useState(0);
-  const recordingTimerRef = useRef(null);
-  const mediaRecorderRef = useRef(null);
-  const recordingStreamRef = useRef(null);
-  const recordingChunksRef = useRef([]);
-  const recordingStartRef = useRef(0);
-  const recordingDurationMsRef = useRef(0);
-  const isPressingMicRef = useRef(false);
-  const pendingStopRef = useRef(false);
-  const maxTextareaHeight = 136;
+
   const openFilePicker = useCallback((inputRef) => {
     const input = inputRef?.current;
     if (!input || input.disabled) return;
@@ -132,121 +125,104 @@ export function MessageComposer({
       }
     }
   }, []);
-  const formatDuration = (totalSeconds) => {
-    const seconds = Math.max(0, Math.floor(Number(totalSeconds || 0)));
-    const minutes = Math.floor(seconds / 60);
-    const remainder = seconds % 60;
-    return `${minutes}:${String(remainder).padStart(2, "0")}`;
-  };
-  const normalizeReplyBody = (value) => {
-    if (typeof value === "string")
-      return value === "[object Object]" ? "" : value;
-    if (value && typeof value === "object") {
-      const text = value.text ?? value.body;
-      return typeof text === "string" ? text : "";
-    }
-    return "";
-  };
-  const replyBodyText = normalizeReplyBody(replyTarget?.body);
-  const editBodyText = normalizeReplyBody(editTarget?.body);
+
+  const editBodyText = normalizeComposerBody(editTarget?.body);
   const composerHasPersian = hasPersian(messageValue);
   const editHasFiles = Array.isArray(editTarget?.files) && editTarget.files.length > 0;
-  const editBodyLooksLikeFileSummary =
-    /^Sent (a media file|a photo|a video|a document|a voice message|\d+ (files|photos|videos|documents|media files|voice messages))$/i.test(
-      String(editBodyText || "").trim(),
-    );
-  const replyBodyNormalized = String(replyBodyText || "").trim();
-  const isPluralMediaSummary =
-    /^Sent \d+ (files|photos|videos|documents|media files)$/i.test(
-      replyBodyNormalized,
-    );
-  const isGenericReplyMediaText =
-    /^Sent (a media file|a file|a photo|a video|a document|\d+ (files|photos|videos|documents|media files))$/i.test(
-      replyBodyNormalized,
-    );
-  const isGenericReplyVoiceText =
-    /^Sent (a voice message|\d+ voice messages)$/i.test(replyBodyNormalized);
-  const derivedReplyIcon = (() => {
-    if (!replyTarget) return null;
-    if (replyTarget.icon) return replyTarget.icon;
-    if (/^Sent \d+ media files/i.test(replyBodyText)) return "image";
-    if (/^Sent (a voice message|\d+ voice messages)/i.test(replyBodyText))
-      return "voice";
-    if (/^Sent (a video|\d+ videos)/i.test(replyBodyText)) return "video";
-    if (/^Sent (a photo|\d+ photos)/i.test(replyBodyText)) return "image";
-    if (/^Sent a media file/i.test(replyBodyText)) return "image";
-    if (/^Sent (a file|a document|\d+ documents|\d+ files)/i.test(replyBodyText))
-      return "document";
-    return null;
-  })();
-  const resolvedReplyText =
-    derivedReplyIcon === "voice"
-      ? isGenericReplyVoiceText
-        ? "Sent a voice message"
-        : replyBodyText || "Message"
-      : derivedReplyIcon === "video"
-        ? isGenericReplyMediaText && !isPluralMediaSummary
-          ? "Sent a video"
-          : replyBodyText || "Message"
-        : derivedReplyIcon === "image"
-          ? isGenericReplyMediaText && !isPluralMediaSummary
-            ? "Sent a photo"
-            : replyBodyText || "Message"
-          : replyBodyText || "Message";
-  const resolvedReplyHtml = renderMarkdownInlinePlain(resolvedReplyText);
+  const editBodyLooksLikeFileSummary = isGeneratedFileSummary(editBodyText);
 
+  // Any character at all, even a space, swaps the record button for Send and
+  // hides the paperclip; a message of only spaces still cannot be submitted.
+  const hasAnyText = messageValue.length > 0;
   const hasText = Boolean(String(messageValue || "").trim());
   const hasPendingUploads = Boolean(pendingUploadFiles?.length);
   const hasPendingVoice = Boolean(pendingVoiceMessage);
+  const showPendingVoiceBar = hasPendingVoice && !voiceHandoff;
   const isEditMode = Boolean(editTarget);
-  const micMode =
-    !isEditMode && !hasText && !hasPendingUploads && !hasPendingVoice && !isRecording;
-  const micDisabled = uploadBusy || !fileUploadEnabled || isEditMode;
+  const showSend = hasAnyText || hasPendingUploads || hasPendingVoice || isEditMode;
+  const recordDisabled = Boolean(uploadBusy) || !fileUploadEnabled || isEditMode;
   const canSubmitMessage = isEditMode
     ? hasText
     : hasText || hasPendingUploads || hasPendingVoice;
 
-  useEffect(() => {
-    applyTextareaSize({
-      textareaEl: messageInputRef.current,
-      maxTextareaHeight,
-      composerEl: composerRef.current,
-      onComposerResize,
-      onComposerHeightChange,
-    });
-  }, [maxTextareaHeight, messageInputRef, onComposerHeightChange, onComposerResize]);
+  // A voice message that is released (or sent from the lock / preview) goes to
+  // the page as its pending voice message and the form is submitted straight
+  // away. The pending bar stays hidden meanwhile so the composer does not jump.
+  const handleVoiceReady = (payload) => {
+    voiceHandoffSubmittedRef.current = false;
+    setVoiceHandoff(true);
+    onVoiceRecorded?.(payload);
+  };
+
+  const session = useRecordingSession({
+    chatId: activeChatId,
+    recordDisabled,
+    microphonePermissionStatus,
+    onRequestMicrophonePermission,
+    onVoiceReady: handleVoiceReady,
+    onSendVideoNote,
+    onBeforeRecord: () => {
+      setShowUploadMenu?.(false);
+      setShowEmoji(false);
+    },
+  });
+  const recordingActive = session.phase !== "idle";
+  const attachVisible = !hasAnyText && !recordingActive;
 
   useEffect(() => {
-    applyTextareaSize({
-      textareaEl: messageInputRef.current,
-      maxTextareaHeight,
-      composerEl: composerRef.current,
-      onComposerResize,
-      onComposerHeightChange,
-    });
-  }, [
-    maxTextareaHeight,
-    messageInputRef,
-    onComposerHeightChange,
-    onComposerResize,
-    pendingUploadFiles?.length,
-  ]);
+    if (!voiceHandoff) return undefined;
+    if (pendingVoiceMessage && !voiceHandoffSubmittedRef.current) {
+      voiceHandoffSubmittedRef.current = true;
+      composerRef.current?.requestSubmit();
+    } else if (!pendingVoiceMessage && voiceHandoffSubmittedRef.current) {
+      setVoiceHandoff(false); // it was sent
+    }
+    // Whatever happened (the page refused it, the send failed), the bar is back
+    // after a moment so the message can still be seen and removed.
+    const timer = setTimeout(() => setVoiceHandoff(false), 2000);
+    return () => clearTimeout(timer);
+  }, [voiceHandoff, pendingVoiceMessage]);
+
+  // Warm the round-camera chunk so the first hold shows it without a gap.
+  useEffect(() => {
+    if (session.mode === "video") void loadVideoNoteRecorder();
+  }, [session.mode]);
+
+  // The popup menu belongs to a paperclip that is no longer there.
+  useEffect(() => {
+    if (!attachVisible && showUploadMenu) setShowUploadMenu?.(false);
+  }, [attachVisible, showUploadMenu, setShowUploadMenu]);
+
+  const resize = useCallback(
+    (textareaEl = messageInputRef.current) =>
+      applyTextareaSize({
+        textareaEl,
+        composerEl: composerRef.current,
+        onComposerResize,
+        onComposerHeightChange,
+      }),
+    [messageInputRef, onComposerHeightChange, onComposerResize],
+  );
 
   useEffect(() => {
-    applyTextareaSize({
-      textareaEl: messageInputRef.current,
-      maxTextareaHeight,
-      composerEl: composerRef.current,
-      onComposerResize,
-      onComposerHeightChange,
-    });
+    resize();
+  }, [resize]);
+
+  // Anything that adds or removes a strip above the input changes the height.
+  const pendingCount = pendingUploadFiles?.length || 0;
+  const hasUploadError = Boolean(uploadError);
+  const isUploading = activeUploadProgress !== null;
+  useEffect(() => {
+    resize();
   }, [
+    resize,
     editTarget,
-    maxTextareaHeight,
-    messageInputRef,
-    onComposerHeightChange,
-    onComposerResize,
     replyTarget,
+    pendingCount,
+    showPendingVoiceBar,
+    hasUploadError,
+    isUploading,
+    recordingActive,
   ]);
 
   useEffect(() => {
@@ -262,14 +238,8 @@ export function MessageComposer({
       if (typeof onMessageInput === "function") {
         onMessageInput(nextValue);
       }
-      applyTextareaSize({
-        textareaEl: messageInputRef.current,
-        maxTextareaHeight,
-        composerEl: composerRef.current,
-        onComposerResize,
-        onComposerHeightChange,
-      });
-      focusElementPreventScroll(messageInputRef.current);
+      resize();
+      focusKeeper.focus();
     });
     return () => window.cancelAnimationFrame(frameId);
   }, [
@@ -277,11 +247,9 @@ export function MessageComposer({
     editBodyText,
     editHasFiles,
     editTarget?.id,
-    maxTextareaHeight,
-    messageInputRef,
-    onComposerHeightChange,
+    focusKeeper,
     onMessageInput,
-    onComposerResize,
+    resize,
   ]);
 
   useEffect(() => {
@@ -294,318 +262,48 @@ export function MessageComposer({
       if (typeof onMessageInput === "function") {
         onMessageInput("");
       }
-      applyTextareaSize({
-        textareaEl: messageInputRef.current,
-        maxTextareaHeight,
-        composerEl: composerRef.current,
-        onComposerResize,
-        onComposerHeightChange,
-      });
+      resize();
     });
     return () => window.cancelAnimationFrame(frameId);
-  }, [
-    editTarget,
-    maxTextareaHeight,
-    messageInputRef,
-    onComposerHeightChange,
-    onComposerResize,
-    onMessageInput,
-  ]);
+  }, [editTarget, onMessageInput, resize]);
 
-  useEffect(() => {
-    return () => {
-      if (recordingTimerRef.current) {
-        window.clearInterval(recordingTimerRef.current);
-      }
-      if (recordingStreamRef.current) {
-        recordingStreamRef.current
-          .getTracks()
-          ?.forEach((track) => track.stop());
-        recordingStreamRef.current = null;
-      }
-    };
-  }, []);
-
-  const startRecordingTimer = () => {
-    if (recordingTimerRef.current) {
-      window.clearInterval(recordingTimerRef.current);
-    }
-    recordingStartRef.current = Date.now();
-    setRecordingMs(0);
-    recordingTimerRef.current = window.setInterval(() => {
-      setRecordingMs(Date.now() - recordingStartRef.current);
-    }, 200);
-  };
-
-  const stopRecordingTimer = () => {
-    if (recordingTimerRef.current) {
-      window.clearInterval(recordingTimerRef.current);
-      recordingTimerRef.current = null;
-    }
-  };
-
-  const stopRecording = useCallback(() => {
-    const recorder = mediaRecorderRef.current;
-    const canStop = recorder && recorder.state !== "inactive";
-    if (!isRecording && !canStop) return;
-    recordingDurationMsRef.current = Date.now() - recordingStartRef.current;
-    setIsRecording(false);
-    stopRecordingTimer();
-    if (canStop) {
-      try {
-        if (
-          recorder.state === "recording" &&
-          typeof recorder.requestData === "function"
-        ) {
-          recorder.requestData();
-        }
-      } catch {
-        // no-op
-      }
-      try {
-        recorder.stop();
-      } catch {
-        // no-op
-      }
-    }
-    if (recordingStreamRef.current) {
-      recordingStreamRef.current.getTracks()?.forEach((track) => track.stop());
-      recordingStreamRef.current = null;
-    }
-  }, [isRecording]);
-
-  const createVoiceFileFromChunks = async (chunks, durationSeconds) => {
-    if (!chunks.length) return null;
-    const preferredTypes = [
-      "audio/webm;codecs=opus",
-      "audio/ogg;codecs=opus",
-      "audio/webm",
-      "audio/ogg",
-    ];
-    const mimeType =
-      preferredTypes.find(
-        (type) =>
-          typeof MediaRecorder !== "undefined" &&
-          MediaRecorder.isTypeSupported(type),
-      ) ||
-      chunks[0].type ||
-      "audio/webm";
-    const ext = mimeType.includes("ogg") ? "ogg" : "webm";
-    const blob = new Blob(chunks, { type: mimeType });
-    const filename = `voice-message-${Date.now()}.${ext}`;
-    let file = blob;
-    try {
-      if (typeof File !== "undefined") {
-        file = new File([blob], filename, { type: mimeType });
-      } else {
-        file = blob;
-      }
-    } catch {
-      file = blob;
-    }
-    if (file && !file.name) {
-      Object.defineProperty(file, "name", {
-        value: filename,
-        configurable: true,
-      });
-    }
-    return {
-      file,
-      durationSeconds,
-      mimeType,
-    };
-  };
-
-  const requestMicrophoneStream = async () => {
-    if (
-      typeof navigator === "undefined" ||
-      !navigator.mediaDevices?.getUserMedia
-    ) {
-      throw new Error("Microphone access is not supported in this browser.");
-    }
-    if (navigator.permissions?.query) {
-      try {
-        await navigator.permissions.query({ name: "microphone" });
-      } catch {
-        // ignore permissions API failures
-      }
-    }
-    return navigator.mediaDevices.getUserMedia({ audio: true });
-  };
-
-  const startRecording = useCallback(async () => {
-    if (isRecording) return;
-    if (pendingVoiceMessage) return;
-    if (!fileUploadEnabled) return;
-    if (uploadBusy) return;
-    if (pendingUploadFiles?.length) return;
-    setShowUploadMenu(false);
-    recordingChunksRef.current = [];
-    const stream = await requestMicrophoneStream();
-    if (!isPressingMicRef.current) {
-      stream.getTracks()?.forEach((track) => track.stop());
-      return;
-    }
-    recordingStreamRef.current = stream;
-    const options = {};
-    if (typeof MediaRecorder !== "undefined") {
-      if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
-        options.mimeType = "audio/webm;codecs=opus";
-      } else if (MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")) {
-        options.mimeType = "audio/ogg;codecs=opus";
-      }
-    }
-    const recorder = new MediaRecorder(stream, options);
-    mediaRecorderRef.current = recorder;
-    recorder.ondataavailable = (event) => {
-      if (event.data && event.data.size > 0) {
-        recordingChunksRef.current.push(event.data);
-      }
-    };
-    recorder.onerror = (event) => {
-      console.warn("[voice] recorder error", event);
-    };
-    recorder.onstop = async () => {
-      const fallbackDurationMs = Date.now() - recordingStartRef.current;
-      const durationMs = recordingDurationMsRef.current || fallbackDurationMs;
-      const chunks = recordingChunksRef.current;
-      recordingChunksRef.current = [];
-      recordingDurationMsRef.current = 0;
-      if (!chunks.length) {
-        console.warn("[voice] no audio chunks collected");
-        return;
-      }
-      if (durationMs <= 1000) {
-        return;
-      }
-      const durationSeconds = Math.max(1, Math.round(durationMs / 1000));
-      const payload = await createVoiceFileFromChunks(chunks, durationSeconds);
-      if (payload && typeof onVoiceRecorded === "function") {
-        onVoiceRecorded(payload);
-      }
-    };
-    recorder.start(250);
-    setIsRecording(true);
-    startRecordingTimer();
-    if (pendingStopRef.current || !isPressingMicRef.current) {
-      pendingStopRef.current = false;
-      stopRecording();
-    }
-  }, [
-    isRecording,
-    pendingVoiceMessage,
-    fileUploadEnabled,
-    uploadBusy,
-    pendingUploadFiles?.length,
-    setShowUploadMenu,
-    stopRecording,
-    onVoiceRecorded,
-  ]);
-
-  const handleMicPointerDown = useCallback(
-    async (event) => {
-      event.preventDefault();
-      if (micDisabled) return;
-      if (microphonePermissionStatus === "prompt") {
-        try {
-          await onRequestMicrophonePermission?.();
-        } catch {
-          // ignore prompt failures
-        }
-        isPressingMicRef.current = false;
-        pendingStopRef.current = false;
-        return;
-      }
-      isPressingMicRef.current = true;
-      pendingStopRef.current = false;
-      try {
-        await startRecording();
-      } catch {
-        // ignore
-      }
+  // Gives a control the composer's focus rules: a press must not take the
+  // cursor (and on phones the keyboard) out of the message, and when the action
+  // is done the cursor goes back.
+  const guard = (action) => ({
+    onPointerDown: (event) => {
+      focusKeeper.capture();
+      if (!isDesktop) event.preventDefault();
     },
-    [micDisabled, microphonePermissionStatus, onRequestMicrophonePermission, startRecording],
-  );
+    onClick: (event) => {
+      action?.(event);
+      focusKeeper.restore();
+    },
+  });
 
-  const restoreComposerFocus = () => {
-    if (!keepFocusRef.current) return;
-    keepFocusRef.current = false;
-    requestAnimationFrame(() => focusElementPreventScroll(messageInputRef.current));
-  };
-
-  const captureComposerFocus = () => {
-    if (typeof document === "undefined") return;
-    if (document.activeElement === messageInputRef.current) {
-      keepFocusRef.current = true;
-    }
-  };
-
-  const handleMicPointerUp = (event) => {
-    event?.preventDefault?.();
-    isPressingMicRef.current = false;
-    const recorder = mediaRecorderRef.current;
-    if (isRecording || (recorder && recorder.state === "recording")) {
-      stopRecording();
-      if (keepFocusRef.current) {
-        keepFocusRef.current = false;
-        requestAnimationFrame(() => focusElementPreventScroll(messageInputRef.current));
-      }
-      return;
-    }
-    pendingStopRef.current = true;
-    if (keepFocusRef.current) {
-      keepFocusRef.current = false;
-      requestAnimationFrame(() => focusElementPreventScroll(messageInputRef.current));
-    }
-  };
+  // The textarea is not mounted while recording; hand the cursor back after.
+  useEffect(() => {
+    if (!recordingActive) focusKeeper.restore();
+  }, [recordingActive, focusKeeper]);
 
   useEffect(() => {
-    if (!isRecording) return;
-    const handleWindowPointerUp = (event) => {
-      event?.preventDefault?.();
-      isPressingMicRef.current = false;
-      const recorder = mediaRecorderRef.current;
-      if (isRecording || (recorder && recorder.state === "recording")) {
-        stopRecording();
-        if (keepFocusRef.current) {
-          keepFocusRef.current = false;
-          requestAnimationFrame(() => focusElementPreventScroll(messageInputRef.current));
-        }
-        return;
-      }
-      pendingStopRef.current = true;
-      if (keepFocusRef.current) {
-        keepFocusRef.current = false;
-        requestAnimationFrame(() => focusElementPreventScroll(messageInputRef.current));
-      }
-    };
-    window.addEventListener("pointerup", handleWindowPointerUp);
-    window.addEventListener("pointercancel", handleWindowPointerUp);
-    return () => {
-      window.removeEventListener("pointerup", handleWindowPointerUp);
-      window.removeEventListener("pointercancel", handleWindowPointerUp);
-    };
-  }, [isRecording, messageInputRef, stopRecording]);
-
-  useEffect(() => {
-    const handleWindowFocus = () => {
-      if (!keepFocusRef.current) return;
-      keepFocusRef.current = false;
-      requestAnimationFrame(() => focusElementPreventScroll(messageInputRef.current));
-    };
+    const handleWindowFocus = () => focusKeeper.restore();
     window.addEventListener("focus", handleWindowFocus);
     return () => {
       window.removeEventListener("focus", handleWindowFocus);
     };
-  }, [messageInputRef]);
+  }, [focusKeeper]);
 
   useEffect(() => {
     if (isDesktop || typeof window === "undefined") return undefined;
     const node = composerRef.current;
     if (!node) return undefined;
 
+    // The composer must not drag the page behind it, but a long message and a
+    // row of files scroll by themselves (they are marked data-touch-scroll).
     const blockComposerViewportScroll = (event) => {
       event.stopPropagation();
+      if (event.target?.closest?.("[data-touch-scroll]")) return;
       event.preventDefault?.();
     };
 
@@ -656,14 +354,8 @@ export function MessageComposer({
     requestAnimationFrame(() => {
       const input = messageInputRef.current;
       if (!input) return;
-      applyTextareaSize({
-        textareaEl: input,
-        maxTextareaHeight,
-        composerEl: composerRef.current,
-        onComposerResize,
-        onComposerHeightChange,
-      });
-      focusElementPreventScroll(input);
+      resize(input);
+      focusKeeper.focus();
       const position = start + emoji.length;
       try {
         input.setSelectionRange(position, position);
@@ -673,14 +365,67 @@ export function MessageComposer({
     });
   };
 
+  const holding = session.phase === "recording" && !session.locked;
+  const sendingVideo = session.phase === "sending";
+  const variant = sendingVideo
+    ? "sending"
+    : recordingActive
+      ? holding
+        ? "record"
+        : "sendRecording"
+      : showSend
+        ? isEditMode
+          ? "save"
+          : "send"
+        : "record";
+  const recordLabel =
+    session.mode === "video"
+      ? "Record video message. Tap to switch to voice message"
+      : session.videoAvailable
+        ? "Record voice message. Tap to switch to video message"
+        : "Record voice message";
+  const ariaLabel =
+    variant === "sending"
+      ? "Sending video message"
+      : variant === "sendRecording"
+        ? `Send ${session.kind === "video" ? "video" : "voice"} message`
+        : variant === "record"
+          ? holding
+            ? `Recording ${session.kind} message. Release to send, slide left to cancel, slide up to lock`
+            : recordLabel
+          : variant === "save"
+            ? "Save edit"
+            : "Send message";
+  const primaryDisabled =
+    variant === "sending"
+      ? true
+      : variant === "record" && !holding
+        ? recordDisabled
+        : variant === "send" || variant === "save"
+          ? !canSubmitMessage
+          : false;
+
+  const recordProps = {
+    ...session.recordButtonProps,
+    onPointerDown: (event) => {
+      focusKeeper.capture();
+      if (!isDesktop) event.preventDefault();
+      session.recordButtonProps.onPointerDown(event);
+    },
+    onMouseDown: (event) => {
+      if (!isDesktop) event.preventDefault();
+    },
+  };
+
+  const voicePreview = session.voicePreview;
+  const clipMs = session.videoClip?.durationMs || 0;
+
   return (
     <form
       ref={composerRef}
-      className="sticky bottom-0 z-30 flex shrink-0 flex-col gap-3 border-t border-slate-300/80 bg-white px-4 py-3 dark:border-emerald-500/20 dark:bg-slate-900 sm:px-6 md:static md:mt-auto"
+      className="sticky bottom-0 z-30 flex shrink-0 flex-col gap-1.5 border-t border-slate-300/80 bg-white px-2 pt-[3px] dark:border-emerald-500/20 dark:bg-slate-900 sm:px-3 md:relative md:mt-auto"
       style={{
-        paddingBottom: isDesktop
-          ? "0.75rem"
-          : "max(0.75rem, calc(env(safe-area-inset-bottom) + 0.5rem))",
+        paddingBottom: isDesktop ? "3px" : "max(3px, env(safe-area-inset-bottom))",
         overscrollBehaviorY: isDesktop ? undefined : "none",
         touchAction: isDesktop ? undefined : "none",
       }}
@@ -694,15 +439,9 @@ export function MessageComposer({
           if (!editTarget) {
             setMessageValue("");
           }
-          applyTextareaSize({
-            textareaEl: messageInputRef.current,
-            maxTextareaHeight,
-            composerEl: composerRef.current,
-            onComposerResize,
-            onComposerHeightChange,
-          });
+          resize();
           if (!isDesktop) {
-            focusElementPreventScroll(messageInputRef.current);
+            focusKeeper.focus();
           }
         });
       }}
@@ -713,429 +452,103 @@ export function MessageComposer({
         if (!isDesktop) return;
         const activeEl = document.activeElement;
         if (activeEl === messageInputRef.current) return;
+        // The record button treats Enter as its own press (tap / hold).
+        if (activeEl?.closest?.("[data-record-mode]")) return;
         event.preventDefault();
         event.currentTarget?.requestSubmit?.();
       }}
     >
-      {editTarget ? (
-        <div className="rounded-2xl border border-emerald-200/80 bg-emerald-50/70 p-2 dark:border-emerald-500/30 dark:bg-slate-950/70">
-          <div className="flex items-start gap-3 px-1">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-200">
-              <Pencil size={20} className="icon-anim-sway" />
-            </div>
-            <div className="flex min-w-0 flex-1 flex-col">
-              <span
-                className={`truncate text-[11px] font-semibold text-emerald-700 dark:text-emerald-200 ${
-                  hasPersian(
-                    "Edit Message",
-                  )
-                    ? "font-fa"
-                    : ""
-                }`}
-                dir="auto"
-                style={{ unicodeBidi: "isolate" }}
-              >
-                Edit Message
-              </span>
-              <span
-                className={`mt-1 min-w-0 truncate text-xs text-slate-600 dark:text-slate-300 ${
-                  hasPersian(editBodyText) ? "font-fa" : ""
-                }`}
-                dir="auto"
-                style={{ unicodeBidi: "isolate" }}
-              >
-                {editBodyText || "Message"}
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                onClearEdit?.();
-                restoreComposerFocus();
-              }}
-              onPointerDown={(event) => {
-                captureComposerFocus();
-                if (!isDesktop) event.preventDefault();
-              }}
-              className="inline-flex h-9 w-9 items-center justify-center self-center rounded-full border border-rose-200 text-rose-600 transition hover:border-rose-300 hover:bg-rose-50 hover:shadow-[0_0_16px_rgba(244,63,94,0.2)] dark:border-rose-500/30 dark:text-rose-200 dark:hover:bg-rose-500/10"
-              aria-label="Cancel edit"
-            >
-              <Close size={20} className="icon-anim-pop" />
-            </button>
-          </div>
-        </div>
-      ) : replyTarget ? (
-        <div className="rounded-2xl border border-emerald-200/80 bg-emerald-50/70 p-2 dark:border-emerald-500/30 dark:bg-slate-950/70">
-          <div className="flex items-start gap-3 px-1">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-200">
-              <Reply size={20} className="icon-anim-sway" />
-            </div>
-            <div className="flex min-w-0 flex-1 flex-col">
-              <Tooltip
-                label={replyTarget.displayName || replyTarget.username || "message"}
-                asChild
-              >
-                <span
-                  className="flex items-center gap-0.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-200"
-                  dir="ltr"
-                >
-                  <span
-                    className={`truncate ${
-                      hasPersian(
-                        replyTarget.displayName || replyTarget.username || "message",
-                      )
-                        ? "font-fa"
-                        : ""
-                    }`}
-                    dir="auto"
-                    style={{ unicodeBidi: "isolate" }}
-                  >
-                    Reply to{" "}
-                    {replyTarget.displayName || replyTarget.username || "message"}
-                  </span>
-                  {Boolean(replyTarget.verified) && <VerifiedBadge size={13} />}
-                  <UserRoleBadge role={replyTarget.role} size={13} />
-                </span>
-              </Tooltip>
-              <span
-                className="mt-1 flex min-w-0 items-baseline gap-1 text-xs text-slate-600 dark:text-slate-300"
-                dir="ltr"
-                style={{ unicodeBidi: "isolate" }}
-              >
-                {derivedReplyIcon === "voice" ? (
-                  <Mic
-                    size={12}
-                    className="translate-y-[3px] shrink-0 text-slate-500 dark:text-slate-400"
-                  />
-                ) : derivedReplyIcon === "video" ? (
-                  <Video
-                    size={12}
-                    className="translate-y-[3px] shrink-0 text-slate-500 dark:text-slate-400"
-                  />
-                ) : derivedReplyIcon === "image" ? (
-                  <ImageIcon
-                    size={12}
-                    className="translate-y-[3px] shrink-0 text-slate-500 dark:text-slate-400"
-                  />
-                ) : derivedReplyIcon === "document" ? (
-                  <File
-                    size={12}
-                    className="translate-y-[3px] shrink-0 text-slate-500 dark:text-slate-400"
-                  />
-                ) : null}
-                <span
-                  className={`min-w-0 truncate ${
-                    hasPersian(resolvedReplyText) ? "font-fa" : ""
-                  }`}
-                  dir="auto"
-                  style={{ unicodeBidi: "isolate" }}
-                  dangerouslySetInnerHTML={{
-                    __html: String(resolvedReplyHtml || ""),
-                  }}
-                />
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                onClearReply?.();
-                restoreComposerFocus();
-              }}
-              onPointerDown={(event) => {
-                captureComposerFocus();
-                if (!isDesktop) event.preventDefault();
-              }}
-              className="inline-flex h-9 w-9 items-center justify-center self-center rounded-full border border-rose-200 text-rose-600 transition hover:border-rose-300 hover:bg-rose-50 hover:shadow-[0_0_16px_rgba(244,63,94,0.2)] dark:border-rose-500/30 dark:text-rose-200 dark:hover:bg-rose-500/10"
-              aria-label="Cancel reply"
-            >
-              <Close size={20} className="icon-anim-pop" />
-            </button>
-          </div>
-        </div>
+      {session.kind === "video" && recordingActive ? (
+        <Suspense fallback={null}>
+          <VideoNoteRecorder
+            session={session}
+            isDesktop={isDesktop}
+            chatId={activeChatId}
+            selfUser={selfUser}
+          />
+        </Suspense>
       ) : null}
-      {pendingVoiceMessage ? (
-        <div className="rounded-2xl border border-emerald-200/80 bg-emerald-50/70 p-2 dark:border-emerald-500/30 dark:bg-slate-950/70">
-          <div className="flex items-start gap-3 px-1">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-200">
-              <Mic size={20} className="icon-anim-sway" />
-            </div>
-            <div className="flex min-w-0 flex-1 flex-col">
-              <span className="truncate text-[11px] font-semibold text-emerald-700 dark:text-emerald-200">
-                Voice message
-              </span>
-              <span className="mt-1 text-xs text-slate-600 dark:text-slate-300">
-                {formatDuration(pendingVoiceMessage.durationSeconds || 0)}
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                onClearPendingVoiceMessage?.();
-                restoreComposerFocus();
-              }}
-              onPointerDown={(event) => {
-                captureComposerFocus();
-                if (!isDesktop) event.preventDefault();
-              }}
-              className="inline-flex h-9 w-9 items-center justify-center self-center rounded-full border border-rose-200 text-rose-600 transition hover:border-rose-300 hover:bg-rose-50 hover:shadow-[0_0_16px_rgba(244,63,94,0.2)] dark:border-rose-500/30 dark:text-rose-200 dark:hover:bg-rose-500/10"
-              aria-label="Cancel voice message"
-            >
-              <Close size={20} className="icon-anim-pop" />
-            </button>
-          </div>
-        </div>
-      ) : null}
-      {pendingUploadFiles?.length ? (
-        <div className="rounded-2xl border border-emerald-200/80 bg-emerald-50/70 p-2 dark:border-emerald-500/30 dark:bg-slate-950/70">
-          <div className="mb-2 flex items-center justify-between px-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-200">
-            <span>
-              {pendingUploadType === "media" ? "Photo or Video" : "Document"} (
-              {pendingUploadFiles.length})
-            </span>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                disabled={!fileUploadEnabled}
-                onClick={() => {
-                  if (!fileUploadEnabled) return;
-                  if (pendingUploadType === "media") {
-                    openFilePicker(mediaInputRef);
-                  } else {
-                    openFilePicker(documentInputRef);
-                  }
-                  restoreComposerFocus();
-                }}
-                onPointerDown={(event) => {
-                  captureComposerFocus();
-                  if (!isDesktop) event.preventDefault();
-                }}
-                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 transition ${
-                  fileUploadEnabled
-                    ? "border-emerald-200/70 text-emerald-700 hover:border-emerald-300 hover:bg-emerald-100 dark:border-emerald-500/30 dark:text-emerald-200 dark:hover:bg-emerald-500/10"
-                    : "cursor-not-allowed border-slate-300 text-slate-400 dark:border-slate-700 dark:text-slate-500"
-                }`}
-              >
-                <Paperclip size={12} />
-                Add
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  onClearPendingUploads?.();
-                  restoreComposerFocus();
-                }}
-                onPointerDown={(event) => {
-                  captureComposerFocus();
-                  if (!isDesktop) event.preventDefault();
-                }}
-                className="inline-flex items-center gap-1 rounded-full border border-rose-200/70 px-2 py-0.5 text-rose-600 transition hover:border-rose-300 hover:bg-rose-50 dark:border-rose-500/30 dark:text-rose-300 dark:hover:bg-rose-900/30"
-              >
-                <Close size={12} className="icon-anim-pop" />
-                Clear
-              </button>
-            </div>
-          </div>
-          <div className="chat-scroll grid max-h-40 grid-cols-2 gap-2 overflow-y-auto sm:grid-cols-3">
-            {pendingUploadFiles.map((item) => {
-              const forceDocPreview = pendingUploadType === "document";
-              const isImage =
-                !forceDocPreview && item.mimeType?.startsWith("image/");
-              const isVideo =
-                !forceDocPreview && item.mimeType?.startsWith("video/");
-              return (
-                <div
-                  key={item.id}
-                  className="relative overflow-hidden rounded-xl border border-emerald-200/70 bg-white/90 p-2 text-[11px] dark:border-emerald-500/30 dark:bg-slate-900/70"
-                >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onRemovePendingUpload?.(item.id);
-                      restoreComposerFocus();
-                    }}
-                    onPointerDown={(event) => {
-                      captureComposerFocus();
-                      if (!isDesktop) event.preventDefault();
-                    }}
-                    className="absolute right-1 top-1 z-20 inline-flex h-5 w-5 items-center justify-center rounded-full border border-rose-200 bg-white/90 text-rose-600 dark:border-rose-500/30 dark:bg-slate-900 dark:text-rose-200"
-                    aria-label="Remove file"
-                  >
-                    <Close size={11} className="icon-anim-pop" />
-                  </button>
-                  {isImage ? (
-                    <div className="mb-1 flex h-24 items-center justify-center rounded-md">
-                      <img
-                        src={item.previewUrl}
-                        alt={item.name}
-                        className="h-24 w-auto max-w-full rounded-md object-contain"
-                      />
-                    </div>
-                  ) : isVideo ? (
-                    <div className="relative mb-1 flex h-24 items-center justify-center rounded-md">
-                      {item.previewUrl ? (
-                        <video
-                          src={item.previewUrl}
-                          muted
-                          playsInline
-                          preload="auto"
-                          onLoadedMetadata={handleVideoThumbLoadedMetadata}
-                          onLoadedData={handleVideoThumbLoadedMetadata}
-                          onCanPlay={handleVideoThumbLoadedMetadata}
-                          className="h-24 w-auto max-w-full rounded-md object-contain"
-                        />
-                      ) : (
-                        <div className="flex h-24 w-24 items-center justify-center rounded-md bg-slate-200/80 dark:bg-slate-800/80" />
-                      )}
-                      <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                        <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/40 bg-black/45 text-white">
-                          <Play size={14} className="translate-x-px" />
-                        </span>
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="mb-1 flex h-24 w-full items-center justify-center rounded-md bg-slate-100 text-emerald-700 dark:bg-slate-800 dark:text-emerald-200">
-                      <File size={16} />
-                    </div>
-                  )}
-                  <p className="truncate pr-5 text-slate-700 dark:text-slate-200">
-                    {item.name}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
-      {uploadError ? (
-        <p className="text-xs text-rose-600 dark:text-rose-300">
-          {uploadError}
+      {session.hint ? (
+        <p
+          key={session.hint.id}
+          role={session.hint.tone === "error" ? "alert" : "status"}
+          className={`aurelle-hint-in pointer-events-none absolute bottom-full right-2 z-40 mb-2 max-w-[min(22rem,calc(100%-1rem))] rounded-xl px-3 py-1.5 text-xs font-medium text-white shadow-lg ${
+            session.hint.tone === "error" ? "bg-rose-600" : "bg-slate-900/90 dark:bg-slate-700"
+          }`}
+        >
+          {session.hint.text}
         </p>
       ) : null}
-      {activeUploadProgress !== null ? (
-        <div className="rounded-xl border border-emerald-200/70 bg-emerald-50/60 px-3 py-2 dark:border-emerald-500/30 dark:bg-slate-950/70">
-          <div className="mb-1 flex items-center justify-between text-[11px] font-semibold text-emerald-700 dark:text-emerald-200">
-            <span>Uploading files...</span>
-            <span>{Math.round(activeUploadProgress)}%</span>
-          </div>
-          <div className="h-2 overflow-hidden rounded-full bg-emerald-100 dark:bg-slate-800">
-            <div
-              className="h-full rounded-full bg-emerald-500 transition-[width] duration-150"
-              style={{ width: `${activeUploadProgress}%` }}
-            />
-          </div>
-        </div>
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {session.announcement.text}
+      </div>
+
+      {editTarget ? (
+        <EditBar editTarget={editTarget} onCancel={onClearEdit} guard={guard} />
+      ) : replyTarget ? (
+        <ReplyBar replyTarget={replyTarget} onCancel={onClearReply} guard={guard} />
       ) : null}
-      <div className="flex flex-row items-center gap-3">
-        {!isRecording ? (
-          <>
-            <div className="relative" ref={uploadMenuRef}>
+      {showPendingVoiceBar ? (
+        <PendingVoiceBar
+          pendingVoiceMessage={pendingVoiceMessage}
+          onCancel={onClearPendingVoiceMessage}
+          guard={guard}
+        />
+      ) : null}
+      {pendingUploadFiles?.length ? (
+        <PendingUploads
+          files={pendingUploadFiles}
+          type={pendingUploadType}
+          fileUploadEnabled={fileUploadEnabled}
+          onAdd={() => openFilePicker(pendingUploadType === "media" ? mediaInputRef : documentInputRef)}
+          onClear={onClearPendingUploads}
+          onRemove={onRemovePendingUpload}
+          onThumbLoaded={handleVideoThumbLoadedMetadata}
+          guard={guard}
+        />
+      ) : null}
+      {uploadError ? (
+        <p className="text-xs text-rose-600 dark:text-rose-300">{uploadError}</p>
+      ) : null}
+      {activeUploadProgress !== null ? <UploadProgressBar percent={activeUploadProgress} /> : null}
+
+      <div className="flex flex-row items-end gap-1.5">
+        {recordingActive ? (
+          session.phase === "recording" ? (
+            <RecordingBar
+              kind={session.kind}
+              locked={session.locked}
+              voice={session.voice}
+              elapsedMs={session.video.elapsedMs}
+              progress={session.progress}
+              onDelete={session.actions.discard}
+              onStop={session.actions.stop}
+            />
+          ) : (
+            <PreviewBar
+              kind={session.kind}
+              voicePreview={voicePreview}
+              durationMs={clipMs}
+              busy={sendingVideo}
+              onDelete={session.actions.discard}
+            />
+          )
+        ) : (
+          <div className="flex min-h-10 min-w-0 flex-1 items-end gap-0.5 rounded-[20px] border border-emerald-200 bg-white px-1 transition focus-within:border-emerald-400 focus-within:ring-2 focus-within:ring-emerald-300/60 dark:border-emerald-500/30 dark:bg-slate-900">
+            <div className="relative mb-px flex shrink-0" ref={emojiRef}>
               <button
                 type="button"
-                disabled={uploadBusy}
-                onPointerDown={(event) => {
-                  captureComposerFocus();
-                  if (!isDesktop) event.preventDefault();
-                }}
-                onClick={() => {
-                  if (uploadBusy) return;
-                  setShowUploadMenu((prev) => !prev);
-                  restoreComposerFocus();
-                }}
-                className={`inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-transparent bg-transparent transition ${
-                  !uploadBusy
-                    ? "text-emerald-700 hover:border-emerald-300 hover:bg-emerald-100 hover:shadow-[0_0_16px_color-mix(in_srgb,var(--color-emerald-500)_22%,transparent)] dark:text-emerald-200 dark:hover:border-emerald-500/30 dark:hover:bg-emerald-500/10"
-                    : "cursor-not-allowed text-slate-400 dark:text-slate-500"
-                }`}
-                aria-label="Attach file"
-              >
-                <Paperclip size={18} className="icon-anim-sway" />
-              </button>
-              {showUploadMenu && !uploadBusy ? (
-                <div className="absolute bottom-12 left-0 z-40 w-44 overflow-hidden rounded-2xl border border-emerald-200 bg-white p-1 text-sm font-semibold text-slate-700 shadow-xl shadow-emerald-950/10 dark:border-emerald-500/30 dark:bg-slate-900 dark:text-slate-100">
-                  <button
-                    type="button"
-                    onPointerDown={(event) => {
-                      captureComposerFocus();
-                      if (!isDesktop) event.preventDefault();
-                    }}
-                    onClick={() => {
-                      openFilePicker(mediaInputRef);
-                      setShowUploadMenu(false);
-                    }}
-                    className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left transition hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-emerald-500/10 dark:hover:text-emerald-200"
-                  >
-                    <ImageIcon size={18} className="shrink-0 text-emerald-500 icon-anim-sway" />
-                    Photo or Video
-                  </button>
-                  <button
-                    type="button"
-                    onPointerDown={(event) => {
-                      captureComposerFocus();
-                      if (!isDesktop) event.preventDefault();
-                    }}
-                    onClick={() => {
-                      openFilePicker(documentInputRef);
-                      setShowUploadMenu(false);
-                    }}
-                    className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left transition hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-emerald-500/10 dark:hover:text-emerald-200"
-                  >
-                    <File size={18} className="shrink-0 text-emerald-500 icon-anim-lift" />
-                    Document
-                  </button>
-                </div>
-              ) : null}
-              <input
-                ref={mediaInputRef}
-                type="file"
-                accept="image/*,video/*"
-                multiple
-                className="sr-only"
-                disabled={uploadBusy}
-                onChange={(event) => {
-                  onUploadFilesSelected(
-                    event.target.files,
-                    "media",
-                    pendingUploadType === "media",
-                  );
-                  event.target.value = "";
-                  restoreComposerFocus();
-                }}
-              />
-              <input
-                ref={documentInputRef}
-                type="file"
-                multiple
-                className="sr-only"
-                disabled={uploadBusy}
-                onChange={(event) => {
-                  onUploadFilesSelected(
-                    event.target.files,
-                    "document",
-                    pendingUploadType === "document",
-                  );
-                  event.target.value = "";
-                  restoreComposerFocus();
-                }}
-              />
-            </div>
-            <div className="relative" ref={emojiRef}>
-              <button
-                type="button"
-                onPointerDown={(event) => {
-                  captureComposerFocus();
-                  if (!isDesktop) event.preventDefault();
-                }}
-                onClick={() => setShowEmoji((open) => !open)}
+                {...guard(() => setShowEmoji((open) => !open))}
                 aria-label="Emoji"
                 aria-expanded={showEmoji}
                 title="Emoji"
-                className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-transparent bg-transparent text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-100 hover:shadow-[0_0_16px_color-mix(in_srgb,var(--color-emerald-500)_22%,transparent)] dark:text-emerald-200 dark:hover:border-emerald-500/30 dark:hover:bg-emerald-500/10"
+                className="relative inline-flex h-9 w-9 items-center justify-center rounded-full text-emerald-700 transition after:absolute after:-inset-0.5 after:content-[''] hover:bg-emerald-100 dark:text-emerald-200 dark:hover:bg-emerald-500/10"
               >
-                <Smile size={18} className="icon-anim-sway" />
+                <Smile size={20} className="icon-anim-sway" />
               </button>
               {showEmoji ? (
                 <div
-                  className="absolute bottom-12 left-0 z-40"
+                  className="absolute bottom-full left-0 z-40 mb-2"
                   // Clicking the picker must not take the cursor out of the message.
                   onPointerDown={(event) => {
                     if (event.target.tagName !== "INPUT") event.preventDefault();
@@ -1146,7 +559,7 @@ export function MessageComposer({
                       onSelect={insertEmoji}
                       onClose={() => {
                         setShowEmoji(false);
-                        restoreComposerFocus();
+                        focusKeeper.restore();
                       }}
                       autoFocusSearch={isDesktop}
                     />
@@ -1155,9 +568,10 @@ export function MessageComposer({
               ) : null}
             </div>
             <textarea
-              ref={messageInputRef}
+              ref={setMessageInput}
               name="message"
               rows={1}
+              data-touch-scroll=""
               placeholder="Type a message"
               aria-label={
                 editTarget
@@ -1177,13 +591,7 @@ export function MessageComposer({
               onInput={(event) => {
                 const value = event.currentTarget.value || "";
                 setMessageValue(value);
-                applyTextareaSize({
-                  textareaEl: event.currentTarget,
-                  maxTextareaHeight,
-                  composerEl: composerRef.current,
-                  onComposerResize,
-                  onComposerHeightChange,
-                });
+                resize(event.currentTarget);
                 if (typeof onMessageInput === "function") {
                   onMessageInput(value);
                 }
@@ -1202,12 +610,12 @@ export function MessageComposer({
                 event.preventDefault();
                 event.currentTarget.form?.requestSubmit();
               }}
-              className={`chat-scroll min-w-0 flex-1 resize-none rounded-2xl border border-emerald-200 bg-white px-4 py-2 text-base text-slate-700 outline-hidden transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-300/60 dark:border-emerald-500/30 dark:bg-slate-900 dark:text-slate-100 ${
+              className={`chat-scroll block min-w-0 flex-1 resize-none bg-transparent px-1 py-2 text-base leading-[22px] text-slate-700 outline-hidden placeholder:text-slate-400 dark:text-slate-100 ${
                 composerHasPersian ? "font-fa" : ""
               }`}
               style={{
-                minHeight: "44px",
-                maxHeight: `${maxTextareaHeight}px`,
+                minHeight: `${MIN_TEXTAREA_HEIGHT}px`,
+                maxHeight: `${MAX_TEXTAREA_HEIGHT}px`,
                 unicodeBidi: "plaintext",
                 whiteSpace: "pre-wrap",
                 wordBreak: "normal",
@@ -1216,79 +624,79 @@ export function MessageComposer({
                 textAlign: "start",
               }}
             />
-          </>
-        ) : (
-          <div className="flex min-w-0 flex-1 items-center justify-between rounded-2xl border border-emerald-200 bg-white px-4 py-2 text-sm text-emerald-700 dark:border-emerald-500/30 dark:bg-slate-900 dark:text-emerald-200">
-            <span className="text-xs font-semibold uppercase tracking-wide">
-              Recording
-            </span>
-            <span className="flex items-center gap-2 text-sm font-semibold">
-              <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-rose-500" />
-              {formatDuration(recordingMs / 1000)}
-            </span>
-            <span className="w-12" />
+            <AttachButton
+              visible={attachVisible}
+              disabled={Boolean(uploadBusy)}
+              menuOpen={Boolean(showUploadMenu)}
+              menuRef={uploadMenuRef}
+              guard={guard}
+              onToggleMenu={() => {
+                if (uploadBusy) return;
+                setShowUploadMenu((prev) => !prev);
+              }}
+              onPickMedia={() => {
+                openFilePicker(mediaInputRef);
+                setShowUploadMenu(false);
+              }}
+              onPickDocument={() => {
+                openFilePicker(documentInputRef);
+                setShowUploadMenu(false);
+              }}
+            />
           </div>
         )}
-        {micMode && typeof onRequestVideoNote === "function" && !isRecording ? (
-          <button
-            type="button"
-            disabled={uploadBusy}
-            onPointerDown={(event) => {
-              captureComposerFocus();
-              if (!isDesktop) event.preventDefault();
-            }}
-            onClick={() => onRequestVideoNote()}
-            aria-label="Record video message"
-            title="Record video message"
-            className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-transparent bg-transparent text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-100 hover:shadow-[0_0_16px_color-mix(in_srgb,var(--color-emerald-500)_22%,transparent)] disabled:cursor-not-allowed disabled:opacity-60 dark:text-emerald-200 dark:hover:border-emerald-500/30 dark:hover:bg-emerald-500/10"
-          >
-            <Camera size={18} className="icon-anim-sway" />
-          </button>
-        ) : null}
-        <button
-          type={micMode || isRecording ? "button" : "submit"}
+        <PrimaryButton
+          variant={variant}
+          mode={session.mode}
+          holding={holding}
+          disabled={primaryDisabled}
+          ariaLabel={ariaLabel}
+          recordProps={recordProps}
+          progress={session.progress}
+          onClick={variant === "sendRecording" ? session.actions.send : undefined}
           onPointerDown={(event) => {
-            captureComposerFocus();
+            focusKeeper.capture();
             if (!isDesktop) event.preventDefault();
-            if (micMode) {
-              handleMicPointerDown(event);
-            }
           }}
-          onPointerUp={isRecording ? handleMicPointerUp : undefined}
           onMouseDown={(event) => {
-            if (!isDesktop) {
-              event.preventDefault();
-            }
+            if (!isDesktop) event.preventDefault();
           }}
-          disabled={
-            ((micMode || isRecording) && micDisabled) ||
-            (!micMode && !isRecording && !canSubmitMessage)
-          }
-          aria-label={
-            isRecording
-              ? "Stop recording"
-              : micMode
-              ? "Record voice message"
-              : editTarget
-              ? "Save edit"
-              : "Send message"
-          }
-          className={`inline-flex h-11 items-center justify-center rounded-2xl px-4 py-2 text-sm font-semibold text-white shadow-lg transition disabled:cursor-not-allowed disabled:opacity-70 ${
-            isRecording
-              ? "bg-rose-500 shadow-rose-500/30 hover:bg-rose-400 hover:shadow-rose-500/40"
-              : "bg-emerald-500 shadow-emerald-500/30 hover:bg-emerald-400 hover:shadow-emerald-500/40"
-          }`}
-        >
-          {micMode || isRecording ? (
-            <Mic className="icon-anim-pop" />
-          ) : (
-            editTarget ? (
-              <Check className="icon-anim-slide" />
-            ) : (
-              <Send className="icon-anim-slide" />
-            )
-          )}
-        </button>
+        />
+        <input
+          ref={mediaInputRef}
+          type="file"
+          accept="image/*,video/*"
+          multiple
+          className="sr-only"
+          tabIndex={-1}
+          disabled={uploadBusy}
+          onChange={(event) => {
+            onUploadFilesSelected(
+              event.target.files,
+              "media",
+              pendingUploadType === "media",
+            );
+            event.target.value = "";
+            focusKeeper.restore();
+          }}
+        />
+        <input
+          ref={documentInputRef}
+          type="file"
+          multiple
+          className="sr-only"
+          tabIndex={-1}
+          disabled={uploadBusy}
+          onChange={(event) => {
+            onUploadFilesSelected(
+              event.target.files,
+              "document",
+              pendingUploadType === "document",
+            );
+            event.target.value = "";
+            focusKeeper.restore();
+          }}
+        />
       </div>
     </form>
   );

@@ -480,17 +480,95 @@ describe("CallOverlay", () => {
       expect(hidden("controls")).toBe(false);
     });
 
-    test("with a mouse the details show when it moves and hide when it rests: a click does not hide them", async () => {
+    // What a computer mouse does over the picture: it moves, then presses and releases.
+    const move = (el) => el.dispatchEvent(new PointerEvent("pointermove", { pointerType: "mouse", bubbles: true }));
+    const clickWithMouse = (el) => {
+      move(el);
+      el.dispatchEvent(new PointerEvent("pointerdown", { pointerType: "mouse", bubbles: true }));
+      el.click();
+    };
+    const dialogEl = async () => {
+      await expect.element(page.getByRole("dialog")).toBeInTheDocument();
+      return document.querySelector('[role="dialog"]');
+    };
+
+    test("with a mouse the details show when it moves and hide when it rests", async () => {
       renderOverlay(videoCall(), undefined, { autoHideMs: 100 });
-      const dialog = document.querySelector('[role="dialog"]') || (await expect.element(page.getByRole("dialog")).toBeInTheDocument(), document.querySelector('[role="dialog"]'));
+      const dialog = await dialogEl();
       await expect.poll(() => hidden("controls")).toBe(true); // rested: hidden
-      dialog.dispatchEvent(new PointerEvent("pointermove", { pointerType: "mouse", bubbles: true }));
+      move(dialog);
       await expect.poll(() => hidden("controls")).toBe(false);
-      // A mouse press and click on the picture right after the move: still showing.
-      dialog.dispatchEvent(new PointerEvent("pointerdown", { pointerType: "mouse", bubbles: true }));
-      dialog.click();
-      await new Promise((r) => setTimeout(r, 30));
+      await expect.poll(() => hidden("controls")).toBe(true); // rests again: hidden again
+    });
+
+    test("with a mouse, a click on the picture hides the name, the code and the buttons, and the next click shows them", async () => {
+      renderOverlay(videoCall({ sas: ["🌲", "🌴", "🌷", "🌺"] }), undefined, { autoHideMs: 60_000 });
+      const dialog = await dialogEl();
+      expect(hidden("header")).toBe(false);
+      clickWithMouse(dialog);
+      await expect.poll(() => hidden("header")).toBe(true);
+      expect(hidden("status")).toBe(true);
+      expect(hidden("controls")).toBe(true);
+      // The small picture of yourself stays where it is.
+      await expect.element(page.getByRole("button", { name: "Show your picture full screen" })).toBeInTheDocument();
+      clickWithMouse(dialog);
+      await expect.poll(() => hidden("header")).toBe(false);
+      expect(hidden("status")).toBe(false);
       expect(hidden("controls")).toBe(false);
+    });
+
+    test("what a click hid stays hidden when the mouse moves: only the next click or a key brings it back", async () => {
+      renderOverlay(videoCall(), undefined, { autoHideMs: 60_000 });
+      const dialog = await dialogEl();
+      clickWithMouse(dialog);
+      await expect.poll(() => hidden("controls")).toBe(true);
+      move(dialog);
+      move(dialog);
+      await new Promise((r) => setTimeout(r, 60));
+      expect(hidden("controls")).toBe(true);
+      expect(hidden("header")).toBe(true);
+      dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift", bubbles: true }));
+      await expect.poll(() => hidden("controls")).toBe(false);
+    });
+
+    test("after a click shows them again they hide when the mouse rests, and a move brings them back", async () => {
+      renderOverlay(videoCall(), undefined, { autoHideMs: 120 });
+      const dialog = await dialogEl();
+      await expect.poll(() => hidden("controls")).toBe(true); // rested
+      clickWithMouse(dialog);
+      await expect.poll(() => hidden("controls")).toBe(false); // the click showed them
+      await expect.poll(() => hidden("controls")).toBe(true); // the mouse rests: they go by themselves
+      move(dialog); // not pinned by a click, so a move shows them
+      await expect.poll(() => hidden("controls")).toBe(false);
+    });
+
+    test("a click that hid the details is forgotten when the picture goes away and comes back", async () => {
+      const element = (state) => (
+        <CallContext.Provider value={withCalls(state)}>
+          <CallOverlay user={{ id: "u-alice", username: "alice" }} autoHideMs={120} />
+        </CallContext.Provider>
+      );
+      const screen = await render(element(videoCall()));
+      const dialog = await dialogEl();
+      clickWithMouse(dialog);
+      await expect.poll(() => hidden("controls")).toBe(true);
+      await screen.rerender(element(videoCall({ remoteCameraOn: false })));
+      await expect.poll(() => hidden("controls")).toBe(false); // no picture: everything shows
+      await screen.rerender(element(videoCall()));
+      await expect.poll(() => hidden("controls")).toBe(true); // rested
+      move(dialog);
+      await expect.poll(() => hidden("controls")).toBe(false); // not pinned any more
+    });
+
+    test("a mouse click on a button does its job and does not pin anything hidden", async () => {
+      const value = renderOverlay(videoCall(), undefined, { autoHideMs: 60_000 });
+      const dialog = await dialogEl();
+      await page.getByRole("button", { name: "Mute microphone" }).click();
+      expect(value.setMuted).toHaveBeenCalled();
+      expect(hidden("controls")).toBe(false);
+      // The click on the button did not count as a click on the picture: the next one hides.
+      clickWithMouse(dialog);
+      await expect.poll(() => hidden("controls")).toBe(true);
     });
 
     test("a tap on a button does its job and does not hide anything", async () => {

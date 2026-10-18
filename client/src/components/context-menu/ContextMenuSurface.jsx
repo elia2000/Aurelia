@@ -16,6 +16,7 @@ const ContextMenuSurface = forwardRef(function ContextMenuSurface(
     as: Tag = "div",
     contextMenu,
     onContextMenu,
+    onKeyDown,
     onPointerDown,
     onPointerMove,
     onPointerUp,
@@ -30,6 +31,7 @@ const ContextMenuSurface = forwardRef(function ContextMenuSurface(
     <Tag
       ref={ref}
       onContextMenu={composeHandlers(onContextMenu, triggerProps.onContextMenu)}
+      onKeyDown={composeHandlers(onKeyDown, triggerProps.onKeyDown)}
       onPointerDown={composeHandlers(onPointerDown, triggerProps.onPointerDown)}
       onPointerMove={composeHandlers(onPointerMove, triggerProps.onPointerMove)}
       onPointerUp={composeHandlers(onPointerUp, triggerProps.onPointerUp)}

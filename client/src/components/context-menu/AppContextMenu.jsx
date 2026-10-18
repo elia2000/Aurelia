@@ -3,17 +3,60 @@ import { createPortal } from "react-dom";
 
 const SCREEN_GAP = 12;
 
+// A right click outside the open menu closes it and opens the menu of whatever
+// is under the cursor, so the user can jump from one message to another
+// without a click in between (Telegram does the same).
+function reopenAtPoint(x, y) {
+  if (typeof window === "undefined") return;
+  window.requestAnimationFrame(() => {
+    const target = document.elementFromPoint(x, y);
+    if (!target) return;
+    target.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        button: 2,
+        clientX: x,
+        clientY: y,
+      }),
+    );
+  });
+}
+
 export default function AppContextMenu({ menu, onClose }) {
   const menuRef = useRef(null);
   const [desktopPosition, setDesktopPosition] = useState({ x: 0, y: 0 });
   const [verticalPlacement, setVerticalPlacement] = useState("below");
   const [focusedIndex, setFocusedIndex] = useState(-1);
+  // The finger that opened the menu with a long press can still produce a click
+  // when it lifts, and that click lands on the backdrop. Only a press that
+  // started on the backdrop (or a keyboard activation) closes the menu.
+  const backdropPressedRef = useRef(false);
 
   useEffect(() => {
     if (!menu) return undefined;
+    backdropPressedRef.current = false;
     // Reset focused index and move focus into the menu
     setFocusedIndex(0);
-    return undefined;
+    // When the menu goes away, give focus back to what had it (a message row
+    // opened from the keyboard), unless that was a text field (a phone would
+    // pop its keyboard up) or the chosen action already moved focus elsewhere.
+    const previous = document.activeElement;
+    return () => {
+      if (!(previous instanceof HTMLElement) || !previous.isConnected) return;
+      if (previous === document.body) return;
+      if (previous.matches("input, textarea, select, [contenteditable='true']")) return;
+      const current = document.activeElement;
+      if (current && current !== document.body && !current.closest('[role="menu"]')) {
+        return;
+      }
+      try {
+        previous.focus({ preventScroll: true });
+      } catch {
+        previous.focus();
+      }
+    };
   }, [menu]);
 
   // Focus the active menu item whenever focusedIndex changes
@@ -37,6 +80,9 @@ export default function AppContextMenu({ menu, onClose }) {
     const items = menu.items || [];
     const handleKeyDown = (event) => {
       if (event.key === "Escape") {
+        // Only close the menu: the page also closes the open chat on Escape.
+        event.stopPropagation();
+        event.preventDefault();
         onClose?.();
         return;
       }
@@ -60,8 +106,9 @@ export default function AppContextMenu({ menu, onClose }) {
         setFocusedIndex(items.length - 1);
       }
     };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    // Capture phase, so this runs before the page's own key handlers.
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, [menu, onClose]);
 
   useEffect(() => {
@@ -105,13 +152,26 @@ export default function AppContextMenu({ menu, onClose }) {
   return createPortal(
     <div
       className="fixed inset-0 z-200"
-      onContextMenu={(event) => event.preventDefault()}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        if (event.target instanceof Element && event.target.closest('[role="menu"]')) {
+          return;
+        }
+        onClose?.();
+        reopenAtPoint(event.clientX, event.clientY);
+      }}
     >
       <button
         type="button"
         aria-label="Close context menu"
         className="absolute inset-0 h-full w-full cursor-default border-0 bg-transparent p-0"
-        onClick={() => onClose?.()}
+        onPointerDown={() => {
+          backdropPressedRef.current = true;
+        }}
+        onClick={(event) => {
+          if (event.detail !== 0 && !backdropPressedRef.current) return;
+          onClose?.();
+        }}
       />
 
       <div

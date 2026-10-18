@@ -4,6 +4,11 @@ import { CHAT_PAGE_CONFIG } from "../../../settings/chatPageConfig.js";
 import { CACHE_STORES } from "../../../utils/cacheDb.js";
 import { canUseIdb, readIdbCache, writeIdbCache } from "../../../utils/chatCache.js";
 import { isCrossOriginUrl, saveMedia } from "../../../utils/fileDownload.js";
+import {
+  getMediaAspectKey,
+  getMediaMaxHeightPx,
+  resolveMediaAspectRatio,
+} from "../../../utils/messageLayout.js";
 
 const VOICE_WAVEFORM_CACHE_KEY = "voice-waveform-cache-v1";
 const VOICE_WAVEFORM_CACHE_MAX = 160;
@@ -793,7 +798,7 @@ const VoiceMessageChip = memo(
     const canPlay = Boolean(serverUrl);
     const waveformMaxHeight = 32;
     return (
-      <div className="inline-flex w-max max-w-full items-center gap-2 rounded-xl border border-emerald-200/70 bg-white px-3 py-2 text-xs text-slate-900 transition hover:border-emerald-300 hover:bg-white/90 hover:shadow-[0_0_16px_color-mix(in_srgb,var(--color-emerald-500)_18%,transparent)] dark:border-emerald-500/30 dark:bg-slate-900/50 dark:text-slate-200 dark:hover:bg-slate-900/70 dark:hover:shadow-[0_0_16px_color-mix(in_srgb,var(--color-emerald-500)_14%,transparent)]">
+      <div className="inline-flex w-max max-w-full items-center gap-2 rounded-xl border border-emerald-200/70 bg-white px-2 py-1.5 text-xs text-slate-900 transition hover:border-emerald-300 hover:bg-white/90 hover:shadow-[0_0_16px_color-mix(in_srgb,var(--color-emerald-500)_18%,transparent)] dark:border-emerald-500/30 dark:bg-slate-900/50 dark:text-slate-200 dark:hover:bg-slate-900/70 dark:hover:shadow-[0_0_16px_color-mix(in_srgb,var(--color-emerald-500)_14%,transparent)]">
         <button
           type="button"
           onClick={togglePlay}
@@ -902,28 +907,12 @@ export function MessageFiles({
     }
   }, []);
 
-  const getMediaAspectRatio = (file) => {
-    const key = file?.id || `${file?.name || ""}-${file?.sizeBytes || 0}`;
-    const cached = Number(mediaAspectByKey[key]);
-    if (Number.isFinite(cached) && cached > 0) {
-      return Math.min(2.4, Math.max(0.42, cached));
-    }
-    const width = Number(file?.width);
-    const height = Number(file?.height);
-    if (
-      !Number.isFinite(width) ||
-      !Number.isFinite(height) ||
-      width <= 0 ||
-      height <= 0
-    ) {
-      const renderType = getFileRenderType(file);
-      // Stable fallback boxes on mobile to avoid layout shifts while media metadata loads.
-      return renderType === "video" ? 16 / 9 : 1;
-    }
-    const ratio = width / height;
-    // Clamp extreme values to keep bubble layout usable.
-    return Math.min(2.4, Math.max(0.42, ratio));
-  };
+  const getMediaAspectRatio = (file) =>
+    resolveMediaAspectRatio({
+      file,
+      cachedRatio: mediaAspectByKey[getMediaAspectKey(file)],
+      isVideo: getFileRenderType(file) === "video",
+    });
 
   const cacheMediaAspectRatio = (file, width, height) => {
     const w = Number(width);
@@ -1137,11 +1126,11 @@ export function MessageFiles({
     return type === "image" || type === "video";
   });
   const containerClass = hasMediaFiles
-    ? "mt-1 flex w-full max-w-full flex-col gap-2"
-    : "mt-1 inline-grid w-max max-w-full grid-cols-1 gap-2 justify-items-stretch";
+    ? "flex w-full max-w-full flex-col gap-0.5"
+    : "inline-grid w-max max-w-full grid-cols-1 gap-1 justify-items-stretch";
 
   return (
-    <div className={containerClass}>
+    <div className={containerClass} data-no-select>
       {files.map((file, fileIndex) => {
         const renderType = resolveFileRenderType(file);
         const isImage = renderType === "image";
@@ -1169,8 +1158,13 @@ export function MessageFiles({
         const thumbLoaded =
           loadedMediaThumbs.has(thumbKey) || Boolean(cachedPoster);
         const mediaAspectRatio = getMediaAspectRatio(file);
+        // One picture sits in a bubble sized to its shape, so the height cap
+        // only bites on an album of tall pictures (they are cropped).
         const mediaFrameStyle = mediaAspectRatio
-          ? { aspectRatio: `${mediaAspectRatio}` }
+          ? {
+              aspectRatio: `${mediaAspectRatio}`,
+              maxHeight: `${getMediaMaxHeightPx(isDesktop)}px`,
+            }
           : { minHeight: isDesktop ? "190px" : "160px" };
         const imageFrameClass =
           "relative flex w-full items-center justify-center overflow-hidden";
@@ -1210,7 +1204,7 @@ export function MessageFiles({
                     });
                   }
                 }}
-                className="relative block w-full overflow-hidden rounded-xl border border-slate-200/80 bg-slate-100/70 text-left transition hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-900/70"
+                className="relative block w-full overflow-hidden bg-slate-100/70 text-left transition hover:bg-slate-100 dark:bg-slate-900/70"
                 data-testid="offline-media-placeholder"
                 aria-label={`Image unavailable offline: ${file.name || ""}`.trim()}
               >
@@ -1243,7 +1237,7 @@ export function MessageFiles({
                   expiresAt: file.expiresAt || null,
                 })
               }
-              className="relative block w-full overflow-hidden rounded-xl border border-emerald-200/70 bg-white/70 dark:border-emerald-500/30 dark:bg-slate-900/50"
+              className="relative block w-full overflow-hidden bg-white/70 dark:bg-slate-900/50"
             >
               <div className={imageFrameClass} style={mediaFrameStyle}>
                 <img
@@ -1284,7 +1278,7 @@ export function MessageFiles({
           return (
             <div
               key={key}
-              className="relative block w-full overflow-hidden rounded-xl border border-emerald-200/70 bg-slate-200/70 dark:border-emerald-500/30 dark:bg-slate-800/70"
+              className="relative block w-full overflow-hidden bg-slate-200/70 dark:bg-slate-800/70"
             >
               <div className={videoFrameClass} style={mediaFrameStyle}>
                 <div className="absolute inset-0 animate-pulse bg-slate-200/80 dark:bg-slate-800/80" />
@@ -1312,7 +1306,7 @@ export function MessageFiles({
                     });
                   }
                 }}
-                className="relative block w-full overflow-hidden rounded-xl border border-slate-200/80 bg-slate-100/70 text-left transition hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-900/70"
+                className="relative block w-full overflow-hidden bg-slate-100/70 text-left transition hover:bg-slate-100 dark:bg-slate-900/70"
                 data-testid="offline-media-placeholder"
                 aria-label={`Video unavailable offline: ${file.name || ""}`.trim()}
               >
@@ -1347,7 +1341,7 @@ export function MessageFiles({
                   expiresAt: file.expiresAt || null,
                 })
               }
-              className="relative block w-full overflow-hidden rounded-xl border border-emerald-200/70 bg-black/60 dark:border-emerald-500/30"
+              className="relative block w-full overflow-hidden bg-black/60"
               aria-label={`Open video ${file.name || ""}`.trim()}
             >
               <div className={videoFrameClass} style={mediaFrameStyle}>
@@ -1424,7 +1418,7 @@ export function MessageFiles({
                 void saveMedia(file.url, file.name);
               }
             }}
-            className={`group ${docChipClass} items-center gap-2 rounded-xl border border-emerald-200/70 bg-white/70 px-3 py-2.5 text-xs text-slate-700 transition hover:border-emerald-300 hover:bg-white hover:shadow-[0_0_16px_color-mix(in_srgb,var(--color-emerald-500)_18%,transparent)] dark:border-emerald-500/30 dark:bg-slate-900/50 dark:text-slate-200 dark:hover:bg-slate-900/70 dark:hover:shadow-[0_0_16px_color-mix(in_srgb,var(--color-emerald-500)_14%,transparent)]`}
+            className={`group ${docChipClass} items-center gap-2 rounded-xl border border-emerald-200/70 bg-white/70 px-2.5 py-1.5 text-xs text-slate-700 transition hover:border-emerald-300 hover:bg-white hover:shadow-[0_0_16px_color-mix(in_srgb,var(--color-emerald-500)_18%,transparent)] dark:border-emerald-500/30 dark:bg-slate-900/50 dark:text-slate-200 dark:hover:bg-slate-900/70 dark:hover:shadow-[0_0_16px_color-mix(in_srgb,var(--color-emerald-500)_14%,transparent)]`}
           >
             <span className="relative inline-flex h-5 w-5 shrink-0 items-center justify-center">
               <File
@@ -1456,7 +1450,7 @@ export function MessageFiles({
         ) : (
           <div
             key={key}
-            className={`${docChipClass} items-center gap-2 rounded-xl border border-emerald-200/70 bg-white/70 px-3 py-2.5 text-xs text-slate-700 dark:border-emerald-500/30 dark:bg-slate-900/50 dark:text-slate-200`}
+            className={`${docChipClass} items-center gap-2 rounded-xl border border-emerald-200/70 bg-white/70 px-2.5 py-1.5 text-xs text-slate-700 dark:border-emerald-500/30 dark:bg-slate-900/50 dark:text-slate-200`}
           >
             <File
               size={18}

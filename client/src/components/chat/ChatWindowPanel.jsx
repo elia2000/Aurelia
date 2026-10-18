@@ -120,7 +120,7 @@ export default function ChatWindowPanel({
   headerAvatarColor = null,
   microphonePermissionStatus = "unknown",
   onRequestMicrophonePermission = null,
-  onRequestVideoNote = null,
+  onSendVideoNote = null,
   copyToastVisible = false,
   registerMessageRef = null,
   showFloatingLabel = false,
@@ -228,13 +228,13 @@ export default function ChatWindowPanel({
   const mediaInputRef = useRef(null);
   const documentInputRef = useRef(null);
   const [showUploadMenu, setShowUploadMenu] = useState(false);
-  const [composerHeight, setComposerHeight] = useState(80);
+  const [composerHeight, setComposerHeight] = useState(52);
   const [mediaAspectByKey, setMediaAspectByKey] = useState(() => ({}));
   const [videoPosterByUrl, setVideoPosterByUrl] = useState(() => ({}));
   const uploadBusy = !fileUploadEnabled || fileUploadInProgress;
   const timelineBottomSpacerPx = 4;
   const jumpButtonBaseBottomPx = showComposer
-    ? Math.max(80, composerHeight + 8)
+    ? Math.max(56, composerHeight + 8)
     : showChannelMuteFooter
       ? 94
       : 24;
@@ -706,9 +706,10 @@ export default function ChatWindowPanel({
 
   useEffect(() => {
     if (!replyTarget && !editTarget) return;
-    if (composerFocused) return;
     const node = composerInputRef?.current;
-    if (!node) return;
+    // Only when a reply or edit starts. A later blur (the user clicked a message
+    // to select its text) must not pull the cursor, and the selection, back.
+    if (!node || document.activeElement === node) return;
     window.setTimeout(() => {
       try {
         node.focus?.({ preventScroll: true });
@@ -716,7 +717,7 @@ export default function ChatWindowPanel({
         node.focus?.();
       }
     }, 0);
-  }, [replyTarget, editTarget, composerFocused, composerInputRef]);
+  }, [replyTarget, editTarget, composerInputRef]);
 
 
 
@@ -1492,13 +1493,14 @@ export default function ChatWindowPanel({
             uploadMenuRef={uploadMenuRef}
             handleVideoThumbLoadedMetadata={handleVideoThumbLoadedMetadata}
             onComposerHeightChange={(value) => {
-              setComposerHeight(Math.max(80, Number(value || 80)));
+              setComposerHeight(Math.max(48, Number(value || 48)));
             }}
             onComposerFocusChange={handleComposerFocusChange}
             composerInputRef={composerInputRef}
             microphonePermissionStatus={microphonePermissionStatus}
             onRequestMicrophonePermission={onRequestMicrophonePermission}
-            onRequestVideoNote={onRequestVideoNote}
+            onSendVideoNote={onSendVideoNote}
+            selfUser={user}
           />
       ) : null}
 

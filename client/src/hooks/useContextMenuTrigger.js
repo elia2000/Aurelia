@@ -3,6 +3,17 @@ import { useEffect, useMemo, useRef } from "react";
 const DEFAULT_HOLD_DELAY_MS = 300;
 const MOVE_TOLERANCE_PX = 12;
 const SCROLL_INTENT_PX = 4;
+// Some browsers send a contextmenu event right after the ContextMenu key; the
+// keydown already opened the menu, so that echo is ignored.
+const KEYBOARD_ECHO_MS = 400;
+
+// Long press and swipe belong to fingers and pens. The mouse keeps its normal
+// behaviour (selecting text, dragging) and only opens menus by right click.
+const isFingerOrPen = (event) =>
+  event?.pointerType === "touch" || event?.pointerType === "pen";
+
+const isMenuKey = (event) =>
+  event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey);
 
 const findScrollableAncestor = (node) => {
   if (typeof window === "undefined" || !node) return null;
@@ -43,6 +54,7 @@ export function useContextMenuTrigger({
     startScrollLeft: 0,
   });
   const suppressClickRef = useRef(false);
+  const keyboardOpenedAtRef = useRef(0);
 
   const clearHoldTimer = () => {
     if (holdTimerRef.current !== null && typeof window !== "undefined") {
@@ -84,11 +96,19 @@ export function useContextMenuTrigger({
     const onContextMenu = (event) => {
       if (isMobile) return;
       event.preventDefault();
+      if (Date.now() - keyboardOpenedAtRef.current < KEYBOARD_ECHO_MS) return;
       openMenu(event, "desktop");
     };
 
+    const onKeyDown = (event) => {
+      if (!isMenuKey(event)) return;
+      event.preventDefault();
+      keyboardOpenedAtRef.current = Date.now();
+      openMenu(event, "keyboard");
+    };
+
     const onPointerDown = (event) => {
-      if (!isMobile || event.pointerType !== "touch") return;
+      if (!isMobile || !isFingerOrPen(event)) return;
       clearHoldTimer();
       suppressClickRef.current = false;
 
@@ -171,6 +191,7 @@ export function useContextMenuTrigger({
 
     return {
       onContextMenu,
+      onKeyDown,
       onPointerDown,
       onPointerMove,
       onPointerUp: cancelPointer,

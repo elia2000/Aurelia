@@ -17,12 +17,11 @@ export const RECORDER_PHASE = Object.freeze({
   ERROR: "error",
 });
 
-const ERROR_TEXT = {
+export const VIDEO_NOTE_ERROR_TEXT = {
   permission: "Camera or microphone access was blocked. Allow it in your browser settings to record.",
   no_device: "No camera or microphone was found.",
   unsupported: "Video recording is not supported in this browser.",
-  too_short: "That was too short. Tap record, speak, then tap stop.",
-  interrupted: "The camera was interrupted, so the recording stopped early. What was captured is below.",
+  interrupted: "The camera was interrupted, so the recording stopped early. What was captured is kept.",
   failed: "The camera could not be started.",
 };
 
@@ -32,14 +31,32 @@ const ERROR_TEXT = {
  * Battery and privacy: the camera is only on while the recorder is open, it is
  * released the moment recording finishes (the review step plays the recorded
  * file, not the live camera), and it is also released if the page is hidden.
+ *
+ * Options:
+ *  - autoStart: start recording as soon as the camera is ready (press-and-hold
+ *    recording has no separate "record" step).
+ *  - onShort: a clip shorter than VIDEO_NOTE_MIN_MS is dropped and this is called.
+ *  - onClip(clip, reason): a clip is ready (reason: "user", "limit", "hidden"
+ *    or "lost"), called right after the phase becomes REVIEW.
+ *  - onFail(message): the camera could not be used (the phase becomes ERROR).
+ *  - initialFacing: "user" (front) or "environment" (rear).
  */
-export function useVideoNoteRecorder({ open, videoElementRef }) {
+export function useVideoNoteRecorder({
+  open,
+  videoElementRef,
+  autoStart = false,
+  onShort = null,
+  onClip = null,
+  onFail = null,
+  initialFacing = "user",
+}) {
   const [phase, setPhase] = useState(RECORDER_PHASE.IDLE);
   const [stream, setStream] = useState(null);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
-  const [facing, setFacing] = useState("user");
+  const [facing, setFacing] = useState(initialFacing);
+  const [cameraCount, setCameraCount] = useState(0);
 
   const streamRef = useRef(null);
   const recorderRef = useRef(null);
@@ -52,7 +69,21 @@ export function useVideoNoteRecorder({ open, videoElementRef }) {
   const phaseRef = useRef(RECORDER_PHASE.IDLE);
   const stopReasonRef = useRef(null);
   const posterRef = useRef(null);
-  const facingRef = useRef("user");
+  const facingRef = useRef(initialFacing);
+  const autoStartRef = useRef(autoStart);
+  const restartRef = useRef(false); // a camera flip while recording starts over
+  const onShortRef = useRef(onShort);
+  const onClipRef = useRef(onClip);
+  const onFailRef = useRef(onFail);
+  const startRecordingRef = useRef(null);
+
+  // Read at the moment the camera is ready / a clip ends, not when it was requested.
+  useEffect(() => {
+    autoStartRef.current = autoStart;
+    onShortRef.current = onShort;
+    onClipRef.current = onClip;
+    onFailRef.current = onFail;
+  });
 
   const setPhaseBoth = useCallback((next) => {
     phaseRef.current = next;
@@ -87,8 +118,10 @@ export function useVideoNoteRecorder({ open, videoElementRef }) {
     (code) => {
       clearTimers();
       stopStream();
-      setError(ERROR_TEXT[code] || ERROR_TEXT.failed);
+      const message = VIDEO_NOTE_ERROR_TEXT[code] || VIDEO_NOTE_ERROR_TEXT.failed;
+      setError(message);
       setPhaseBoth(RECORDER_PHASE.ERROR);
+      onFailRef.current?.(message);
     },
     [clearTimers, setPhaseBoth, stopStream],
   );
@@ -112,6 +145,16 @@ export function useVideoNoteRecorder({ open, videoElementRef }) {
         streamRef.current = media;
         setStream(media);
         setPhaseBoth(RECORDER_PHASE.PREVIEW);
+        navigator.mediaDevices
+          .enumerateDevices?.()
+          .then((devices) => {
+            if (mountedRef.current) setCameraCount(devices.filter((d) => d.kind === "videoinput").length);
+          })
+          .catch(() => {});
+        if (autoStartRef.current || restartRef.current) {
+          restartRef.current = false;
+          startRecordingRef.current?.();
+        }
       } catch (e) {
         const name = String(e?.name || "");
         if (name === "NotAllowedError" || name === "SecurityError") fail("permission");
@@ -141,24 +184,20 @@ export function useVideoNoteRecorder({ open, videoElementRef }) {
     stopStream(); // camera off as soon as the clip exists
     if (!mountedRef.current) return;
     if (durationMs < VIDEO_NOTE_MIN_MS || blob.size === 0) {
+      // A slip of the finger: nothing is kept, the camera stays off.
       setElapsedMs(0);
-      if (document.hidden) {
-        // Do not switch the camera back on behind the person's back; it is
-        // reopened when the page is visible again.
-        setPhaseBoth(RECORDER_PHASE.IDLE);
-        return;
-      }
-      void openCamera(facingRef.current); // clears any message first ...
-      setError(ERROR_TEXT.too_short); // ... so this one is not wiped
+      setPhaseBoth(RECORDER_PHASE.IDLE);
+      onShortRef.current?.();
       return;
     }
     const next = { blob, mime, durationMs, posterBlob, previewUrl: URL.createObjectURL(blob) };
     resultRef.current = next;
     setResult(next);
     setElapsedMs(durationMs);
-    setError(reason === "lost" ? ERROR_TEXT.interrupted : "");
+    setError(reason === "lost" ? VIDEO_NOTE_ERROR_TEXT.interrupted : "");
     setPhaseBoth(RECORDER_PHASE.REVIEW);
-  }, [clearTimers, openCamera, setPhaseBoth, stopStream]);
+    onClipRef.current?.(next, reason);
+  }, [clearTimers, setPhaseBoth, stopStream]);
 
   const finishRecording = useCallback(
     async (reason) => {
@@ -231,22 +270,43 @@ export function useVideoNoteRecorder({ open, videoElementRef }) {
     limitRef.current = setTimeout(() => finishRecording("limit"), VIDEO_NOTE_MAX_MS);
   }, [fail, finalizeRecording, finishRecording, setPhaseBoth]);
 
+  useEffect(() => {
+    startRecordingRef.current = startRecording;
+  }, [startRecording]);
+
   const stopRecording = useCallback(() => finishRecording("user"), [finishRecording]);
 
-  const retake = useCallback(() => {
-    revokeResult();
-    setElapsedMs(0);
-    openCamera(facing);
-  }, [facing, openCamera, revokeResult]);
+  // The phase right now, for event handlers that must not read a stale render.
+  const getPhase = useCallback(() => phaseRef.current, []);
 
+  // Before recording: reopen on the other camera. While recording a camera
+  // cannot be swapped under a MediaRecorder, so the clip starts over on the
+  // other one (the caller says so); nothing is sent.
   const switchCamera = useCallback(() => {
-    if (phaseRef.current !== RECORDER_PHASE.PREVIEW) return;
-    const next = facing === "user" ? "environment" : "user";
+    const current = phaseRef.current;
+    if (current !== RECORDER_PHASE.PREVIEW && current !== RECORDER_PHASE.RECORDING) return;
+    const next = facingRef.current === "user" ? "environment" : "user";
+    if (current === RECORDER_PHASE.RECORDING) {
+      clearTimers();
+      const recorder = recorderRef.current;
+      recorderRef.current = null;
+      if (recorder && recorder.state !== "inactive") {
+        recorder.onstop = null;
+        try {
+          recorder.stop();
+        } catch (_) {}
+      }
+      chunksRef.current = [];
+      stopReasonRef.current = null;
+      posterRef.current = null;
+      setElapsedMs(0);
+      restartRef.current = true;
+    }
     facingRef.current = next;
     setFacing(next);
     stopStream();
     openCamera(next);
-  }, [facing, openCamera, stopStream]);
+  }, [clearTimers, openCamera, stopStream]);
 
   /**
    * The clip was delivered and its preview URL now belongs to the caller (it
@@ -280,7 +340,7 @@ export function useVideoNoteRecorder({ open, videoElementRef }) {
   // Open / close.
   useEffect(() => {
     mountedRef.current = true;
-    if (open) openCamera("user");
+    if (open) openCamera(facingRef.current);
     else reset();
     return () => {
       mountedRef.current = false;
@@ -300,12 +360,12 @@ export function useVideoNoteRecorder({ open, videoElementRef }) {
           setPhaseBoth(RECORDER_PHASE.IDLE);
         }
       } else if (phaseRef.current === RECORDER_PHASE.IDLE) {
-        openCamera(facing);
+        openCamera(facingRef.current);
       }
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
-  }, [open, facing, finishRecording, openCamera, setPhaseBoth, stopStream]);
+  }, [open, finishRecording, openCamera, setPhaseBoth, stopStream]);
 
   return {
     phase,
@@ -314,9 +374,10 @@ export function useVideoNoteRecorder({ open, videoElementRef }) {
     result,
     error,
     facing,
+    cameraCount,
+    getPhase,
     startRecording,
     stopRecording,
-    retake,
     switchCamera,
     handOver,
     reset,
