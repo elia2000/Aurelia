@@ -209,6 +209,15 @@ describe("a tap on the record button", () => {
     expect(localStorage.getItem("aurelle-record-mode")).toBe("voice");
   });
 
+  test("its how-to-record hint is dropped as soon as typing swaps the button for Send", async () => {
+    await render(<Harness />);
+    await userEvent.click(page.getByRole("button", { name: /^Record voice message/ }));
+    expect(inlineHint()?.textContent).toMatch(/Hold to record a video message/);
+    await textbox().fill("a");
+    expect(primary().dataset.variant).toBe("send");
+    expect(inlineHint()).toBeNull();
+  });
+
   test("starts in the mode that was left last time", async () => {
     localStorage.setItem("aurelle-record-mode", "video");
     await render(<Harness />);
@@ -244,6 +253,28 @@ describe("the record button is made for holding", () => {
     const menu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
     button.dispatchEvent(menu);
     expect(menu.defaultPrevented).toBe(true);
+  });
+});
+
+describe("the lock handle and the back-to-latest button", () => {
+  test("the button steps aside while the record button is held, so the two never stack up", async () => {
+    await render(
+      <>
+        <Harness />
+        <button type="button" data-jump-latest>
+          Back to latest message
+        </button>
+      </>,
+    );
+    const jump = document.querySelector("[data-jump-latest]");
+    expect(getComputedStyle(jump).opacity).toBe("1");
+    const finger = pointer(primary());
+    finger.down();
+    await waitUntil(() => recordingBar(), "recording bar");
+    expect(getComputedStyle(jump).opacity).toBe("0");
+    expect(getComputedStyle(jump).pointerEvents).toBe("none");
+    finger.cancel();
+    await waitUntil(() => getComputedStyle(jump).opacity === "1", "the button is back");
   });
 });
 

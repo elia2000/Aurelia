@@ -1552,6 +1552,7 @@ export default function ChatWindowPanel({
         <button
           type="button"
           onClick={onJumpToLatest}
+          data-jump-latest
           className="absolute inline-flex h-11 w-11 items-center justify-center rounded-full border border-emerald-200 bg-white text-emerald-700 shadow-lg transition hover:border-emerald-300 dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-200"
           style={{
             bottom: isDesktop

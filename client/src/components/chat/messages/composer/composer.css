@@ -12,6 +12,13 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+/* While the record button is held, its lock handle floats up above it, right
+   where the chat's "back to latest" button sits. That button steps aside. */
+body:has(.aurelle-rec-halo) [data-jump-latest] {
+  opacity: 0;
+  pointer-events: none;
+}
+
 @keyframes aurelle-rec-dot {
   0%,
   100% {

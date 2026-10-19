@@ -21,6 +21,10 @@ features:
     title: Encrypted Calls & Video Messages
     details: End-to-end encrypted 1:1 voice and video calls and Telegram-style round video messages, built to save battery and mobile data.
     link: /Calls-and-Video-Messages
+  - icon: 💬
+    title: Telegram-style chat
+    details: Compact message bubbles you can select and copy with the mouse, a right-click menu (long-press on a phone) anywhere along a message row, a one-row message box where a single button records voice and round video messages, and a click on a video to hide its buttons.
+    link: /Calls-and-Video-Messages
   - icon: 🚀
     title: Easy Install
     details: One-line deployment script handles dependencies, build, Nginx, and SSL for you.

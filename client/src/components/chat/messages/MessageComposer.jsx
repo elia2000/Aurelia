@@ -482,7 +482,8 @@ export function MessageComposer({
           />
         </Suspense>
       ) : null}
-      {session.hint ? (
+      {/* "Hold to record..." makes no sense once typing has swapped the record button for Send. */}
+      {session.hint && (session.hint.tone === "error" || (variant !== "send" && variant !== "save")) ? (
         <p
           key={session.hint.id}
           role={session.hint.tone === "error" ? "alert" : "status"}
