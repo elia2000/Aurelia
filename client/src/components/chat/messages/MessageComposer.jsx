@@ -193,6 +193,20 @@ export function MessageComposer({
     if (!attachVisible && showUploadMenu) setShowUploadMenu?.(false);
   }, [attachVisible, showUploadMenu, setShowUploadMenu]);
 
+  // First in line (capture on window), like the emoji picker: Escape closes the
+  // attach menu and nothing else, in particular not the open chat.
+  useEffect(() => {
+    if (!showUploadMenu) return undefined;
+    const onKey = (event) => {
+      if (event.key !== "Escape") return;
+      event.stopImmediatePropagation();
+      event.preventDefault();
+      setShowUploadMenu?.(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [showUploadMenu, setShowUploadMenu]);
+
   const resize = useCallback(
     (textareaEl = messageInputRef.current) =>
       applyTextareaSize({

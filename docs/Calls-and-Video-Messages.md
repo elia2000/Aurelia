@@ -58,7 +58,7 @@ Calls are one-to-one and happen in direct chats. You can minimise the call scree
 - On an incoming video call you can press **Answer with camera off** to join without showing yourself. You still see them, and you can switch your camera on later without reconnecting.
 - If the camera is blocked or missing, the call is **not** dropped: you join without video and the screen tells you why. Only a blocked or missing microphone ends a call.
 - **Swap the pictures.** The other person fills the screen and you are the small tile. Tap your own tile to put yourself full screen and the other person in the tile; tap again to swap back. The swap is there once the call is connected, and it stays if you minimise the call and open it again.
-- **A clear view.** Tap the picture to hide the name, the emoji code and the buttons; tap again to bring them back. They also hide by themselves after 5 seconds, come back when you move the mouse or press a key, and stay while a warning or the call settings are open, while you move through the buttons with the keyboard, or when there is no picture to look at.
+- **A clear view.** Click or tap the picture to hide the name, the emoji code and the buttons; click or tap again to bring them back. They also hide by themselves after 5 seconds, come back when you move the mouse or press a key, and stay while a warning or the call settings are open, while you move through the buttons with the keyboard, or when there is no picture to look at. If you hid them with a mouse click, moving the mouse does not bring them back: click the picture again or press a key.
 
 ### Sound and video quality during a call
 
@@ -71,11 +71,18 @@ The sliders button next to the microphone and camera buttons opens the call's se
 
 ### Video messages
 
-1. In a direct chat, group or *Saved messages*, press the **camera** button next to the microphone.
-2. Press the red button to record (up to **60 seconds**), press stop, preview, then **Send** or **Retake**.
-3. Recipients see a round bubble with a blurred preview. The video is downloaded and decrypted only when they press play. While it plays, a dot rides the progress ring (like in Telegram): drag it round the ring to jump to another moment, or focus it and use the arrow keys. The time shown counts down what is left.
+The round button at the right end of the message box is the **record button**. While the box is empty it shows a microphone (voice message) or a camera (video message); as soon as you type something, or add a file, it becomes *Send*.
 
-Your recording stays in the dialog until the server has accepted it. If sending does not work (you are offline, a contact has a new device, an earlier upload is still running) the reason is shown in the dialog and you can simply press *Send* again.
+1. In a direct chat, group or *Saved messages*, **tap** the record button to switch between microphone and camera. Aurelle remembers your choice on that device.
+2. **Press and hold** the button to record (video messages stop at **60 seconds**). A round preview of your camera floats above the message box. **Let go to send.** Slide **left** to cancel. Slide **up** to lock the recording: you can then let go, and the bar offers *Delete*, *Stop* and *Send*. *Stop* opens a preview that you can play before you send or delete it. If the phone has more than one camera, a button flips between them while the recording is locked.
+3. A hold shorter than a second is not sent; Aurelle tells you to hold longer. If the page loses focus or the camera is unplugged, the recording is kept for you to review instead of being lost.
+4. Recipients see a round video with no bubble around it. It plays muted on a loop while it is on screen, unless the device is offline, on a slow connection or in data-saver mode, or has reduced motion on; the first frame is shown instead and the video is downloaded and decrypted only when they press play. A tap plays it from the start with sound, and a second tap pauses it. While it plays, a dot rides the progress ring (like in Telegram): drag it round the ring to jump to another moment, or focus it and use the arrow keys. The time shown counts down what is left.
+
+On a computer the keyboard works too: focus the button, press Space or Enter to switch the mode, hold Space to record, press the up arrow to lock and Escape to cancel.
+
+Your recording stays in the message box until the server has accepted it. If sending does not work (you are offline, a contact has a new device, an earlier upload is still running) the reason is shown with the recording and you can simply press *Send* again.
+
+Voice messages use the same button. A voice message that is left recording for 30 minutes stops by itself and waits for you to review it.
 
 Video messages are not available in broadcast channels. They cannot be forwarded or saved as a file, because the key is wrapped only for the devices that were in the chat when it was sent and the stored file is ciphertext. In groups, members do not need a direct chat with each other to watch each other's messages.
 

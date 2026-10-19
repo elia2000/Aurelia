@@ -117,6 +117,38 @@ describe("MessageComposer — upload menu", () => {
     expect(setShowUploadMenu).toHaveBeenCalled();
   });
 
+  test("Escape closes the open attach menu and does not reach the chat behind it", async () => {
+    const setShowUploadMenu = vi.fn();
+    const chatEscape = vi.fn();
+    document.addEventListener("keydown", chatEscape); // what ChatPage uses to close the chat
+    try {
+      render(
+        <MessageComposer
+          {...BASE_PROPS}
+          showUploadMenu={true}
+          setShowUploadMenu={setShowUploadMenu}
+        />,
+      );
+      await userEvent.keyboard("{Escape}");
+      expect(setShowUploadMenu).toHaveBeenCalledWith(false);
+      expect(chatEscape).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("keydown", chatEscape);
+    }
+  });
+
+  test("Escape with no menu open still reaches the chat", async () => {
+    const chatEscape = vi.fn();
+    document.addEventListener("keydown", chatEscape);
+    try {
+      render(<MessageComposer {...BASE_PROPS} showUploadMenu={false} />);
+      await userEvent.keyboard("{Escape}");
+      expect(chatEscape).toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("keydown", chatEscape);
+    }
+  });
+
   test("attach button is disabled when uploadBusy is true", async () => {
     render(<MessageComposer {...BASE_PROPS} uploadBusy={true} />);
     const btn = page.getByRole("button", { name: /attach file/i });

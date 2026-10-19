@@ -69,7 +69,6 @@ beforeEach(() => {
     getPhase: () => camera.state.phase,
     startRecording: vi.fn(),
     stopRecording: vi.fn(),
-    retake: vi.fn(),
     switchCamera: vi.fn(),
     handOver: vi.fn(),
     reset: vi.fn(),
