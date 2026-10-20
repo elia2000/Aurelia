@@ -161,6 +161,15 @@ describe("GET /api/messages service entries", () => {
     expect(res.body.messages.map((m) => m.service)).toEqual([null, null]);
   });
 
+  test.each([
+    ["upper case", `[[SYSTEM:pinned:${MSG_ID}]]`],
+    ["mixed case", `[[System:pinned:${MSG_ID}]]`],
+  ])("a pin entry in %s that is already stored does not draw a chip", async (_label, body) => {
+    const ctx = makeListApp([rawMessage(MSG_ID, { user_id: ALICE_ID, username: "alice", body })]);
+    const res = await list(ctx, "bob");
+    expect(res.body.messages[0].service).toBeNull();
+  });
+
   test("an entry that only looks like one is not parsed", async () => {
     const ctx = makeListApp([rawMessage(MSG_ID, { body: "[[system:pinned:not-an-id]]" })]);
     const res = await list(ctx);
@@ -267,6 +276,11 @@ describe("service entries cannot be faked, forwarded or edited", () => {
     ["a joined entry", "[[system:joined:Mallory]]"],
     ["an entry with leading spaces", `   [[system:pinned:${MSG_ID}]]`],
     ["an entry after a newline", `\n[[system:left:Bob]]`],
+    ["a pin entry in upper case", `[[SYSTEM:pinned:${MSG_ID}]]`],
+    ["a pin entry in mixed case", `[[System:pinned:${MSG_ID}]]`],
+    ["a joined entry in upper case", "[[SYSTEM:joined:Mallory]]"],
+    ["an upper case entry after a no-break space", `\u00a0[[SYSTEM:pinned:${MSG_ID}]]`],
+    ["an entry with a space inside the brackets", `[[ system:pinned:${MSG_ID}]]`],
   ])("a person cannot send %s as a message", async (_label, body) => {
     const createOrReuseMessage = vi.fn(() => ({ id: MSG_ID_2, deduped: false }));
     const ctx = makePinApp({ deps: { createOrReuseMessage } });
@@ -326,6 +340,107 @@ describe("service entries cannot be faked, forwarded or edited", () => {
     expect(removeUploadedFiles).toHaveBeenCalled();
   });
 
+  test.each([
+    ["upper case", `[[SYSTEM:pinned:${MSG_ID_2}]]`],
+    ["mixed case", `[[System:pinned:${MSG_ID_2}]]`],
+  ])("a caption in %s cannot be a service entry either", async (_label, body) => {
+    const createMessageFiles = vi.fn();
+    const ctx = makePinApp({
+      deps: {
+        createMessageFiles,
+        removeUploadedFiles: vi.fn(),
+        uploadFiles: { array: () => (req, _res, next) => { req.files = []; next(); } },
+      },
+    });
+    const res = await post(ctx, "bob", "/api/messages/upload", {
+      chatId: CHAT_ID,
+      uploadType: "media",
+      body,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/invalid message body/i);
+    expect(createMessageFiles).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["upper case", `[[SYSTEM:pinned:${MSG_ID_2}]]`],
+    ["mixed case", `[[System:pinned:${MSG_ID_2}]]`],
+    ["a space inside the brackets", `[[ system:pinned:${MSG_ID_2}]]`],
+  ])("a message cannot be edited into a service entry written in %s", async (_label, body) => {
+    const editMessage = vi.fn();
+    const ctx = makePinApp({ deps: { editMessage } });
+    const res = await post(ctx, "bob", "/api/messages/edit", {
+      chatId: CHAT_ID,
+      messageId: MSG_ID,
+      body,
+    });
+    expect(res.status).toBe(400);
+    expect(editMessage).not.toHaveBeenCalled();
+  });
+
+  // The edit-by-upload route used to refuse only call entries, so a person could
+  // attach files to (and clear the expiry of) their own "X pinned a message"
+  // entry while its body stayed a service entry.
+  describe("a service entry cannot be changed through the upload route", () => {
+    const PIN_ENTRY_ID = "9a9a9a9a-b2b2-4c3c-8d4d-e5e5e5e5e5e5";
+    const upload = async (ctx, fields) => {
+      const cookie = await ctx.login("bob");
+      return request(ctx.app)
+        .post("/api/messages/upload")
+        .set("Cookie", cookie)
+        .send({ username: "bob", ...fields });
+    };
+    const makeUploadApp = () => {
+      const createMessageFiles = vi.fn();
+      const editMessage = vi.fn();
+      const setMessageExpiresAt = vi.fn();
+      const removeUploadedFiles = vi.fn();
+      const ctx = makePinApp({
+        deps: {
+          createMessageFiles,
+          editMessage,
+          setMessageExpiresAt,
+          removeUploadedFiles,
+          uploadFiles: { array: () => (req, _res, next) => { req.files = []; next(); } },
+        },
+      });
+      return { ctx, createMessageFiles, editMessage, setMessageExpiresAt, removeUploadedFiles };
+    };
+
+    test.each([
+      ["a pin entry", `[[system:pinned:${MSG_ID}]]`],
+      ["a joined entry", "[[system:joined:Bob]]"],
+    ])("%s of the caller cannot be edited, even with an empty caption", async (_label, entryBody) => {
+      const { ctx, createMessageFiles, editMessage, setMessageExpiresAt } = makeUploadApp();
+      ctx.addMessage({ id: PIN_ENTRY_ID, user_id: BOB_ID, body: entryBody });
+      const res = await upload(ctx, {
+        chatId: CHAT_ID,
+        uploadType: "media",
+        editMessageId: PIN_ENTRY_ID,
+        body: "",
+        storageKeys: ["uploads/doc123.pdf"],
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/cannot be edited/i);
+      expect(createMessageFiles).not.toHaveBeenCalled();
+      expect(editMessage).not.toHaveBeenCalled();
+      expect(setMessageExpiresAt).not.toHaveBeenCalled();
+    });
+
+    test("an ordinary message of the caller can still be edited through the upload route", async () => {
+      const { ctx } = makeUploadApp();
+      ctx.addMessage({ id: PIN_ENTRY_ID, user_id: BOB_ID, body: "just text" });
+      const res = await upload(ctx, {
+        chatId: CHAT_ID,
+        uploadType: "media",
+        editMessageId: PIN_ENTRY_ID,
+        body: "new caption",
+        storageKeys: ["uploads/doc123.pdf"],
+      });
+      expect(res.status).not.toBe(400);
+    });
+  });
+
   test("a message cannot be edited into a service entry", async () => {
     const editMessage = vi.fn();
     const ctx = makePinApp({ deps: { editMessage } });
@@ -375,16 +490,28 @@ describe("service entries cannot be faked, forwarded or edited", () => {
     expect(res.status).toBe(403);
   });
 
-  test("a forwarded body cannot be a service entry either", async () => {
-    const createMessage = vi.fn();
-    const ctx = makePinApp({ deps: { createMessage } });
+  test("a forwarded body cannot be a service entry either: the client's text is not used at all", async () => {
+    const forwarded = [];
+    const ctx = makePinApp({
+      deps: {
+        createMessage: (...args) => {
+          forwarded.push(args);
+          return MSG_ID_2;
+        },
+        setMessageForwardOrigin: async () => {},
+        listMessageFilesByMessageIds: () => [],
+        markMessageRead: () => {},
+        unhideChat: () => {},
+      },
+    });
     const res = await post(ctx, "alice", "/api/messages/forward", {
       sourceMessageId: MSG_ID,
       targetChatIds: [CHAT_ID],
-      body: "[[system:joined:Mallory]]",
+      body: "[[SYSTEM:joined:Mallory]]",
     });
-    expect(res.status).toBe(400);
-    expect(createMessage).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(forwarded).toHaveLength(1);
+    expect(String(forwarded[0][2])).not.toMatch(/system/i);
   });
 
   test("an ordinary message is still forwarded", async () => {

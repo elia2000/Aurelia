@@ -43,7 +43,7 @@ const createdBodies = (ctx) => ctx.created.map((c) => c.body);
 const codes = (res) => res.body.failed.map((f) => [f.sourceMessageId, f.code]);
 
 describe("POST /api/messages/forward: the single-message request keeps working", () => {
-  test("answers { ok, ids } and writes the text the client sent, exactly as before", async () => {
+  test("answers { ok, ids } and writes the stored text of the source message", async () => {
     const ctx = makeBatchApp();
     const res = await forward(ctx, { sourceMessageId: M1, targetChatIds: [TARGET_GROUP], body: "first" });
 
@@ -73,10 +73,41 @@ describe("POST /api/messages/forward: the single-message request keeps working",
     expect(ctx.eventsOfType("chat_message")).toHaveLength(1);
   });
 
-  test("the client's text is used, not the stored one", async () => {
+  // A forward is labelled "Forwarded from <author>", so its text must be what
+  // that author wrote: the client cannot put words in somebody else's mouth.
+  test("the client's text is ignored: the forward carries the stored text and the real author", async () => {
     const ctx = makeBatchApp();
-    await forward(ctx, { sourceMessageId: M1, targetChatIds: [TARGET_GROUP], body: "what the client showed" });
-    expect(createdBodies(ctx)).toEqual(["what the client showed"]);
+    const res = await forward(ctx, {
+      sourceMessageId: M1,
+      targetChatIds: [TARGET_GROUP],
+      body: "I confess I took the money",
+    });
+    expect(res.status).toBe(200);
+    expect(createdBodies(ctx)).toEqual(["first"]);
+    expect(ctx.origins).toEqual([
+      expect.objectContaining({ sourceUserId: BOB_ID, sourceUsername: "bob", label: "Bob" }),
+    ]);
+  });
+
+  test.each([
+    ["no text at all", {}],
+    ["a blank text", { body: "   " }],
+    ["a service-looking text", { body: "[[system:member_joined]]" }],
+    ["a text far over the limit", { body: "x".repeat(50_000) }],
+    ["a text that is not a string", { body: { toString: "boom" } }],
+  ])("%s from the client changes nothing: the stored text is forwarded", async (_name, extra) => {
+    const ctx = makeBatchApp();
+    const res = await forward(ctx, { sourceMessageId: M1, targetChatIds: [TARGET_GROUP], ...extra });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, ids: [`${CREATED_PREFIX}000000000001`] });
+    expect(createdBodies(ctx)).toEqual(["first"]);
+  });
+
+  test("an edited message is forwarded with its current text", async () => {
+    const ctx = makeBatchApp();
+    const res = await forward(ctx, { sourceMessageId: M2, targetChatIds: [TARGET_GROUP], body: "stale text" });
+    expect(res.status).toBe(200);
+    expect(createdBodies(ctx)).toEqual(["second (edited)"]);
   });
 
   test.each([
@@ -87,8 +118,6 @@ describe("POST /api/messages/forward: the single-message request keeps working",
     ["a service entry", { sourceMessageId: SERVICE_MSG }, 400, /cannot be forwarded/],
     ["a call entry", { sourceMessageId: CALL_MSG }, 400, /cannot be forwarded/],
     ["a chat I am not in", { sourceMessageId: CAROL_MSG }, 403, /cannot forward from this chat/],
-    ["an empty text", { sourceMessageId: M1, body: "  " }, 400, /body is required/],
-    ["a service text", { sourceMessageId: M1, body: "[[system:member_joined]]" }, 400, /Invalid message body/],
   ])("%s keeps its status and message", async (_name, extra, status, pattern) => {
     const ctx = makeBatchApp();
     const res = await forward(ctx, { targetChatIds: [TARGET_GROUP], body: "text", ...extra });
@@ -137,16 +166,12 @@ describe("POST /api/messages/forward: the single-message request keeps working",
     expect(ctx.created).toHaveLength(0);
   });
 
-  test("a text longer than a message may be is refused, unless the source itself is that long", async () => {
+  test("a stored text longer than the message limit (a mirrored remote post) is forwarded whole", async () => {
     const ctx = makeBatchApp({ settings: { MESSAGE_MAX_CHARS: 10 } });
-    const tooLong = await forward(ctx, { sourceMessageId: M1, targetChatIds: [TARGET_GROUP], body: "x".repeat(11) });
-    expect(tooLong.status).toBe(400);
-    expect(tooLong.body.error).toMatch(/at most 10 characters/);
-
-    // A post mirrored from a remote channel can be longer than the limit.
     ctx.messages.get(M1).body = "y".repeat(50);
-    const mirrored = await forward(ctx, { sourceMessageId: M1, targetChatIds: [TARGET_GROUP], body: "y".repeat(50) });
-    expect(mirrored.status).toBe(200);
+    const res = await forward(ctx, { sourceMessageId: M1, targetChatIds: [TARGET_GROUP], body: "short" });
+    expect(res.status).toBe(200);
+    expect(createdBodies(ctx)).toEqual(["y".repeat(50)]);
   });
 
   test("somebody else's session cannot forward in my name", async () => {

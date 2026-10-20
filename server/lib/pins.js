@@ -5,6 +5,10 @@ export const MAX_PINNED_MIN = 1;
 export const MAX_PINNED_MAX = 100;
 export const MAX_PINNED_DEFAULT = 20;
 export const PIN_PREVIEW_MAX_CHARS = 140;
+// How much of a message is read to build a preview. A preview shows 140
+// characters, and the markdown patterns below backtrack badly on long,
+// hostile text, so nothing past this point is ever looked at.
+export const PIN_PREVIEW_SOURCE_MAX_CHARS = 1000;
 
 /** The `MAX_PINNED_MESSAGES` setting, clamped to the supported 1-100 range. */
 export function clampMaxPinnedMessages(value) {
@@ -51,15 +55,23 @@ export function chatTypeGetsPinServiceMessage(chatType) {
 
 /**
  * Turns the markdown the composer allows into the plain words a person would
- * read, on one line. Not a full parser: it only has to be right for previews.
+ * read, on one line. Not a full parser: it only has to be right for previews,
+ * so it only reads the first PIN_PREVIEW_SOURCE_MAX_CHARS characters.
  */
 export function stripMarkdown(input) {
   let text = String(input ?? "");
+  if (text.length > PIN_PREVIEW_SOURCE_MAX_CHARS) {
+    text = text.slice(0, PIN_PREVIEW_SOURCE_MAX_CHARS);
+    // Do not end on the first half of an emoji.
+    if (/[\ud800-\udbff]$/.test(text)) text = text.slice(0, -1);
+  }
   // Fence lines of code blocks go, the code stays.
   text = text.replace(/^[ \t]*(?:```|~~~)[^\n]*$/gm, "");
-  // Images and links keep their visible text.
-  text = text.replace(/!\[([^\]]*)\]\([^)\n]*\)/g, "$1");
-  text = text.replace(/\[([^\]\n]+)\]\([^)\n]*\)/g, "$1");
+  // Images and links keep their visible text. The lengths are bounded so an
+  // unfinished link cannot make the pattern rescan the rest of the text from
+  // every opening bracket.
+  text = text.replace(/!\[([^\]]{0,500})\]\([^)\n]{0,500}\)/g, "$1");
+  text = text.replace(/\[([^\]\n]{1,500})\]\([^)\n]{0,500}\)/g, "$1");
   // Inline code.
   text = text.replace(/(`+)([^`]+?)\1/g, "$2");
   // Bold, strike-through and spoilers.

@@ -129,6 +129,8 @@ const USERS = [
 export function makeReactionApp({ chat = {}, deps = {}, settings = {}, members, asyncDb = false } = {}) {
   const store = makeReactionStore();
   const events = [];
+  // Events sent to one person's own sessions (emitSseEvent), not to the chat.
+  const userEvents = [];
   const pushes = [];
   const hiddenFor = new Map(); // messageId -> Set(userId)
   const chatRecord = { id: CHAT_ID, type: "group", name: "Friends", ...chat };
@@ -181,6 +183,7 @@ export function makeReactionApp({ chat = {}, deps = {}, settings = {}, members, 
       listMessageReactionSummaries: wrap(store.listMessageReactionSummaries),
       listMessageReactionUsers: wrap(store.listMessageReactionUsers),
       emitChatEvent: (chatId, payload) => events.push({ chatId, payload }),
+      emitSseEvent: (username, payload) => userEvents.push({ username, payload }),
       sendPushNotificationToUsers: async (userIds, payload) => {
         pushes.push({ userIds, payload });
       },
@@ -194,6 +197,7 @@ export function makeReactionApp({ chat = {}, deps = {}, settings = {}, members, 
     ...built,
     store,
     events,
+    userEvents,
     pushes,
     messages,
     chatRecord,

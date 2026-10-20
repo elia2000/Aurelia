@@ -87,9 +87,6 @@ export function createMessageForwardService(deps, { computeTextExpiryIso } = {})
       ? computeTextExpiryIso(new Date().toISOString())
       : null;
 
-  const maxMessageChars = () =>
-    Math.max(1, Number((typeof getSetting === "function" && getSetting("MESSAGE_MAX_CHARS")) || 4000));
-
   // ── Looking things up (each at most once per request) ─────────────────────
 
   // One query for a list, the plain lookup for a single message.
@@ -193,11 +190,12 @@ export function createMessageForwardService(deps, { computeTextExpiryIso } = {})
    * `accepted` are ready to be copied (oldest first), `failed` explain the
    * rest, both in terms of the ids that were asked for.
    *
-   * `clientBody` is the text a single-message request brings along; a
-   * multi-select request has none, and each message is forwarded with its own
-   * current text.
+   * Every message is forwarded with its own current text, as stored. A
+   * forward is labelled "Forwarded from <author>", so the text may never be
+   * something the requester typed: the single-message request used to bring
+   * its own text along, which let a member put words in somebody else's mouth.
    */
-  async function evaluateSources({ user, sourceMessageIds, clientBody }) {
+  async function evaluateSources({ user, sourceMessageIds }) {
     const rowsById = await loadSourceRows(sourceMessageIds);
 
     const memberCache = new Map();
@@ -265,10 +263,7 @@ export function createMessageForwardService(deps, { computeTextExpiryIso } = {})
         continue;
       }
 
-      const body =
-        clientBody === null
-          ? String(row.edited_body ?? row.body ?? "")
-          : String(clientBody ?? "");
+      const body = String(row.edited_body ?? row.body ?? "");
       if (!body.trim()) {
         failed.push({ sourceMessageId: id, ...FORWARD_ERRORS.emptyBody() });
         continue;
@@ -276,20 +271,6 @@ export function createMessageForwardService(deps, { computeTextExpiryIso } = {})
       if (isServiceMessageBody(body)) {
         failed.push({ sourceMessageId: id, ...FORWARD_ERRORS.invalidBody() });
         continue;
-      }
-      if (clientBody !== null) {
-        // The text of a single-message request comes from the client: it may
-        // not be longer than a message can be, unless the message itself is
-        // (a post mirrored from a remote channel, or a limit lowered later).
-        const sourceLength = String(row.edited_body ?? row.body ?? "").length;
-        const limit = Math.max(maxMessageChars(), sourceLength);
-        if (body.length > limit) {
-          failed.push({
-            sourceMessageId: id,
-            ...failure(400, "body_too_long", `Message must be at most ${limit} characters.`),
-          });
-          continue;
-        }
       }
       candidates.push({
         id: String(row.id ?? id),
@@ -423,8 +404,7 @@ export function createMessageForwardService(deps, { computeTextExpiryIso } = {})
 
   /**
    * Forwards `sourceMessageIds` (already validated UUIDs) to `targetChatIds`
-   * for `user`. `clientBody` is the text of a single-message request, or null
-   * for a multi-select request.
+   * for `user`. Each message keeps its own stored text (see evaluateSources).
    *
    * Resolves to `{ ok: false, status, code, error }` when the request as a
    * whole cannot be served (a target refuses the caller), otherwise to
@@ -433,8 +413,8 @@ export function createMessageForwardService(deps, { computeTextExpiryIso } = {})
    *                 fileCount, forwardedFrom }]  in the order they were written
    *   failed:    [{ sourceMessageId, code, error, status, targetChatId? }]
    */
-  async function forward({ user, sourceMessageIds, targetChatIds, clientBody = null }) {
-    const { accepted, failed } = await evaluateSources({ user, sourceMessageIds, clientBody });
+  async function forward({ user, sourceMessageIds, targetChatIds }) {
+    const { accepted, failed } = await evaluateSources({ user, sourceMessageIds });
     // Failures are reported in the order the messages were asked for.
     const position = new Map(sourceMessageIds.map((id, index) => [String(id), index]));
     const inRequestOrder = (list) =>

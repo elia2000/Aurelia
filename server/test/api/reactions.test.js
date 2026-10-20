@@ -406,6 +406,105 @@ describe("POST /api/messages/react", () => {
       expect(last.counts).toEqual([]);
     });
 
+    describe("in a channel", () => {
+      // Subscribers of a public channel are strangers to each other and may not
+      // learn who reacted (GET /api/messages/reactions is owner-only), so the
+      // live event must not give it away either.
+      const channel = () => makeReactionApp({ chat: { type: "channel", name: "News" } });
+
+      test("the chat only gets the counts: no actor, no emoji that was added or removed", async () => {
+        const ctx = channel();
+        const bob = await ctx.login("bob");
+        await react(ctx, bob, { chatId: CHAT_ID, messageId: MSG_ID, emoji: THUMBS });
+        expect(ctx.events).toEqual([
+          {
+            chatId: CHAT_ID,
+            payload: {
+              type: "message_reactions",
+              chatId: CHAT_ID,
+              messageId: MSG_ID,
+              counts: [{ emoji: THUMBS, count: 1 }],
+            },
+          },
+        ]);
+        const wire = JSON.stringify(ctx.events);
+        expect(wire).not.toContain(BOB_ID);
+        expect(wire).not.toContain("actor");
+        expect(wire).not.toContain("removed");
+      });
+
+      test("removing or replacing a reaction does not reveal it to the chat either", async () => {
+        const ctx = channel();
+        const bob = await ctx.login("bob");
+        const target = { chatId: CHAT_ID, messageId: MSG_ID };
+        await react(ctx, bob, { ...target, emoji: THUMBS });
+        await react(ctx, bob, { ...target, emoji: HEART });
+        await react(ctx, bob, { ...target, emoji: null });
+        expect(ctx.events.length).toBe(3);
+        for (const { payload } of ctx.events) {
+          expect(Object.keys(payload).sort()).toEqual(["chatId", "counts", "messageId", "type"]);
+        }
+        expect(ctx.events.at(-1).payload.counts).toEqual([]);
+        expect(JSON.stringify(ctx.events)).not.toContain(BOB_ID);
+      });
+
+      test("the person who reacted still gets the full event on their own sessions", async () => {
+        const ctx = channel();
+        const bob = await ctx.login("bob");
+        await react(ctx, bob, { chatId: CHAT_ID, messageId: MSG_ID, emoji: THUMBS });
+        await react(ctx, bob, { chatId: CHAT_ID, messageId: MSG_ID, emoji: HEART });
+        expect(ctx.userEvents).toEqual([
+          {
+            username: "bob",
+            payload: {
+              type: "message_reactions",
+              chatId: CHAT_ID,
+              messageId: MSG_ID,
+              counts: [{ emoji: THUMBS, count: 1 }],
+              actorId: BOB_ID,
+              actorEmoji: THUMBS,
+              removedEmoji: null,
+              removedEmojis: [],
+            },
+          },
+          {
+            username: "bob",
+            payload: {
+              type: "message_reactions",
+              chatId: CHAT_ID,
+              messageId: MSG_ID,
+              counts: [{ emoji: HEART, count: 1 }],
+              actorId: BOB_ID,
+              actorEmoji: HEART,
+              removedEmoji: THUMBS,
+              removedEmojis: [THUMBS],
+            },
+          },
+        ]);
+      });
+
+      test("the owner is told no more than a subscriber", async () => {
+        const ctx = channel();
+        const alice = await ctx.login("alice");
+        await react(ctx, alice, { chatId: CHAT_ID, messageId: MSG_ID, emoji: FIRE });
+        expect(ctx.events.length).toBe(1);
+        expect(ctx.events[0].payload).not.toHaveProperty("actorId");
+        // Only the person who tapped hears about themselves.
+        expect(ctx.userEvents.map((entry) => entry.username)).toEqual(["alice"]);
+      });
+    });
+
+    test("in a group or a direct chat the one event still names the actor", async () => {
+      for (const type of ["group", "dm"]) {
+        const ctx = makeReactionApp({ chat: { type } });
+        const bob = await ctx.login("bob");
+        await react(ctx, bob, { chatId: CHAT_ID, messageId: MSG_ID, emoji: THUMBS });
+        expect(ctx.events.length).toBe(1);
+        expect(ctx.events[0].payload).toMatchObject({ actorId: BOB_ID, actorEmoji: THUMBS });
+        expect(ctx.userEvents).toEqual([]);
+      }
+    });
+
     test("nothing is broadcast when the request is rejected", async () => {
       const ctx = makeReactionApp();
       const cookie = await ctx.login("carol");

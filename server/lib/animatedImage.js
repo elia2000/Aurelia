@@ -278,6 +278,15 @@ export function detectAnimation(buffer) {
 // GIF whose first frame is huge needs more.
 export const ANIMATION_PREFIX_LADDER = [256 * 1024, 2 * 1024 * 1024, 16 * 1024 * 1024, ANIMATION_SCAN_MAX_BYTES];
 
+// What one request may make the server read from a bucket to answer that
+// question for all of its files together. Each step of the ladder reads the
+// start of the object again, and an object in a bucket is whatever its sender
+// made it (a presigned upload has no length limit, and a GIF can be made that
+// never settles), so without a cap one request could cost the whole ladder per
+// file. The 16 MB step still fits, so a GIF with a huge first frame is still
+// recognised; the 32 MB step does not.
+export const ANIMATION_REQUEST_SCAN_BUDGET_BYTES = 20 * 1024 * 1024;
+
 /**
  * Answers "is this animated?" for a file that is read from its start in
  * growing prefixes, e.g. from object storage.

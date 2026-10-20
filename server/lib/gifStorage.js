@@ -23,6 +23,7 @@
 import { isSafeStorageKey } from "./storageKeys.js";
 import {
   ANIMATION_PREFIX_LADDER,
+  ANIMATION_REQUEST_SCAN_BUDGET_BYTES,
   detectAnimationFromReader,
   isAnimationCandidate,
 } from "./animatedImage.js";
@@ -313,15 +314,39 @@ export function createGifStorage({
    * Is the object an animated image? Reads only the start of it (growing until
    * the answer is known) and only for files that could be one. Resolves to
    * true / false, or null when it cannot be told. Never throws.
+   *
+   * The object is the sender's own doing, so what a check may cost is bounded
+   * and nothing the client says steers it:
+   *   - `budget` is `{ remaining }` in bytes, shared by every check of one
+   *     request; a step that does not fit is not taken (the answer is null).
+   *     Without one, the check gets a budget of its own.
+   *   - how big the file is, as the client announced it, is not used: a short
+   *     read is what says the object has ended.
    */
-  async function detectStoredAnimation({ storageKey, storageDriver, size = null, mimeType = "", name = "" }) {
+  async function detectStoredAnimation({ storageKey, storageDriver, mimeType = "", name = "", budget = null }) {
     try {
       if (!isRemoteType(storageDriver) || !remoteProvider()) return null;
       if (!isAnimationCandidate({ mimeType, name })) return null;
       if (!isSafeStorageKey(storageKey)) return null;
+      const wallet =
+        budget && typeof budget === "object" && Number.isFinite(budget.remaining)
+          ? budget
+          : { remaining: ANIMATION_REQUEST_SCAN_BUDGET_BYTES };
       return await detectAnimationFromReader(
-        (limit) => fetchObject(storageKey, { maxBytes: limit, range: limit }),
-        { size, ladder: ANIMATION_PREFIX_LADDER },
+        async (limit) => {
+          if (limit > wallet.remaining) return null;
+          // Pay for the whole step first, then give back what was not read
+          // (an object shorter than the step costs only its own length).
+          wallet.remaining -= limit;
+          let buffer = null;
+          try {
+            buffer = await fetchObject(storageKey, { maxBytes: limit, range: limit });
+          } finally {
+            wallet.remaining += limit - (Buffer.isBuffer(buffer) ? Math.min(buffer.length, limit) : 0);
+          }
+          return buffer;
+        },
+        { ladder: ANIMATION_PREFIX_LADDER },
       );
     } catch {
       return null;

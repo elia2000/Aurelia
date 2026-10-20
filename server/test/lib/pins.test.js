@@ -2,6 +2,7 @@ import { describe, test, expect, vi } from "vitest";
 import {
   MAX_PINNED_DEFAULT,
   PIN_PREVIEW_MAX_CHARS,
+  PIN_PREVIEW_SOURCE_MAX_CHARS,
   buildPinEntry,
   buildPreviewText,
   canManagePins,
@@ -126,6 +127,73 @@ describe("stripMarkdown", () => {
     stripMarkdown("*".repeat(5000) + "_".repeat(5000) + "`".repeat(5000));
     stripMarkdown("[".repeat(3000) + "(".repeat(3000));
     expect(Date.now() - started).toBeLessThan(1500);
+  });
+});
+
+// A pin list is rebuilt on every read and a message can be thousands of
+// characters long, so the cost of a preview must not depend on how long or how
+// hostile the text is (the markdown patterns used to backtrack quadratically).
+describe("previews of very long or hostile messages", () => {
+  const hostile = {
+    "open brackets": (n) => "[".repeat(n),
+    "open image brackets": (n) => "![".repeat(n / 2),
+    "unfinished links": (n) => "[a](".repeat(n / 4),
+    "unclosed bold": (n) => "**a ".repeat(n / 4),
+    "unclosed strike-through": (n) => "~~a ".repeat(n / 4),
+    "unclosed spoilers": (n) => "||a ".repeat(n / 4),
+    "mixed markers": (n) => "*_`[(|~".repeat(n / 7),
+  };
+
+  test.each(Object.keys(hostile))("twenty pinned messages of %s cost next to nothing", (name) => {
+    const body = hostile[name](20000);
+    const started = performance.now();
+    for (let i = 0; i < 20; i += 1) buildPreviewText(body);
+    expect(performance.now() - started).toBeLessThan(250);
+  });
+
+  test("a whole pin list of hostile messages is built quickly", () => {
+    const rows = Array.from({ length: 20 }, (_, i) => ({
+      message_id: `d0d0d0d0-e1e1-4f2f-b040-1717171717${String(i).padStart(2, "0")}`,
+      sender_id: A,
+      sender_username: "alice",
+      body: "[".repeat(20000),
+      edited_body: i % 2 ? "[a](".repeat(5000) : null,
+      message_created_at: "2025-01-01 10:00:00",
+      file_count: 0,
+    }));
+    const started = performance.now();
+    const entries = rows.map((row) => buildPinEntry(row, { type: "group" }));
+    expect(performance.now() - started).toBeLessThan(250);
+    expect(entries).toHaveLength(20);
+    for (const entry of entries) {
+      expect(Array.from(entry.message.text).length).toBeLessThanOrEqual(PIN_PREVIEW_MAX_CHARS);
+    }
+  });
+
+  test("only the start of a message is read, and it is still the right start", () => {
+    const body = `**bold** and [a link](https://example.com) ${"word ".repeat(20000)}`;
+    const preview = buildPreviewText(body);
+    expect(preview.startsWith("bold and a link word word")).toBe(true);
+    expect(Array.from(preview)).toHaveLength(PIN_PREVIEW_MAX_CHARS);
+    expect(preview.endsWith("…")).toBe(true);
+  });
+
+  test("markdown that ends before the cut is still taken apart", () => {
+    const body = `${"x".repeat(100)} ~~gone~~ [site](https://example.com/${"p".repeat(300)}) end ${"y".repeat(5000)}`;
+    const text = stripMarkdown(body);
+    expect(text.startsWith(`${"x".repeat(100)} gone site end `)).toBe(true);
+  });
+
+  test("the cut never leaves half of an emoji behind", () => {
+    const body = `${"x".repeat(PIN_PREVIEW_SOURCE_MAX_CHARS - 1)}\u{1F600} and more`;
+    const text = stripMarkdown(body);
+    expect(text).toMatch(/x$/);
+    expect(text).not.toMatch(/[\ud800-\udbff]$/);
+  });
+
+  test("a message shorter than the cut is read whole", () => {
+    const body = `${"a ".repeat(PIN_PREVIEW_SOURCE_MAX_CHARS / 2 - 4)}**end**`;
+    expect(stripMarkdown(body).endsWith("a end")).toBe(true);
   });
 });
 

@@ -8,11 +8,18 @@ import { isValidUuid } from "./uuidUtils.js";
 
 export const SYSTEM_MESSAGE_PREFIX = "[[system:";
 
-const PIN_SERVICE_RE = /^\[\[system:pinned:([0-9a-f-]{36})\]\]$/i;
+// Exactly what buildPinServiceBody() writes. Only the id may vary in case.
+const PIN_SERVICE_RE = /^\[\[system:pinned:([0-9a-fA-F-]{36})\]\]$/;
+
+// The server writes the marker in lower case, but anything that merely looks
+// like it must be refused: SQLite's LIKE (the unread, last-message and
+// first-unread filters) ignores case, and a reader may not tell the difference
+// either.
+const SERVICE_LOOKALIKE_RE = /^\s*\[\[\s*system:/i;
 
 /** True for a message body that is a service message (or tries to look like one). */
 export function isServiceMessageBody(body) {
-  return String(body ?? "").trimStart().startsWith(SYSTEM_MESSAGE_PREFIX);
+  return SERVICE_LOOKALIKE_RE.test(String(body ?? ""));
 }
 
 /** The body of the "X pinned a message" entry for the pinned message `messageId`. */

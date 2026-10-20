@@ -471,6 +471,75 @@ describe("createGifStorage", () => {
       expect(Number(remote.requests[0].headers.Range.split("-")[1])).toBeLessThan(object.length);
     });
 
+    // What a hostile upload costs. The object sits in the bucket (the presigned
+    // PUT has no length limit) and is a GIF whose first frame never ends, so
+    // the check can never settle and would climb the whole ladder.
+    describe("what a check may cost", () => {
+      const MB = 1024 * 1024;
+      const neverSettles = (megabytes) => buildGif({ frames: 1, trailer: false, padTo: megabytes * MB });
+      const check = (storage, key, extra = {}) =>
+        storage.detectStoredAnimation({
+          storageKey: key,
+          storageDriver: "s3",
+          mimeType: "image/gif",
+          name: "x.gif",
+          ...extra,
+        });
+      // Bytes the bucket was asked for: the end of every Range, capped by the object.
+      const bytesServed = (remote) =>
+        remote.requests.reduce((sum, request) => {
+          const key = decodeURIComponent(new URL(request.url).pathname.slice(1));
+          const wanted = Number(/^bytes=0-(\d+)$/.exec(request.headers.Range || "")?.[1]) + 1;
+          return sum + Math.min(wanted, remote.objects.get(key).length);
+        }, 0);
+
+      test("an object that never settles is read up to a fixed number of bytes, not the whole ladder", async () => {
+        const remote = makeRemote();
+        const storage = make({ storageProvider: remote.provider, fetchImpl: remote.fetchImpl });
+        remote.objects.set("uploads/messages/hostile.gif", neverSettles(40));
+        expect(await check(storage, "uploads/messages/hostile.gif")).toBeNull();
+        // The ladder alone is 0.25 + 2 + 16 + 32 MB.
+        expect(bytesServed(remote)).toBeLessThanOrEqual(20 * MB);
+      });
+
+      test("one budget is shared by every check it is handed to", async () => {
+        const remote = makeRemote();
+        const storage = make({ storageProvider: remote.provider, fetchImpl: remote.fetchImpl });
+        const budget = { remaining: 1 * MB };
+        for (const n of [1, 2, 3, 4, 5]) remote.objects.set(`uploads/messages/h${n}.gif`, neverSettles(3));
+
+        const answers = [];
+        for (const n of [1, 2, 3, 4]) answers.push(await check(storage, `uploads/messages/h${n}.gif`, { budget }));
+        expect(answers).toEqual([null, null, null, null]);
+        expect(remote.requests).toHaveLength(4); // one 256 kB prefix each, then the 2 MB step no longer fits
+        const before = remote.requests.length;
+        expect(await check(storage, "uploads/messages/h5.gif", { budget })).toBeNull();
+        expect(remote.requests.length).toBe(before); // nothing is left to spend
+        expect(budget.remaining).toBeGreaterThanOrEqual(0);
+      });
+
+      test("small files cost what they weigh: the budget is not eaten by the size of a step", async () => {
+        const remote = makeRemote();
+        const storage = make({ storageProvider: remote.provider, fetchImpl: remote.fetchImpl });
+        const budget = { remaining: 1 * MB };
+        for (let n = 0; n < 30; n += 1) {
+          remote.objects.set(`uploads/messages/s${n}.gif`, buildGif({ frames: 3 }));
+          expect(await check(storage, `uploads/messages/s${n}.gif`, { budget })).toBe(true);
+        }
+        expect(budget.remaining).toBeGreaterThan(MB - 30 * 1024);
+      });
+
+      test("the size the client claims is not believed: a tiny claim does not end the check early", async () => {
+        const remote = makeRemote();
+        const storage = make({ storageProvider: remote.provider, fetchImpl: remote.fetchImpl });
+        // The first frame starts after 300 kB, so the first prefix cannot tell.
+        const object = buildGif({ frames: 2, padTo: 300_000 });
+        remote.objects.set("uploads/messages/late.gif", object);
+        expect(await check(storage, "uploads/messages/late.gif", { size: 100 })).toBe(true);
+        expect(await check(storage, "uploads/messages/late.gif", { size: 5_000_000_000 })).toBe(true);
+      });
+    });
+
     test("a still image is false, and something that is not an image is null", async () => {
       const remote = makeRemote();
       const storage = make({ storageProvider: remote.provider, fetchImpl: remote.fetchImpl });

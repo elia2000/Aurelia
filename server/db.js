@@ -3712,9 +3712,7 @@ function nextReactionTimestamp() {
 }
 
 function toggleMessageReactionSqlite({ messageId, userId, emoji, maxPerUser }) {
-  const savepoint = `sp_react_${crypto.randomBytes(4).toString("hex")}`;
-  runWithoutSave(`SAVEPOINT ${savepoint}`);
-  try {
+  return sqliteWriteTransaction("react", () => {
     const current = getAll(
       dbKnex("message_reactions")
         .select("emoji")
@@ -3741,17 +3739,8 @@ function toggleMessageReactionSqlite({ messageId, userId, emoji, maxPerUser }) {
         }),
       );
     }
-    runWithoutSave(`RELEASE ${savepoint}`);
     return { added: plan.add, removed: plan.remove };
-  } catch (error) {
-    try {
-      runWithoutSave(`ROLLBACK TO ${savepoint}`);
-      runWithoutSave(`RELEASE ${savepoint}`);
-    } catch {
-      // ignore rollback failures
-    }
-    throw error;
-  }
+  });
 }
 
 async function toggleMessageReactionPostgres({ messageId, userId, emoji, maxPerUser }) {
@@ -3866,48 +3855,29 @@ function nextPinTimestamp() {
 }
 
 function pinMessageSqlite({ chatId, messageId, userId, max }) {
-  const savepoint = `sp_pin_${crypto.randomBytes(4).toString("hex")}`;
-  runWithoutSave(`SAVEPOINT ${savepoint}`);
-  try {
+  return sqliteWriteTransaction("pin", () => {
     const existing = getRow(
       dbKnex("chat_pinned_messages")
         .select("pinned_at")
         .where({ chat_id: chatId, message_id: messageId })
         .first(),
     );
-    let result;
-    if (existing) {
-      result = { status: "already", pinnedAt: existing.pinned_at };
-    } else {
-      const counted = getRow(
-        dbKnex("chat_pinned_messages").count({ n: "*" }).where({ chat_id: chatId }).first(),
-      );
-      if (Number(counted?.n || 0) >= max) {
-        result = { status: "limit", pinnedAt: null };
-      } else {
-        const pinnedAt = nextPinTimestamp();
-        run(
-          dbKnex("chat_pinned_messages").insert({
-            chat_id: chatId,
-            message_id: messageId,
-            pinned_by: userId || null,
-            pinned_at: pinnedAt,
-          }),
-        );
-        result = { status: "pinned", pinnedAt };
-      }
-    }
-    runWithoutSave(`RELEASE ${savepoint}`);
-    return result;
-  } catch (error) {
-    try {
-      runWithoutSave(`ROLLBACK TO ${savepoint}`);
-      runWithoutSave(`RELEASE ${savepoint}`);
-    } catch {
-      // ignore rollback failures
-    }
-    throw error;
-  }
+    if (existing) return { status: "already", pinnedAt: existing.pinned_at };
+    const counted = getRow(
+      dbKnex("chat_pinned_messages").count({ n: "*" }).where({ chat_id: chatId }).first(),
+    );
+    if (Number(counted?.n || 0) >= max) return { status: "limit", pinnedAt: null };
+    const pinnedAt = nextPinTimestamp();
+    run(
+      dbKnex("chat_pinned_messages").insert({
+        chat_id: chatId,
+        message_id: messageId,
+        pinned_by: userId || null,
+        pinned_at: pinnedAt,
+      }),
+    );
+    return { status: "pinned", pinnedAt };
+  });
 }
 
 async function pinMessagePostgres({ chatId, messageId, userId, max }) {
@@ -4034,23 +4004,51 @@ export function listPinnedMessageIds(chatId, messageIds = []) {
 // effectiveChatPins); the paths that end a membership or hide a chat delete the
 // row too, and a pin that slipped through anyway is swept on the next pin.
 
-const sqliteSavepoint = (label, fn) => {
+/**
+ * Runs `fn` (synchronous) as one atomic write on SQLite, undoing everything it
+ * did if it throws.
+ *
+ * For operations that READ first and WRITE second (check the limit, then
+ * insert). A plain SAVEPOINT outside a transaction starts a deferred one: it
+ * only holds a read snapshot after its first SELECT, and turning that into a
+ * write fails at once with SQLITE_BUSY_SNAPSHOT if another connection (a
+ * second process, a CLI script) committed in between. The busy timeout does
+ * not apply to that error. So when no transaction is open, the write lock is
+ * taken first with BEGIN IMMEDIATE (which does wait for the busy timeout), and
+ * the savepoint nests inside it. Inside a transaction somebody else opened,
+ * only the savepoint is added. (sql.js, the fallback, is one in-memory
+ * connection: a savepoint is all it needs.)
+ */
+function sqliteWriteTransaction(label, fn) {
   const savepoint = `sp_${label}_${crypto.randomBytes(4).toString("hex")}`;
-  runWithoutSave(`SAVEPOINT ${savepoint}`);
-  try {
-    const result = fn();
-    runWithoutSave(`RELEASE ${savepoint}`);
-    return result;
-  } catch (error) {
+  const ownsTransaction = Boolean(betterDb) && !betterDb.inTransaction;
+  if (ownsTransaction) runWithoutSave("BEGIN IMMEDIATE");
+  const undo = () => {
     try {
       runWithoutSave(`ROLLBACK TO ${savepoint}`);
       runWithoutSave(`RELEASE ${savepoint}`);
     } catch {
-      // ignore rollback failures
+      // the savepoint is already gone (a failed COMMIT, say)
     }
+    if (ownsTransaction && betterDb.inTransaction) {
+      try {
+        runWithoutSave("ROLLBACK");
+      } catch {
+        // ignore rollback failures
+      }
+    }
+  };
+  try {
+    runWithoutSave(`SAVEPOINT ${savepoint}`);
+    const result = fn();
+    runWithoutSave(`RELEASE ${savepoint}`);
+    if (ownsTransaction) runWithoutSave("COMMIT");
+    return result;
+  } catch (error) {
+    undo();
     throw error;
   }
-};
+}
 
 /** The person's pins that still count: still a member, chat not hidden. */
 function effectiveChatPins(root, userId) {
@@ -4130,7 +4128,7 @@ function deleteChatPinRows(userId, chatIds) {
 
 function pinChatSqlite({ userId, chatId, max }) {
   let wrote = false;
-  const result = sqliteSavepoint("chat_pin", () => {
+  const result = sqliteWriteTransaction("chat_pin", () => {
     if (!getRow(dbKnex("chat_members").select("chat_id").where({ chat_id: chatId, user_id: userId }).first())) {
       return { status: "not_member", position: null };
     }
@@ -4295,7 +4293,7 @@ export function listChatPinHolders(chatId) {
 }
 
 function removeChatPinsSqlite({ userId, chatIds }) {
-  const removed = sqliteSavepoint("chat_unpin", () => {
+  const removed = sqliteWriteTransaction("chat_unpin", () => {
     let present = 0;
     for (const chunk of chunkPinChatIds(chatIds)) {
       present += getAll(
@@ -4348,7 +4346,7 @@ export function removeChatPins(userId, chatIds = []) {
 }
 
 function reorderChatPinsSqlite({ userId, chatIds }) {
-  const result = sqliteSavepoint("chat_pin_order", () => {
+  const result = sqliteWriteTransaction("chat_pin_order", () => {
     const rows = getAll(orderedPinRows(effectiveChatPins(dbKnex, userId)));
     const plan = planPinReorder(rows, chatIds);
     if (!plan.ok) return { status: "mismatch", changed: false };
@@ -5450,7 +5448,7 @@ function buildSavedGifRow(args) {
 }
 
 function insertSavedGifSqlite(args, limit) {
-  return sqliteSavepoint("saved_gif", () => {
+  return sqliteWriteTransaction("saved_gif", () => {
     const duplicate = getRow(
       dbKnex("user_gifs")
         .select(SAVED_GIF_COLUMNS)

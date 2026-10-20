@@ -17,7 +17,19 @@ describe("isServiceMessageBody", () => {
     [`[[system:pinned:${MSG}]]`, true],
     ["  [[system:joined:Bob]]", true],
     ["\n[[system:joined:Bob]]", true],
+    // Upper and mixed case, and spaces inside the brackets, are the same thing
+    // to every reader of a message, so they are refused too.
+    ["[[SYSTEM:joined:Bob]]", true],
+    ["[[System:pinned:" + MSG + "]]", true],
+    ["[[sYsTeM:left:Bob]]", true],
+    ["  [[SYSTEM:removed:Bob]]", true],
+    ["\u00a0[[SYSTEM:joined:Bob]]", true],
+    ["\ufeff[[system:joined:Bob]]", true],
+    ["[[ system:joined:Bob]]", true],
     ["hello", false],
+    ["[system:joined:Bob]", false],
+    ["[[systems are fine]]", false],
+    ["say [[SYSTEM:joined:Bob]]", false],
     ["say [[system:joined:Bob]]", false],
     ["", false],
     [null, false],
@@ -56,6 +68,9 @@ describe("pin service message", () => {
   });
 
   test.each([
+    ["the marker in upper case", `[[SYSTEM:pinned:${MSG}]]`],
+    ["the marker in mixed case", `[[System:pinned:${MSG}]]`],
+    ["the action in upper case", `[[system:PINNED:${MSG}]]`],
     ["ordinary text", "hello"],
     ["another service entry", "[[system:joined:Bob]]"],
     ["a pin entry without an id", "[[system:pinned:]]"],

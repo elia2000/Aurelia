@@ -275,9 +275,9 @@ describe("POST /api/messages/upload: files uploaded straight to the bucket", () 
     expect(detectStoredAnimation).toHaveBeenCalledWith({
       storageKey: "uploads/messages/party.gif",
       storageDriver: "s3",
-      size: 2048,
       mimeType: "image/gif",
       name: "party.gif",
+      budget: expect.objectContaining({ remaining: expect.any(Number) }),
     });
     expect(createMessageFiles.mock.calls[0][1][0].isAnimated).toBe(true);
     expect(res.body.files[0]).toMatchObject({ isAnimated: true, gif: true });
@@ -322,6 +322,47 @@ describe("POST /api/messages/upload: files uploaded straight to the bucket", () 
     });
     expect(res.body.files[0].isAnimated).toBe(false);
     expect(createMessageFiles.mock.calls[0][1][0].isAnimated).toBe(false);
+  });
+
+  // The check reads from the bucket, and what is in the bucket is the sender's
+  // own doing: one request must not be able to make the server read it again
+  // and again.
+  test("the same bucket object listed several times is inspected once", async () => {
+    const entry = { storageKey: "uploads/messages/party.gif", originalName: "party.gif", mimeType: "image/gif", sizeBytes: 2048 };
+    const res = await request(ctx.app)
+      .post("/api/messages/upload")
+      .set("Cookie", cookie)
+      .send({ chatId: CHAT_ID, username: "alice", storageKeys: [entry, entry, entry] });
+    expect(res.status).toBe(200);
+    expect(detectStoredAnimation).toHaveBeenCalledTimes(1);
+    expect(createMessageFiles.mock.calls[0][1].map((file) => file.isAnimated)).toEqual([true, true, true]);
+  });
+
+  test("every file of a request spends from the same scan budget", async () => {
+    const entry = (n) => ({ storageKey: `uploads/messages/p${n}.gif`, originalName: `p${n}.gif`, mimeType: "image/gif", sizeBytes: 2048 });
+    const res = await request(ctx.app)
+      .post("/api/messages/upload")
+      .set("Cookie", cookie)
+      .send({ chatId: CHAT_ID, username: "alice", storageKeys: [entry(1), entry(2), entry(3)] });
+    expect(res.status).toBe(200);
+    expect(detectStoredAnimation).toHaveBeenCalledTimes(3);
+    const budgets = detectStoredAnimation.mock.calls.map(([args]) => args.budget);
+    expect(budgets[0]).toBe(budgets[1]);
+    expect(budgets[1]).toBe(budgets[2]);
+    expect(budgets[0].remaining).toBeGreaterThan(0);
+    expect(budgets[0].remaining).toBeLessThanOrEqual(32 * 1024 * 1024);
+  });
+
+  test("a new request starts with a full budget", async () => {
+    detectStoredAnimation.mockImplementation(async ({ budget }) => {
+      budget.remaining = 0; // the first request spends it all
+      return null;
+    });
+    for (const n of [1, 2]) {
+      await send({ storageKey: `uploads/messages/q${n}.gif`, originalName: `q${n}.gif`, mimeType: "image/gif", sizeBytes: 100 });
+    }
+    const [first, second] = detectStoredAnimation.mock.calls.map(([args]) => args.budget);
+    expect(first).not.toBe(second);
   });
 
   test("videos, photos and documents are not looked at", async () => {

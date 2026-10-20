@@ -37,7 +37,7 @@ describe("forward service", () => {
 
   test("one message uses the plain lookup, several use the bulk one", async () => {
     const { ctx, service } = make();
-    await service.forward({ user: alice, sourceMessageIds: [M1], targetChatIds: [TARGET_GROUP], clientBody: "first" });
+    await service.forward({ user: alice, sourceMessageIds: [M1], targetChatIds: [TARGET_GROUP] });
     expect(ctx.calls.findMessageById).toBe(1);
     expect(ctx.calls.findMessagesByIds).toEqual([]);
 
@@ -85,7 +85,6 @@ describe("forward service", () => {
       user: bob,
       sourceMessageIds: [M1],
       targetChatIds: [DM, "00000000-0000-4000-8000-0000000010ff"],
-      clientBody: "x",
     });
     expect(outcome).toMatchObject({ ok: false, status: 403, code: "forbidden_target" });
     expect(ctx.created).toHaveLength(0);

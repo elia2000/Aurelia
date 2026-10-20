@@ -16,6 +16,7 @@ import { emitUnpinnedMessages } from "../lib/pins.js";
 import { isCallMessage, serializeCall } from "../lib/callMessages.js";
 import { createThrottle } from "../lib/throttle.js";
 import {
+  ANIMATION_REQUEST_SCAN_BUDGET_BYTES,
   animationFlags,
   detectAnimatedFile,
   isAnimationCandidate,
@@ -950,7 +951,11 @@ function registerMessageRoutes(app, deps) {
               error: "Only the message author can edit this message.",
             });
           }
-          if (isCallMessage(editTarget)) {
+          // Call history and "X pinned a message" entries are server records:
+          // like POST /api/messages/edit, this route may not change them (an
+          // empty caption would leave the service body in place and only add
+          // files and clear the expiry).
+          if (isCallMessage(editTarget) || isServiceMessageBody(editTarget.body)) {
             removeUploadedFiles(uploadedFiles);
             return res.status(400).json({ error: "This message cannot be edited." });
           }
@@ -1242,6 +1247,12 @@ function registerMessageRoutes(app, deps) {
         // be read for the check is simply not marked, and the message goes out.
         // The file itself is never re-encoded, so the animation stays intact.
         // One file at a time, so the memory used is that of one prefix.
+        //
+        // Objects in a bucket are whatever their sender put there, so what the
+        // check may read from it is limited per request: the same object named
+        // twice is looked at once, and all of them together spend one budget.
+        const bucketAnimationByKey = new Map();
+        const bucketScanBudget = { remaining: ANIMATION_REQUEST_SCAN_BUDGET_BYTES };
         for (let index = 0; index < normalizedFiles.length; index += 1) {
           const file = normalizedFiles[index];
           file.isAnimated = false;
@@ -1252,13 +1263,19 @@ function registerMessageRoutes(app, deps) {
               animated = await detectAnimatedFile({ fs, filePath: uploadedFiles[index].path });
             } else if (typeof deps.savedGifStorage?.detectStoredAnimation === "function") {
               // Uploaded straight to the bucket: only the start of it is read.
-              animated = await deps.savedGifStorage.detectStoredAnimation({
-                storageKey: file.storageKey,
-                storageDriver: file.storageDriver,
-                size: file.sizeBytes,
-                mimeType: file.mimeType,
-                name: file.originalName,
-              });
+              const objectKey = `${file.storageDriver}:${file.storageKey}`;
+              if (bucketAnimationByKey.has(objectKey)) {
+                animated = bucketAnimationByKey.get(objectKey);
+              } else {
+                animated = await deps.savedGifStorage.detectStoredAnimation({
+                  storageKey: file.storageKey,
+                  storageDriver: file.storageDriver,
+                  mimeType: file.mimeType,
+                  name: file.originalName,
+                  budget: bucketScanBudget,
+                });
+                bucketAnimationByKey.set(objectKey, animated);
+              }
             }
             file.isAnimated = animated === true;
           } catch {
@@ -2126,8 +2143,9 @@ function registerMessageRoutes(app, deps) {
       sourceMessageId,
       sourceMessageIds,
       targetChatIds = [],
-      body,
     } = req.body || {};
+    // A `body` in the request is ignored: a forward always carries the text
+    // of the message it names (see messageForwardService).
     const isBatch = hasValue(sourceMessageIds);
     if (!username || !Array.isArray(targetChatIds) || !targetChatIds.length) {
       return res.status(400).json({
@@ -2185,9 +2203,6 @@ function registerMessageRoutes(app, deps) {
         user,
         sourceMessageIds: sourceIds,
         targetChatIds: uniqueTargetChatIds,
-        // A multi-select request forwards each message with its own text; the
-        // single request brings the text along (as it always has).
-        clientBody: isBatch ? null : String(body || ""),
       });
       if (!outcome.ok) {
         return res.status(outcome.status).json({ error: outcome.error });

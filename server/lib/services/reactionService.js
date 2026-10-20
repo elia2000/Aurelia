@@ -37,6 +37,7 @@ export function createReactionService(deps) {
   const {
     getSetting,
     emitChatEvent,
+    emitSseEvent,
     ensureAvatarExists,
     findChatById,
     findMessageById,
@@ -144,6 +145,33 @@ export function createReactionService(deps) {
   }
 
   /**
+   * Tells the chat that the reactions of a message changed. The event names the
+   * person who reacted and what they added or removed, so clients can follow
+   * their own taps. In a channel that must not reach the other subscribers:
+   * they are strangers to each other, and who reacted is owner-only
+   * (GET /api/messages/reactions). The chat there gets the counts alone, and
+   * the actor's own sessions get the full event.
+   */
+  function broadcastReactionChange({ user, chat, chatId, messageId, counts, added, removed }) {
+    const actor = {
+      actorId: user.id,
+      actorEmoji: added,
+      removedEmoji: removed[0] ?? null,
+      removedEmojis: removed,
+    };
+    const base = { type: "message_reactions", chatId, messageId, counts };
+
+    if (String(chat?.type || "").toLowerCase() !== "channel") {
+      if (typeof emitChatEvent === "function") emitChatEvent(chatId, { ...base, ...actor });
+      return;
+    }
+    if (typeof emitChatEvent === "function") emitChatEvent(chatId, base);
+    if (typeof emitSseEvent === "function" && user.username) {
+      emitSseEvent(user.username, { ...base, ...actor });
+    }
+  }
+
+  /**
    * Applies a react request. `emoji` is already validated and canonical, or
    * null to remove the caller's reactions.
    */
@@ -173,16 +201,15 @@ export function createReactionService(deps) {
 
     const reactions = await summaryFor(messageId, user.id);
 
-    if ((added || removed.length) && typeof emitChatEvent === "function") {
-      emitChatEvent(chatId, {
-        type: "message_reactions",
+    if (added || removed.length) {
+      broadcastReactionChange({
+        user,
+        chat: target.chat,
         chatId,
         messageId,
         counts: toReactionCounts(reactions),
-        actorId: user.id,
-        actorEmoji: added,
-        removedEmoji: removed[0] ?? null,
-        removedEmojis: removed,
+        added,
+        removed,
       });
     }
 
