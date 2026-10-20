@@ -49,6 +49,14 @@ curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelia/main/scripts/insta
 
 این دستور یک منو باز می‌کند و فرمان `songbird-deploy` را نصب می‌کند؛ برای به‌روزرسانی بعداً `songbird-deploy` را اجرا و گزینه‌ی *Update Aurelle* را انتخاب کنید. برای اینکه اسکریپت چه می‌کند و چه گزینه‌هایی دارد، [اسکریپت نصب](docs/fa/Deployment-Script.md) را ببینید.
 
+بدون ترمینال (cloud-init، CI، `ssh host '...'`) یا وقتی نمی‌خواهید چیزی پرسیده شود، آن را بدون پرسش اجرا کنید. بدون دامنه سرویس روی IP سرور با HTTP بالا می‌آید؛ با دامنه گواهی Let's Encrypt می‌گیرد. برای تماس صوتی و تصویری به‌طور پیش‌فرض رله (coturn) نصب می‌شود؛ پورت‌های `80`، `443`، `3478` (TCP و UDP) و `49160-49260` (UDP) را در فایروال ارائه‌دهنده باز کنید. برای به‌روزرسانی همان دستور را دوباره اجرا کنید.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelia/main/scripts/install.sh | sudo env AURELLE_YES=1 AURELLE_DOMAIN=chat.example.com AURELLE_EMAIL=you@example.com bash
+```
+
+همه‌ی گزینه‌ها (متغیرهای `AURELLE_*`، `--yes`، رله‌ی تماس، پورت‌های فایروال، به‌روزرسانی): [اسکریپت نصب](docs/fa/Deployment-Script.md).
+
 یا خودتان با Docker بسازید:
 
 ```bash

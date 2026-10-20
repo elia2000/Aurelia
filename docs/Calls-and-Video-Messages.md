@@ -130,6 +130,12 @@ Most home and office networks allow two devices to connect directly. Mobile carr
 
 Aurelle supports the standard [coturn](https://github.com/coturn/coturn) server with short-lived per-user credentials. No third-party STUN server is used by default, so peer IP addresses are never sent to an outside party.
 
+:::tip Installed with the deployment script?
+
+The [deployment script](./Deployment-Script.md#calls-relay) installs and configures coturn for you (a fresh unattended install does it by default; menu option 10 does it later). You can skip Options A and B and only open the ports in your provider's firewall.
+
+:::
+
 ### Option A: the bundled coturn (Docker Compose)
 
 1. Generate a secret and add the settings to your `.env`:
