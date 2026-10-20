@@ -75,9 +75,16 @@ if [ "${#TARGETS[@]}" -eq 0 ]; then
 fi
 
 # Same scheme as the app: username is an expiry time, password is
-# base64(HMAC-SHA1(secret, username)).
-USERNAME=$(( $(date +%s) + 3600 ))
-PASSWORD="$(printf '%s' "$USERNAME" | openssl dgst -sha1 -hmac "$SECRET" -binary | base64)"
+# base64(HMAC-SHA1(secret, username)). Every test gets a username of its own:
+# coturn counts allocations per user (user-quota=6 in the bundled configuration)
+# and one test opens several, so a second test under the same name would be
+# refused and look like a broken relay.
+CREDENTIALS_ISSUED=0
+new_credentials() {
+  CREDENTIALS_ISSUED=$((CREDENTIALS_ISSUED + 1))
+  USERNAME=$(( $(date +%s) + 3600 + CREDENTIALS_ISSUED ))
+  PASSWORD="$(printf '%s' "$USERNAME" | openssl dgst -sha1 -hmac "$SECRET" -binary | base64)"
+}
 
 FAILED=0
 
@@ -101,6 +108,7 @@ for target in "${TARGETS[@]}"; do
   fi
 
   for transport in udp tcp; do
+    new_credentials
     args=(-u "$USERNAME" -w "$PASSWORD" -p "$port" -n 5 -m 1 -y)
     [ "$transport" = "tcp" ] && args=(-t "${args[@]}")
     output="$(timeout 30 turnutils_uclient "${args[@]}" "$host" 2>&1)"
