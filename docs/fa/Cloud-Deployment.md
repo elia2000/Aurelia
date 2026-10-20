@@ -214,7 +214,7 @@ railway domain --service songbird-server
 
 ```bash
 git clone https://github.com/elia2000/Aurelia.git
-cd Aurelle
+cd Aurelia
 docker build -t ghcr.io/<your-account>/aurelle:latest .
 docker build -t ghcr.io/<your-account>/aurelle-worker:latest worker/
 docker push ghcr.io/<your-account>/aurelle:latest

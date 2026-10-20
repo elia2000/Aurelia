@@ -112,7 +112,7 @@
 
 ```bash
 git clone https://github.com/elia2000/Aurelia.git
-cd Aurelle
+cd Aurelia
 docker build -t aurelle-worker:latest worker/
 ```
 

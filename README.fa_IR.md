@@ -41,23 +41,25 @@ Aurelle یک فورک از [Songbird](https://github.com/bllackbull/Songbird) (�
 
 ## نصب سریع
 
-Aurelle از روی سورس ساخته می‌شود. با Docker:
+**فقط با یک دستور** روی سرور Ubuntu/Debian (با کاربر root یا کاربری که `sudo` دارد). همه‌چیز را نصب می‌کند، Aurelle را از شاخه‌ی `main` همین مخزن می‌سازد و سرویس‌ها را راه می‌اندازد:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelia/main/scripts/install.sh | bash
+```
+
+این دستور یک منو باز می‌کند و فرمان `songbird-deploy` را نصب می‌کند؛ برای به‌روزرسانی بعداً `songbird-deploy` را اجرا و گزینه‌ی *Update Aurelle* را انتخاب کنید. برای اینکه اسکریپت چه می‌کند و چه گزینه‌هایی دارد، [اسکریپت نصب](docs/fa/Deployment-Script.md) را ببینید.
+
+یا خودتان با Docker بسازید:
 
 ```bash
 git clone https://github.com/elia2000/Aurelia.git
-cd Aurelle
+cd Aurelia
 cp .env.example .env
 bash scripts/gen-certs.sh    # گواهی TLS خودامضا برای آزمایش -> certs/cert.pem و certs/key.pem
 docker compose up -d --build
 ```
 
 nginx همراه پروژه پیش از اجرا به فایل‌های `certs/cert.pem` و `certs/key.pem` نیاز دارد (اگر وجود نداشته باشند، Docker به‌جای آن‌ها پوشه‌های خالی با همین نام می‌سازد و nginx مدام از کار می‌افتد و دوباره راه‌اندازی می‌شود). دستور `scripts/gen-certs.sh` یک جفت گواهی و کلید خودامضا برای آزمایش می‌سازد؛ برای اینکه دامنه یا IP شما را هم پوشش دهد، آن را به‌عنوان آرگومان بدهید (`bash scripts/gen-certs.sh example.com`). مرورگرها هشدار امنیتی نشان می‌دهند و push notification با این گواهی کار نمی‌کند؛ پس برای استفاده‌ی واقعی یک گواهی معتبر نصب کنید؛ راهنمای [گواهی‌نامه‌های SSL](docs/fa/SSL-Certificates.md) را ببینید.
-
-یا روی یک سرور Ubuntu (نسخه 22.04+) با دسترسی `sudo` از اسکریپت نصب استفاده کنید:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelia/main/scripts/install.sh | bash
-```
 
 > [!TIP]
 > داشتن یک دامنه که به IP عمومی سرور شما اشاره کند پیشنهاد می‌شود. برای تماس، پیام ویدیویی و push notification **به HTTPS نیاز دارید** (به‌جز روی `localhost`).

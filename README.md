@@ -41,23 +41,25 @@ The server can still see metadata (who talks to whom, when, sizes). Read the [th
 
 ## Quick Start
 
-Aurelle is built from source. With Docker:
+**One command** on an Ubuntu/Debian server (as root, or a user with `sudo`). It installs everything, builds Aurelle from this repository's `main` branch and sets up the services:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelia/main/scripts/install.sh | bash
+```
+
+It opens a menu and installs a `songbird-deploy` command; to update later, run `songbird-deploy` and choose *Update Aurelle*. See [Deployment Script](docs/Deployment-Script.md) for what it does and its options.
+
+Or build it yourself with Docker:
 
 ```bash
 git clone https://github.com/elia2000/Aurelia.git
-cd Aurelle
+cd Aurelia
 cp .env.example .env
 bash scripts/gen-certs.sh    # self-signed TLS certificate for testing -> certs/cert.pem, certs/key.pem
 docker compose up -d --build
 ```
 
 The bundled nginx needs `certs/cert.pem` and `certs/key.pem` before it can start (if they are missing, Docker creates empty directories with those names and nginx keeps restarting). `scripts/gen-certs.sh` creates a self-signed pair for testing; pass your domain or IP to cover it (`bash scripts/gen-certs.sh example.com`). Browsers will show a security warning and push notifications will not work with it, so for real use install a proper certificate: see [SSL Certificates](docs/SSL-Certificates.md).
-
-Or on an Ubuntu server (22.04+) with `sudo`, use the deployment script:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelia/main/scripts/install.sh | bash
-```
 
 > [!TIP]
 > A domain name pointing to your server's public IP is recommended. **HTTPS is required** for calls, video messages and push notifications (except on `localhost`).
