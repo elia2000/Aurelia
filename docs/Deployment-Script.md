@@ -22,6 +22,88 @@ This downloads the script, opens the menu, and installs a global `songbird-deplo
 songbird-deploy
 ```
 
+## Unattended install
+
+The one-liner above opens the menu, which needs a terminal. For provisioning scripts, cloud-init, CI, or `ssh host 'curl ... | bash'` (no `-t`) there is a mode that asks nothing: every answer comes from a flag, an `AURELLE_*` variable, or a default.
+
+```bash
+# On the server IP, over HTTP
+curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelia/main/scripts/install.sh | sudo env AURELLE_YES=1 bash
+
+# On a domain, with a Let's Encrypt certificate
+curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelia/main/scripts/install.sh | sudo env AURELLE_YES=1 AURELLE_DOMAIN=chat.example.com AURELLE_EMAIL=you@example.com bash
+
+# The same with flags instead of variables
+curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelia/main/scripts/install.sh | sudo bash -s -- --yes --domain chat.example.com --email you@example.com
+```
+
+`sudo env` is what hands the variables to the script (`sudo` drops them otherwise). As root, leave `sudo` out. Without `AURELLE_YES` and without a terminal the script stops at once (exit code 2) and prints this command instead of waiting for answers nobody can give.
+
+| Variable | Flag | Default | Meaning |
+|---|---|---|---|
+| `AURELLE_YES` | `-y`, `--yes` | `0` | Turn unattended mode on. |
+| `AURELLE_DOMAIN` | `--domain` | empty | Comma-separated domain names. Empty serves on the server's public IP. |
+| `AURELLE_EMAIL` | `--email` | empty | Contact for Let's Encrypt and push notifications. Without it certbot registers without an email (no expiry notices). |
+| `AURELLE_TLS` | `--tls` | `auto` | `auto` (HTTPS for a domain, HTTP for a bare IP), `certbot`, `selfsigned`, `files`, `http`. |
+| `AURELLE_TLS_CERT`, `AURELLE_TLS_KEY` | `--tls-cert`, `--tls-key` | empty | `fullchain.pem` and `privkey.pem` for `AURELLE_TLS=files`. |
+| `AURELLE_PUBLIC_IP` | `--ip` | detected | The server's public IPv4, when it cannot be detected (NAT, no outbound access). |
+| `AURELLE_SERVER_PORT`, `AURELLE_WORKER_PORT` | `--server-port`, `--worker-port` | `5174`, `8080` | Ports of the app and of the media worker. |
+| `AURELLE_CLIENT_PORT` | `--client-port` | `80` (`443` with TLS) | Port nginx listens on. |
+| `AURELLE_CALLS_RELAY` | `--calls-relay`, `--no-calls-relay` | `1` on a new install | `1`, `0` or `force`. See [Calls relay](#calls-relay). |
+| `AURELLE_DB` | none | `sqlite3` | `sqlite3` or `postgres` (with `AURELLE_POSTGRES_URL`, or a local PostgreSQL). |
+| `AURELLE_OWNER_USERNAME`, `AURELLE_OWNER_PASSWORD`, `AURELLE_OWNER_NICKNAME` | none | empty | Create the first owner account. Without them the summary says how to create it. |
+| `AURELLE_ACTION` | `--action` | `auto` | `auto` installs, or updates when Aurelle is already installed; `install` or `update` forces one. |
+| `REPO_BRANCH` | `--branch` | the repository's default branch | Branch or tag to install and follow on updates. |
+| `REPO_URL` | `--repo` | the official repository | Git address to install from. |
+| `AURELLE_BACKUP` | none | `0` | `1` backs up the database before an update. |
+| `AURELLE_RESTORE_BACKUP` | none | empty | Database backup file to restore on a new install. |
+| `AURELLE_APT_LOCK_WAIT`, `AURELLE_HEALTH_TIMEOUT`, `AURELLE_MIN_FREE_DISK_MB` | none | `300`, `90`, `2048` | Seconds to wait for another apt, seconds to wait for the app to answer, free disk needed in MB (`0` skips the check). |
+
+Run `bash install.sh --help` for the complete list, including the `MIRROR_*` variables for restricted networks.
+
+What it does for you:
+
+- Waits for another package manager (a new cloud server runs `apt` by itself for several minutes after its first boot), retries a dropped download, and checks free disk space and memory before changing anything.
+- Installs dependencies with `npm ci` (exactly what the lock files say), requires Node.js 24.18 or newer, and keeps the previous client build until the new one exists.
+- Stops with a clear message when a step fails (exit code 1). Every step can be repeated: fix the cause and run the same command again.
+- Never clears the screen and never prints secrets to the log (`/opt/songbird/logs/install.log` hides tokens, keys and passwords). The summary with the address to visit stays at the end of the output.
+- Keeps the site working when the certificate cannot be issued: Aurelle runs over HTTP and the script exits with code 3. The domain must point at the server and port 80 must be open; fix that and run the same command again.
+
+**Exit codes:** `0` done, `1` a step failed, `2` wrong usage or no terminal to ask on, `3` installed, but the TLS certificate could not be issued.
+
+:::tip First admin account
+
+Registering in the browser and claiming the owner role at `/admin` needs HTTPS. On a plain HTTP install, set `AURELLE_OWNER_USERNAME` and `AURELLE_OWNER_PASSWORD`, or create the owner from the menu (**Manage Database**, **Create user**, role `owner`).
+
+:::
+
+## Calls relay (coturn) {#calls-relay}
+
+Calls between people on different networks (mobile data, strict firewalls) need a relay. A fresh unattended install sets one up by default; the interactive install asks (default yes), and menu option 10 sets it up on an installed server. The step:
+
+1. Installs `coturn` from apt and writes `/etc/turnserver.conf` (mode `640`, group `turnserver`). The file starts with `# Managed by the Aurelle installer` and follows [Calls & Video Messages](./Calls-and-Video-Messages.md): short-lived credentials from one shared secret, private networks and the server itself denied as relay targets, per-user quotas.
+2. Writes the matching `CALLS_TURN_URLS` and `CALLS_TURN_SECRET` to the app's `.env` (the same secret on both sides) and restarts Aurelle.
+3. Opens the relay ports in `ufw` or `firewalld` when one is active. It never switches a firewall on.
+4. Tests the relay from the server with `scripts/check-relay.sh`. A failed test is a warning, not a failed install: the rest of Aurelle works and the output says what to check.
+
+The relay address is the domain when it points straight at the server, and the server IP otherwise (behind Cloudflare's orange cloud a name resolves to Cloudflare, which never carries TURN). With a domain and a certificate, the relay also listens with TLS on `5349` (`turns:`); the certificate is copied to `/etc/coturn/certs` and a certbot deploy hook refreshes it after each renewal.
+
+`AURELLE_CALLS_RELAY` values: `1` set it up, `0` skip it, `force` replace a coturn configuration that this installer did not write (the old file is kept as `/etc/turnserver.conf.bak.<timestamp>`). Without `force`, a coturn that somebody else configured, or a `CALLS_TURN_URLS` already set in `.env`, is left alone. When the variable is not set, an update does not install a relay behind its owner's back; to add one later: `sudo env AURELLE_CALLS_RELAY=1 songbird-deploy --yes`. Ports can be changed with `AURELLE_RELAY_PORT` (default `3478`), `AURELLE_RELAY_MIN_PORT` and `AURELLE_RELAY_MAX_PORT` (default `49160`-`49260`).
+
+## Firewall ports
+
+The script opens ports only in an active `ufw` or `firewalld`. A cloud provider's own firewall (security group) is outside its reach: open these there yourself.
+
+| Port | Protocol | Used for |
+|---|---|---|
+| `80` | TCP | The site over HTTP, the HTTPS redirect and certificate checks. |
+| `443` | TCP | The site over HTTPS (domain, or `AURELLE_TLS` other than `http`). |
+| `3478` | TCP and UDP | Calls relay (STUN and TURN). |
+| `49160`-`49260` | UDP | Calls relay media. |
+| `5349` | TCP and UDP | Calls relay over TLS (`turns:`), only when the relay has a certificate. |
+
+The app (`5174`) and the media worker (`8080`) listen for nginx and each other and do not need to be reachable from outside.
+
 ## Main menu
 
 | Option | Action | Description |
@@ -35,6 +117,7 @@ songbird-deploy
 | 7 | 🔄 Update menu | Check GitHub for newer script versions and update the global command (or reinstall current). |
 | 8 | 🌐 Configure mirrors | Set NodeSource, apt, and npm registry mirrors for restricted networks. |
 | 9 | 📋 View Logs | Open the logs submenu (script, service, Nginx access/error). |
+| 10 | 📞 Calls relay (coturn) | Install or refresh the voice and video calls relay (see [Calls relay](#calls-relay)). |
 | 0 | 🚪 Exit | Leave the menu. |
 
 ## Installation flow
@@ -113,11 +196,27 @@ Choose **Update Aurelle** (Option 2) from the menu to update or downgrade your i
 
 1. **Database backup**: The script offers to create a timestamped backup before touching application files.
 2. **GitHub mode**:
-   - **Update**: If updates are available on `origin/main`, the script automatically pulls them (`git pull --ff-only`), installs dependencies, runs database migrations, and restarts services.
+   - **Update**: If the branch or tag the installation follows (`REPO_BRANCH`, otherwise the repository's default branch) has a newer commit, the script moves the checkout to it, installs dependencies (`npm ci`), runs database migrations, rebuilds the client, and restarts services. It asks the source first: if it cannot be reached, nothing is stopped or changed.
    - **Downgrade**: If the repository is already up to date, it prompts `Do you want to downgrade? [y/N]`. If confirmed, you can specify any valid version (semver tag like `v0.11.4`, custom tag, branch, or commit SHA). The script checks out that reference, runs migrations, and rebuilds.
 3. **Offline mode**:
    - **Update**: If the `VERSION` file in the provided zip archive is newer than the installed version, it updates files and rebuilds.
    - **Downgrade**: If the archive `VERSION` is the same or lower than the installed version, it prompts for confirmation before downgrading.
+
+### Updating without questions
+
+Running the one-liner again on a server that already has Aurelle updates it (the same as `AURELLE_ACTION=update`), and so does `songbird-deploy --yes` once the global command is installed:
+
+```bash
+sudo songbird-deploy --yes
+# or, without the global command
+curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelia/main/scripts/install.sh | sudo env AURELLE_YES=1 bash
+```
+
+- Already at the newest version: nothing is changed (a missing client build or an app that does not answer is repaired, and the services are started again).
+- Your `.env` is kept, including settings the installer did not write (such as `CALLS_TURN_URLS`). An update also tightens the `.env` mode to `640` (the file holds the encryption key, the admin token and the relay secret).
+- `AURELLE_BACKUP=1` backs up the database first. If the update ends before Aurelle restarts, the script starts the old version again instead of leaving the site down.
+- Giving a different domain, TLS mode, or port than the installed one reconfigures the installation (nginx, certificate) instead of only updating it.
+- The calls relay is touched only when `AURELLE_CALLS_RELAY` is set.
 
 See [Updating & Downgrading](./Updating.md) for full details and manual alternatives.
 

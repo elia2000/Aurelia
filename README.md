@@ -59,6 +59,14 @@ Or on an Ubuntu server (22.04+) with `sudo`, use the deployment script:
 curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelia/main/scripts/install.sh | bash
 ```
 
+With no terminal (cloud-init, CI, `ssh host '...'`) or when you want no questions, run it unattended. Without a domain it serves on the server IP over HTTP; with one it gets a Let's Encrypt certificate. Voice and video calls get a relay (coturn) by default; open `80`, `443`, `3478` (TCP and UDP) and `49160-49260` (UDP) in your provider's firewall. Run the same command again to update.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelia/main/scripts/install.sh | sudo env AURELLE_YES=1 AURELLE_DOMAIN=chat.example.com AURELLE_EMAIL=you@example.com bash
+```
+
+All options (`AURELLE_*` variables, `--yes`, the calls relay, firewall ports, updating): [Deployment Script](docs/Deployment-Script.md).
+
 > [!TIP]
 > A domain name pointing to your server's public IP is recommended. **HTTPS is required** for calls, video messages and push notifications (except on `localhost`).
 

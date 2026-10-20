@@ -59,6 +59,14 @@ nginx همراه پروژه پیش از اجرا به فایل‌های `certs/c
 curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelia/main/scripts/install.sh | bash
 ```
 
+بدون ترمینال (cloud-init، CI، `ssh host '...'`) یا وقتی نمی‌خواهید چیزی پرسیده شود، آن را بدون پرسش اجرا کنید. بدون دامنه سرویس روی IP سرور با HTTP بالا می‌آید؛ با دامنه گواهی Let's Encrypt می‌گیرد. برای تماس صوتی و تصویری به‌طور پیش‌فرض رله (coturn) نصب می‌شود؛ پورت‌های `80`، `443`، `3478` (TCP و UDP) و `49160-49260` (UDP) را در فایروال ارائه‌دهنده باز کنید. برای به‌روزرسانی همان دستور را دوباره اجرا کنید.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelia/main/scripts/install.sh | sudo env AURELLE_YES=1 AURELLE_DOMAIN=chat.example.com AURELLE_EMAIL=you@example.com bash
+```
+
+همه‌ی گزینه‌ها (متغیرهای `AURELLE_*`، `--yes`، رله‌ی تماس، پورت‌های فایروال، به‌روزرسانی): [اسکریپت نصب](docs/fa/Deployment-Script.md).
+
 > [!TIP]
 > داشتن یک دامنه که به IP عمومی سرور شما اشاره کند پیشنهاد می‌شود. برای تماس، پیام ویدیویی و push notification **به HTTPS نیاز دارید** (به‌جز روی `localhost`).
 
