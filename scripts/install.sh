@@ -408,10 +408,14 @@ fail() {
 # Wrong command line or environment: exit code 2, nothing has been changed.
 usage_fail() {
   local timestamp=""
+  # The message often repeats a value the caller gave: no line break or escape sequence
+  # of it may reach the screen or the log.
+  local message="$*"
+  message="${message//[[:cntrl:]]/?}"
   timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
-  printf "%b[%s] ERROR: %s%b\n" "$COLOR_ERROR" "AURELLE" "$*" "$COLOR_RESET" >&2
+  printf "%b[%s] ERROR: %s%b\n" "$COLOR_ERROR" "AURELLE" "$message" "$COLOR_RESET" >&2
   printf "Run with --help for the list of options.\n" >&2
-  log_to_file "$(printf "[%s] [AURELLE] ERROR: %s" "$timestamp" "$*")"
+  log_to_file "$(printf "[%s] [AURELLE] ERROR: %s" "$timestamp" "$message")"
   exit "$EXIT_USAGE"
 }
 

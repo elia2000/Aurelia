@@ -372,3 +372,16 @@ teardown() {
   collect_install_options > "$TEST_DIR/out" 2>&1
   [ "$CERTBOT_EMAIL" = "ok@example.com" ]
 }
+
+# ===========================================================================
+# What is printed back
+# ===========================================================================
+
+@test "usage errors print a hostile value without its line breaks and escape sequences" {
+  AURELLE_EMAIL=$'a@example.test\n\e[31mFAKE ERROR\e[0m'
+  run resolve_unattended_options
+  [ "$status" -eq 2 ]
+  [[ "$output" != *$'\e[31m'* ]]
+  # the error is one line, the second line is the hint
+  [ "$(printf '%s\n' "$output" | grep -c 'AURELLE')" -eq 1 ]
+}

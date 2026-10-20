@@ -61,6 +61,15 @@ curl -fsSL https://raw.githubusercontent.com/elia2000/Aurelia/main/scripts/insta
 
 Run `bash install.sh --help` for the complete list, including the `MIRROR_*` variables for restricted networks.
 
+Values are checked before anything is changed, and a wrong one stops the script with exit code 2 and a message that names the variable. Nothing you pass is ever run as a command or added to a generated file as a new line:
+
+- `AURELLE_DOMAIN`: host names only (letters, digits, hyphens, dots). `AURELLE_PUBLIC_IP`: an IPv4 address.
+- `AURELLE_EMAIL`: letters, digits and `. _ + -` before the `@`, a host name after it. Characters such as `; | $ % # & < > ' "` are refused.
+- `AURELLE_POSTGRES_URL`: starts with `postgres://` or `postgresql://` and has no space, line break, quote, backtick or backslash. Write special characters of the password as `%XX` (for example `@` as `%40`).
+- Ports (`AURELLE_*PORT`): whole numbers from 1 to 65535. For the relay the minimum must be below the maximum.
+- `REPO_BRANCH`: letters, digits and `. _ - / +` only; `REPO_URL` must not start with `-`.
+- `AURELLE_OWNER_*`: no line breaks or control characters.
+
 What it does for you:
 
 - Waits for another package manager (a new cloud server runs `apt` by itself for several minutes after its first boot), retries a dropped download, and checks free disk space and memory before changing anything.
