@@ -2106,7 +2106,7 @@ clone_repo() {
     clone_env=(env GIT_TERMINAL_PROMPT=0)
   fi
   log "Cloning Aurelle repository${REPO_BRANCH:+ (${REPO_BRANCH})}..."
-  if ! run_with_retries run_silent run_as_root "${clone_env[@]}" git clone "${clone_args[@]}" "$REPO_URL" "$INSTALL_DIR"; then
+  if ! run_with_retries run_silent run_as_root "${clone_env[@]}" git clone "${clone_args[@]}" -- "$REPO_URL" "$INSTALL_DIR"; then
     warn "Could not clone ${REPO_URL}${REPO_BRANCH:+ (${REPO_BRANCH})}. Check the address and the network (a private repository needs credentials, which an unattended run cannot ask for)."
     return 1
   fi
@@ -2525,14 +2525,22 @@ replace_env_value() {
   local value="$3"
   local escaped
   local current_content
-  escaped="$(printf '%s' "$value" | sed 's/[&/]/\\&/g')"
+  # One line per setting: a line break would start another one.
+  if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+    warn "Not writing ${key}: its value has a line break."
+    return 1
+  fi
+  # | is the delimiter of the sed command below, & and \ are special in its replacement.
+  escaped="$(printf '%s' "$value" | sed -e 's/[\\&|]/\\&/g')"
   # The content goes through a variable: "grep -q" ends the pipe early and, with
   # pipefail, a cat that was cut off would read as "no such key" and append a duplicate.
   current_content="$(read_env_file "$env_file")"
   if grep -qE "^${key}=" <<< "$current_content"; then
     run_silent run_as_root sed -i "s|^${key}=.*|${key}=${escaped}|" "$env_file"
   else
-    run_silent run_as_root bash -lc "printf '%s\n' '${key}=${escaped}' >> '$env_file'"
+    # The line is data on stdin, never part of a command string.
+    # shellcheck disable=SC2016
+    printf '%s\n' "${key}=${value}" | run_silent run_as_root bash -c 'cat >> "$1"' _ "$env_file"
   fi
 }
 
@@ -2745,7 +2753,19 @@ write_env_fallback() {
   existing_private_key="$(get_existing_env_value "VAPID_PRIVATE_KEY" "")"
   existing_subject="$(get_existing_env_value "VAPID_SUBJECT" "mailto:admin@example.com")"
   preserved_lines="$(collect_preserved_env_lines "$env_file")"
-  run_silent run_as_root bash -lc "umask 077; cat > '$env_file' <<'EOF'
+  # One setting per line: a value with a line break would add settings of its own.
+  local checked_value=""
+  for checked_value in "$SERVER_PORT" "$CLIENT_PORT" "$WORKER_PORT" "${DB_CLIENT:-}" "${POSTGRES_HOST:-}" "${POSTGRES_PORT:-}" \
+      "${POSTGRES_DB:-}" "${POSTGRES_USER:-}" "${POSTGRES_PASSWORD:-}" "${POSTGRES_URL:-}" "${POSTGRES_SSL:-}" "$existing_subject"; do
+    if [[ "$checked_value" == *[[:cntrl:]]* ]]; then
+      warn "Not writing ${env_file}: one of the settings has a line break or control character in it."
+      return 1
+    fi
+  done
+  # The text goes to a root shell on stdin, so no value in it can be read as a command (the
+  # old form built one shell string around it). The file is created private: it holds keys.
+  local env_content=""
+  env_content="$(cat <<EOF
 # Server Configuration
 SERVER_PORT=${SERVER_PORT}
 CLIENT_PORT=${CLIENT_PORT}
@@ -2786,7 +2806,10 @@ WEBHOOK_URL=http://127.0.0.1:${SERVER_PORT}/api/uploads/webhook/processed
 # NOTE: All other application settings (sign-up, file uploads, retention,
 # limits, remote channel, client tuning, push proxy, etc.) are configured from
 # the in-app Admin Panel after installation.
-EOF" || return 1
+EOF
+)"
+  # shellcheck disable=SC2016
+  printf '%s\n' "$env_content" | run_silent run_as_root bash -c 'umask 077; cat > "$1"' _ "$env_file" || return 1
   if [[ -n "$preserved_lines" ]]; then
     printf '\n# Kept from the previous .env\n%s\n' "$preserved_lines" | run_as_root tee -a "$env_file" >/dev/null || return 1
     log "Kept $(printf '%s\n' "$preserved_lines" | wc -l | tr -d ' ') setting(s) from the previous .env."
@@ -3126,6 +3149,19 @@ collect_install_options() {
       raw_domains="${raw_domains%"${raw_domains##*[![:space:]]}"}"
       if [[ -n "$raw_domains" ]]; then
         parse_domain_input "$raw_domains"
+        local bad_domain=""
+        local typed_domain=""
+        for typed_domain in "${DOMAIN_NAMES[@]}"; do
+          if ! is_valid_domain_name "$typed_domain"; then
+            bad_domain="$typed_domain"
+            break
+          fi
+        done
+        if [[ -n "$bad_domain" ]]; then
+          # The names end up in the nginx configuration and in certificate requests.
+          printf "%s is not a valid domain name (letters, digits, dots and hyphens only).\n" "${bad_domain//[^[:print:]]/?}"
+          continue
+        fi
         if (( ${#DOMAIN_NAMES[@]} > 0 )); then
           log_domain_groups
           break
@@ -3141,9 +3177,21 @@ collect_install_options() {
 
   case "$CERT_MODE" in
     certbot)
-      CERTBOT_EMAIL="$(prompt_non_empty "Enter email for Let's Encrypt renewal notices")"
+      while true; do
+        CERTBOT_EMAIL="$(prompt_non_empty "Enter email for Let's Encrypt renewal notices")"
+        if is_valid_email "$CERTBOT_EMAIL"; then
+          break
+        fi
+        printf "That is not an email address (letters, digits and . _ + - before the @).\n"
+      done
       if [[ "$DEPLOY_MODE" == "ip" ]]; then
-        CERTBOT_IP_ADDRESS="$(prompt_non_empty "Enter the public IP address for the TLS certificate")"
+        while true; do
+          CERTBOT_IP_ADDRESS="$(prompt_non_empty "Enter the public IP address for the TLS certificate")"
+          if is_valid_ipv4 "$CERTBOT_IP_ADDRESS"; then
+            break
+          fi
+          printf "That is not an IPv4 address (for example 203.0.113.7).\n"
+        done
         NGINX_SERVER_NAME="$CERTBOT_IP_ADDRESS"
       fi
       ;;
@@ -5100,7 +5148,7 @@ create_owner_user() {
     username="$AURELLE_OWNER_USERNAME"
     nickname="${AURELLE_OWNER_NICKNAME:-$AURELLE_OWNER_USERNAME}"
     log "Creating the owner account ${username}..."
-    run_db_command npm --prefix server run db:user:create -- \
+    run_db_command npm --silent --prefix server run db:user:create -- \
       --nickname "$nickname" \
       --username "$username" \
       --password "$AURELLE_OWNER_PASSWORD" \
@@ -5119,7 +5167,7 @@ create_owner_user() {
   username="$(prompt_non_empty "Username (lowercase letters, numbers, ., _)")"
   password="$(prompt_secret "Password")"
 
-  run_db_command npm --prefix server run db:user:create -- \
+  run_db_command npm --silent --prefix server run db:user:create -- \
     --nickname "$nickname" \
     --username "$username" \
     --password "$password" \
@@ -5381,7 +5429,7 @@ db_user_create() {
     esac
   done
 
-  run_db_command npm --prefix server run db:user:create -- \
+  run_db_command npm --silent --prefix server run db:user:create -- \
     --nickname "$nickname" \
     --username "$username" \
     --password "$password" \
@@ -6041,6 +6089,7 @@ parse_cli_args() {
   if (( $# > 0 )); then
     usage_fail "Unexpected argument: $1"
   fi
+  validate_repo_settings
   if is_truthy "$AURELLE_YES"; then
     UNATTENDED="1"
   fi
@@ -6063,11 +6112,12 @@ unattended_port() {
     printf -v "$__result_var" '%s' "$default"
     return 0
   fi
-  if [[ "$value" =~ ^[0-9]+$ ]] && (( value >= 1 && value <= 65535 )); then
-    printf -v "$__result_var" '%s' "$value"
+  # 10# keeps a leading zero (0080) from being read as octal.
+  if [[ "$value" =~ ^0*[0-9]{1,5}$ ]] && (( 10#$value >= 1 && 10#$value <= 65535 )); then
+    printf -v "$__result_var" '%s' "$((10#$value))"
     return 0
   fi
-  usage_fail "${name} must be a port between 1 and 65535 (got: ${value})."
+  usage_fail "${name} must be a port between 1 and 65535 (got: ${value//[^[:print:]]/?})."
 }
 
 is_valid_domain_name() {
@@ -6076,8 +6126,36 @@ is_valid_domain_name() {
   [[ "$name" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$ ]]
 }
 
+# A plain address: letters, digits and . _ + - in the part before the @, a host name
+# with a top-level domain after it. The address is written into a systemd unit, into
+# the .env file and passed to certbot, so shell, sed, systemd (% and $) and .env (#, =)
+# characters, quotes and line breaks are not allowed at all.
 is_valid_email() {
-  [[ "${1:-}" =~ ^[^@[:space:]\'\"\\]+@[^@[:space:]\'\"\\]+\.[^@[:space:]\'\"\\]+$ ]]
+  local address="${1:-}"
+  (( ${#address} <= 254 )) || return 1
+  [[ "$address" =~ ^[A-Za-z0-9_][A-Za-z0-9._+-]*@[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*\.[A-Za-z]{2,}$ ]]
+}
+
+# A branch or tag name that is safe to put into a git command line and into shell
+# strings: letters, digits and . _ - / +, no option look-alike, none of the sequences git
+# itself refuses (.., //, a trailing / or .lock).
+is_valid_git_ref_name() {
+  local name="${1:-}"
+  [[ -n "$name" && ${#name} -le 200 ]] || return 1
+  [[ "$name" =~ ^[A-Za-z0-9_][A-Za-z0-9._/+-]*$ ]] || return 1
+  [[ "$name" != *..* && "$name" != *//* && "$name" != */ && "$name" != *.lock && "$name" != *.lock/* && "$name" != *. ]] || return 1
+  return 0
+}
+
+# Refuses a REPO_BRANCH or REPO_URL that could be read as something other than a name or
+# an address. Both come from the environment or the command line.
+validate_repo_settings() {
+  if [[ -n "$REPO_BRANCH" ]] && ! is_valid_git_ref_name "$REPO_BRANCH"; then
+    usage_fail "REPO_BRANCH (--branch) is not a branch or tag name: letters, digits and . _ - / + only (got: ${REPO_BRANCH//[^[:print:]]/?})."
+  fi
+  if [[ "$REPO_URL" == -* || "$REPO_URL" == *[[:cntrl:]]* ]]; then
+    usage_fail "REPO_URL (--repo) is not a repository address (got: ${REPO_URL//[^[:print:]]/?})."
+  fi
 }
 
 is_valid_ipv4() {
@@ -6215,6 +6293,11 @@ resolve_unattended_options() {
         if [[ ! "$POSTGRES_URL" =~ ^postgres(ql)?:// ]]; then
           usage_fail "AURELLE_POSTGRES_URL must start with postgres:// or postgresql://."
         fi
+        # The URL becomes one line of the .env file: no line break, space, quote, backtick or
+        # backslash. Characters in a password are written as %XX in a URL anyway.
+        if [[ "$POSTGRES_URL" == *[[:space:][:cntrl:]\'\"\`\\]* ]]; then
+          usage_fail "AURELLE_POSTGRES_URL must not contain spaces, line breaks, quotes, backticks or backslashes; write such characters in the password as %XX."
+        fi
         if [[ "$POSTGRES_URL" == *"sslmode=require"* || "$POSTGRES_URL" == *"ssl=true"* ]]; then
           POSTGRES_SSL="true"
         fi
@@ -6240,8 +6323,12 @@ resolve_unattended_options() {
       usage_fail "AURELLE_OWNER_USERNAME and AURELLE_OWNER_PASSWORD go together."
     fi
   fi
+  if [[ "$AURELLE_OWNER_USERNAME" == *[[:cntrl:]]* || "$AURELLE_OWNER_NICKNAME" == *[[:cntrl:]]* || "$AURELLE_OWNER_PASSWORD" == *[[:cntrl:]]* ]]; then
+    usage_fail "AURELLE_OWNER_USERNAME, AURELLE_OWNER_NICKNAME and AURELLE_OWNER_PASSWORD must not contain line breaks or control characters."
+  fi
 
   resolve_calls_relay_mode
+  validate_relay_port_settings
   SOURCE_MODE="github"
 }
 
@@ -6625,10 +6712,28 @@ is_valid_port_range() {
   local max_port="$3"
   local value=""
   for value in "$port" "$min_port" "$max_port"; do
-    [[ "$value" =~ ^[0-9]+$ ]] && (( value >= 1 && value <= 65535 )) || return 1
+    [[ "$value" =~ ^0*[0-9]{1,5}$ ]] && (( 10#$value >= 1 && 10#$value <= 65535 )) || return 1
   done
-  (( min_port < max_port )) || return 1
+  (( 10#$min_port < 10#$max_port )) || return 1
   return 0
+}
+
+# The calls relay ports from AURELLE_RELAY_PORT, _MIN_PORT and _MAX_PORT, checked before
+# anything is changed (a bad value would otherwise show up half way through an install,
+# as a skipped relay). They are written in decimal into the coturn configuration.
+validate_relay_port_settings() {
+  case "$(lowercase "$(sanitize_input_value "$AURELLE_CALLS_RELAY")")" in
+    0|false|no|n|off) return 0 ;;
+  esac
+  AURELLE_RELAY_PORT="$(sanitize_input_value "$AURELLE_RELAY_PORT")"
+  AURELLE_RELAY_MIN_PORT="$(sanitize_input_value "$AURELLE_RELAY_MIN_PORT")"
+  AURELLE_RELAY_MAX_PORT="$(sanitize_input_value "$AURELLE_RELAY_MAX_PORT")"
+  if ! is_valid_port_range "$AURELLE_RELAY_PORT" "$AURELLE_RELAY_MIN_PORT" "$AURELLE_RELAY_MAX_PORT"; then
+    usage_fail "AURELLE_RELAY_PORT, AURELLE_RELAY_MIN_PORT and AURELLE_RELAY_MAX_PORT must be ports between 1 and 65535, and the minimum below the maximum (got: port ${AURELLE_RELAY_PORT//[^[:print:]]/?}, range ${AURELLE_RELAY_MIN_PORT//[^[:print:]]/?}-${AURELLE_RELAY_MAX_PORT//[^[:print:]]/?})."
+  fi
+  AURELLE_RELAY_PORT="$((10#$AURELLE_RELAY_PORT))"
+  AURELLE_RELAY_MIN_PORT="$((10#$AURELLE_RELAY_MIN_PORT))"
+  AURELLE_RELAY_MAX_PORT="$((10#$AURELLE_RELAY_MAX_PORT))"
 }
 
 # Explains a failed relay check; the install itself is fine without a working relay.
@@ -6947,6 +7052,9 @@ wait_for_app_health() {
   local port="${1:-$SERVER_PORT}"
   local timeout="${2:-${AURELLE_HEALTH_TIMEOUT:-90}}"
   local waited=0
+  # Used in arithmetic below: anything but a plain number would be evaluated by bash.
+  [[ "$timeout" =~ ^[0-9]{1,6}$ ]] || timeout=90
+  timeout=$((10#$timeout))
   while true; do
     if songbird_healthcheck_responds "$port"; then
       return 0
@@ -7230,6 +7338,7 @@ main() {
 
   STRICT_CHECKS="1"
   ABORT_ON_INPUT_CLOSED="1"
+  validate_relay_port_settings
   init_prompt_io
   detect_os
   ensure_sudo
