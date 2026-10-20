@@ -75,10 +75,21 @@ export function createPushService({
         // not apply to them. They also expire fast: ringing is pointless
         // once the caller has given up.
         const showPreview = isCall || sub.message_preview !== 0;
-        const { ttl: payloadTtl, ...payloadForClient } = payload || {};
+        // `redactedBody` is what a person who turned the preview off sees
+        // instead of `body` (it must not contain message content). It is never
+        // sent to the device.
+        const {
+          ttl: payloadTtl,
+          redactedBody,
+          ...payloadForClient
+        } = payload || {};
         const perUserPayload = showPreview
           ? { ...payloadForClient, badge }
-          : { ...payloadForClient, body: "New message", badge };
+          : {
+              ...payloadForClient,
+              body: String(redactedBody || "").trim() || "New message",
+              badge,
+            };
         const perUserBody = JSON.stringify(perUserPayload);
         const ttlSeconds =
           Number.isFinite(Number(payloadTtl)) && Number(payloadTtl) > 0

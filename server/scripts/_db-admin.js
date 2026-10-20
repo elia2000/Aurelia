@@ -4,6 +4,7 @@ import initSqlJs from 'sql.js'
 import Database from 'better-sqlite3'
 import dotenv from 'dotenv'
 import { dataDir, serverDir } from './_cli.js'
+import { isSavedGifKeyOf } from '../lib/savedGifs.js'
 import { migrations } from '../migrations/index.js'
 import { createKnexInstance } from '../db/knex.js'
 import { normalizeSqlForPostgres } from '../lib/sqlNormalizer.js'
@@ -14,6 +15,7 @@ dotenv.config({ path: path.join(serverDir, '.env'), override: true, quiet: true 
 export const dbPath = path.join(dataDir, 'songbird.db')
 export const uploadsDir = path.join(dataDir, 'uploads', 'messages')
 export const avatarUploadsDir = path.join(dataDir, 'uploads', 'avatars')
+export const gifsUploadsDir = path.join(dataDir, 'uploads', 'gifs')
 const backupDir = path.join(dataDir, 'backups')
 
 let sqlSingleton = null
@@ -432,6 +434,36 @@ export function removeStoredFiles(storedNames = []) {
     }
   })
   return { removed, missing }
+}
+
+// Deletes the local files of saved GIFs (rows: { user_id, storage_key, storage_driver }).
+// Only keys of exactly the layout the server writes, inside their owner's own
+// folder, are touched. Objects in a bucket cannot be reached from here: they are
+// counted so the caller can say so.
+export function removeSavedGifFiles(rows = []) {
+  let removed = 0
+  let missing = 0
+  let remote = 0
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!row || !isSavedGifKeyOf(row.user_id, row.storage_key)) continue
+    if (row.storage_driver === 'remote' || row.storage_driver === 's3') {
+      remote += 1
+      continue
+    }
+    const filePath = path.join(path.dirname(gifsUploadsDir), row.storage_key)
+    if (fs.existsSync(filePath)) {
+      fs.rmSync(filePath, { force: true })
+      removed += 1
+      try {
+        fs.rmdirSync(path.dirname(filePath))
+      } catch {
+        // the folder still holds somebody's other GIFs
+      }
+    } else {
+      missing += 1
+    }
+  }
+  return { removed, missing, remote }
 }
 
 export function removeAvatarFiles(fileNames = []) {

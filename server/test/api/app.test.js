@@ -94,6 +94,68 @@ describe("GET /api/app/info", () => {
     });
   });
 
+  // ── Reactions ──────────────────────────────────────────────────────────────
+
+  test('MAX_REACTIONS_PER_USER is exposed as maxReactionsPerUser, default 1', async () => {
+    const res = await request(makeApp().app).get("/api/app/info");
+    expect(res.body.maxReactionsPerUser).toBe(1);
+  });
+
+  test('MAX_REACTIONS_PER_USER=3 → maxReactionsPerUser is 3, and is always clamped to 1-3', async () => {
+    const three = await request(makeApp({ settings: { MAX_REACTIONS_PER_USER: 3 } }).app).get("/api/app/info");
+    expect(three.body.maxReactionsPerUser).toBe(3);
+    const big = await request(makeApp({ settings: { MAX_REACTIONS_PER_USER: 40 } }).app).get("/api/app/info");
+    expect(big.body.maxReactionsPerUser).toBe(3);
+  });
+
+  // ── Pinned messages ────────────────────────────────────────────────────────
+
+  test('MAX_PINNED_MESSAGES is exposed as maxPinnedMessages, default 20', async () => {
+    const res = await request(makeApp().app).get("/api/app/info");
+    expect(res.body.maxPinnedMessages).toBe(20);
+  });
+
+  test('MAX_PINNED_MESSAGES=5 → maxPinnedMessages is 5, and is always clamped to 1-100', async () => {
+    const five = await request(makeApp({ settings: { MAX_PINNED_MESSAGES: 5 } }).app).get("/api/app/info");
+    expect(five.body.maxPinnedMessages).toBe(5);
+    const big = await request(makeApp({ settings: { MAX_PINNED_MESSAGES: 4000 } }).app).get("/api/app/info");
+    expect(big.body.maxPinnedMessages).toBe(100);
+    const small = await request(makeApp({ settings: { MAX_PINNED_MESSAGES: 0 } }).app).get("/api/app/info");
+    expect(small.body.maxPinnedMessages).toBe(1);
+  });
+
+  // ── Pinned chats ───────────────────────────────────────────────────────────
+
+  test('MAX_PINNED_CHATS is exposed as maxPinnedChats, default 5', async () => {
+    const res = await request(makeApp().app).get("/api/app/info");
+    expect(res.body.maxPinnedChats).toBe(5);
+  });
+
+  test('MAX_PINNED_CHATS=8 → maxPinnedChats is 8, and is always clamped to 1-30', async () => {
+    const eight = await request(makeApp({ settings: { MAX_PINNED_CHATS: 8 } }).app).get("/api/app/info");
+    expect(eight.body.maxPinnedChats).toBe(8);
+    const big = await request(makeApp({ settings: { MAX_PINNED_CHATS: 4000 } }).app).get("/api/app/info");
+    expect(big.body.maxPinnedChats).toBe(30);
+    const small = await request(makeApp({ settings: { MAX_PINNED_CHATS: 0 } }).app).get("/api/app/info");
+    expect(small.body.maxPinnedChats).toBe(1);
+  });
+
+  // ── Saved GIFs ─────────────────────────────────────────────────────────────
+
+  test('MAX_SAVED_GIFS is exposed as maxSavedGifs, default 50', async () => {
+    const res = await request(makeApp().app).get("/api/app/info");
+    expect(res.body.maxSavedGifs).toBe(50);
+  });
+
+  test('MAX_SAVED_GIFS=80 → maxSavedGifs is 80, and is always clamped to 1-200', async () => {
+    const eighty = await request(makeApp({ settings: { MAX_SAVED_GIFS: 80 } }).app).get("/api/app/info");
+    expect(eighty.body.maxSavedGifs).toBe(80);
+    const big = await request(makeApp({ settings: { MAX_SAVED_GIFS: 4000 } }).app).get("/api/app/info");
+    expect(big.body.maxSavedGifs).toBe(200);
+    const small = await request(makeApp({ settings: { MAX_SAVED_GIFS: 0 } }).app).get("/api/app/info");
+    expect(small.body.maxSavedGifs).toBe(1);
+  });
+
   // ── Registration ───────────────────────────────────────────────────────────
 
   test('SIGN_UP=false → accountCreationEnabled is false', async () => {

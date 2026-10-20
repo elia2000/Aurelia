@@ -3,6 +3,7 @@ import { confirmAction, getCliArgs, getPositionalArgs, hasForceYes, hasFlag } fr
 import {
   openDatabase,
   removeStoredFiles,
+  removeSavedGifFiles,
   chunkArray,
   runAdminActionViaServer,
   detectRunningServer,
@@ -149,11 +150,26 @@ async function main() {
       ),
     )
 
+    // Their private GIF collections go with them; the files follow the rows.
+    const savedGifRows = []
+    for (const chunk of chunkArray(userIds, 500)) {
+      const chunkPlaceholders = chunk.map(() => '?').join(', ')
+      savedGifRows.push(
+        ...(await dbApi.getAll(
+          `SELECT id, user_id, storage_key, storage_driver FROM user_gifs WHERE user_id IN (${chunkPlaceholders})`,
+          chunk,
+        )),
+      )
+    }
+
     const execute = async (dbLike) => {
       const queryRun = (sql, params = []) => dbLike.raw(sql, params)
       if (uniqueChatDeletes.length) {
         for (const chunk of chunkArray(uniqueChatDeletes, 500)) {
           const chunkPlaceholders = chunk.map(() => '?').join(', ')
+          await queryRun(`DELETE FROM message_reactions WHERE message_id IN (SELECT id FROM chat_messages WHERE chat_id IN (${chunkPlaceholders}))`, chunk)
+          await queryRun(`DELETE FROM chat_pinned_messages WHERE chat_id IN (${chunkPlaceholders})`, chunk)
+          await queryRun(`DELETE FROM chat_pins WHERE chat_id IN (${chunkPlaceholders})`, chunk)
           await queryRun(`DELETE FROM chat_message_reads WHERE message_id IN (SELECT id FROM chat_messages WHERE chat_id IN (${chunkPlaceholders}))`, chunk)
           await queryRun(`DELETE FROM chat_message_files WHERE message_id IN (SELECT id FROM chat_messages WHERE chat_id IN (${chunkPlaceholders}))`, chunk)
           await queryRun(`DELETE FROM chat_messages WHERE chat_id IN (${chunkPlaceholders})`, chunk)
@@ -173,6 +189,10 @@ async function main() {
         const chunkPlaceholders = chunk.map(() => '?').join(', ')
         await queryRun(`DELETE FROM sessions WHERE user_id IN (${chunkPlaceholders})`, chunk)
         await queryRun(`DELETE FROM hidden_chats WHERE user_id IN (${chunkPlaceholders})`, chunk)
+        await queryRun(`DELETE FROM user_gifs WHERE user_id IN (${chunkPlaceholders})`, chunk)
+        await queryRun(`DELETE FROM message_reactions WHERE user_id IN (${chunkPlaceholders})`, chunk)
+        await queryRun(`UPDATE chat_pinned_messages SET pinned_by = NULL WHERE pinned_by IN (${chunkPlaceholders})`, chunk)
+        await queryRun(`DELETE FROM chat_pins WHERE user_id IN (${chunkPlaceholders})`, chunk)
         await queryRun(`DELETE FROM chat_message_reads WHERE user_id IN (${chunkPlaceholders})`, chunk)
         await queryRun(`UPDATE chat_messages SET read_by_user_id = NULL WHERE read_by_user_id IN (${chunkPlaceholders})`, chunk)
         await queryRun(`DELETE FROM chat_left_members WHERE user_id IN (${chunkPlaceholders})`, chunk)
@@ -196,11 +216,16 @@ async function main() {
       }
 
       const fileCleanup = removeStoredFiles(storedNames)
+      const gifCleanup = removeSavedGifFiles(savedGifRows)
       await dbApi.save()
 
       console.log(`Users deleted: ${userIds.length}`)
       console.log(`Stored files removed: ${fileCleanup.removed}`)
       console.log(`Stored files missing on disk: ${fileCleanup.missing}`)
+      console.log(`Saved GIF files removed: ${gifCleanup.removed}`)
+      if (gifCleanup.remote) {
+        console.log(`Saved GIF files left in object storage (delete them there): ${gifCleanup.remote}`)
+      }
     } catch (error) {
       throw error
     }

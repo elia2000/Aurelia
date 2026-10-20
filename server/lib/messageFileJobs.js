@@ -1,5 +1,6 @@
 import { dbKnex } from "../db/knex.js";
 import { isSafeStorageKey } from "./storageKeys.js";
+import { removePinsOfMessages } from "./pinCleanup.js";
 
 export function createMessageFileJobs({
   adminGetAll,
@@ -46,6 +47,16 @@ export function createMessageFileJobs({
     return rawRes && typeof rawRes.then === "function"
       ? rawRes.then(processRows)
       : processRows(rawRes);
+  };
+
+  // Pins go with the messages. The pins that were removed are reported back
+  // (`unpinned`) so the caller can broadcast the unpin once the messages are
+  // gone. With an asynchronous database the rows arrive too late to be
+  // reported, but the pins are removed all the same.
+  const removePins = (messageIds, into) => {
+    const removed = removePinsOfMessages({ adminGetAll, adminRun }, messageIds);
+    if (Array.isArray(removed)) into.push(...removed);
+    else if (removed && typeof removed.catch === "function") removed.catch(() => {});
   };
 
   const cleanupMissingMessageFiles = (messageIds = []) => {
@@ -121,12 +132,19 @@ export function createMessageFileJobs({
               deletedByChat.set(chatId, list);
             });
 
+            const unpinned = [];
             adminRun("BEGIN");
             try {
               chunkArray(uniqueTargetIds, 500).forEach((chunk) => {
                 adminRun(
                   dbKnex("chat_message_files").whereIn("message_id", chunk).del(),
                 );
+
+                adminRun(
+                  dbKnex("message_reactions").whereIn("message_id", chunk).del(),
+                );
+
+                removePins(chunk, unpinned);
 
                 adminRun(
                   dbKnex("chat_messages").whereIn("id", chunk).del(),
@@ -144,6 +162,7 @@ export function createMessageFileJobs({
             return {
               deletedMessageIds: uniqueTargetIds,
               deletedByChat,
+              unpinned,
               changed: true,
             };
           };
@@ -349,12 +368,19 @@ export function createMessageFileJobs({
           const activeProvider =
             (options && options.storageProvider) || storageProvider;
 
+          const unpinned = [];
           adminRun("BEGIN");
           try {
             chunkArray(uniqueMsgIds, 500).forEach((chunk) => {
               adminRun(
                 dbKnex("chat_message_files").whereIn("message_id", chunk).del(),
               );
+
+              adminRun(
+                dbKnex("message_reactions").whereIn("message_id", chunk).del(),
+              );
+
+              removePins(chunk, unpinned);
 
               adminRun(
                 dbKnex("chat_messages").whereIn("id", chunk).del(),
@@ -374,6 +400,7 @@ export function createMessageFileJobs({
             removedMessages: uniqueMsgIds.length,
             removedFiles: allStoredNames.length,
             removedLocalThumbs,
+            unpinned,
           };
 
           if (!remoteKeys.length || !activeStorageProviderDelete(activeProvider)) {

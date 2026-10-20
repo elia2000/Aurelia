@@ -25,6 +25,9 @@ import { resolveAppOrigins, ensureBucketCors } from "./lib/bucketCors.js";
 import { resolveWebhookCallbackUrl } from "./lib/webhookUrl.js";
 import { createVideoTranscodeManager } from "./lib/videoTranscode.js";
 import { createMessageFileJobs } from "./lib/messageFileJobs.js";
+import { createGifStorage } from "./lib/gifStorage.js";
+import { createTextRetentionJobs } from "./lib/textRetentionJobs.js";
+import { emitUnpinnedMessages } from "./lib/pins.js";
 import { createInspector } from "./lib/inspect.js";
 import { createSessionHelpers } from "./lib/sessions.js";
 import { createRedisClient, createRedisSessionStore } from "./lib/redis.js";
@@ -174,6 +177,33 @@ import {
   dbSetSetting,
   dbDeleteSetting,
   dbGetSetting,
+  isMessageHiddenForUser,
+  findMessagesByIds,
+  listMessageIdsHiddenForUser,
+  listMessageReactionSummaries,
+  listMessageReactionUsers,
+  toggleMessageReaction,
+  pinMessage,
+  unpinMessage,
+  unpinAllMessages,
+  listPinnedMessages,
+  listPinnedMessageIds,
+  pinChat,
+  removeChatPins,
+  reorderChatPins,
+  listChatPins,
+  listChatPinsForUsers,
+  listChatPinHolders,
+  createCallMessage,
+  listSavedGifs,
+  countSavedGifs,
+  findSavedGif,
+  findSavedGifBySource,
+  findSavedGifByHash,
+  insertSavedGif,
+  deleteSavedGif,
+  listSavedGifsForUsers,
+  listAllSavedGifs,
 } from "./db.js";
 import { resolveTelegramSecrets } from "./lib/remoteChannelSecrets.js";
 import { createMirrorJobRegistry } from "./lib/remoteMirrorJobs.js";
@@ -557,6 +587,19 @@ const {
   registerUploadRoutes,
 } = uploadTools;
 
+// Where the bytes of GIFs live: the saved-GIF collection (data/uploads/gifs/<userId>/
+// or gifs/<userId>/ in the bucket), copies sent as attachments, and the check
+// of files uploaded straight to the bucket.
+const savedGifStorage = createGifStorage({
+  fs,
+  path,
+  crypto,
+  storageProvider,
+  storageEncryption,
+  rootDir: path.join(dataDir, "uploads"),
+  uploadRootDir,
+});
+
 const sseHub = createSseHub({ listChatMembers });
 const { addSseClient, removeSseClient, emitSseEvent, emitChatEvent, broadcastAll, getCachedMembers } = sseHub;
 
@@ -776,6 +819,22 @@ async function backfillStorageEncryption() {
       }
     });
 
+    // Saved GIFs are written encrypted when a key is set; this covers a key
+    // that was added later.
+    let encryptedGifs = 0;
+    const gifRoot = path.join(dataDir, "uploads", "gifs");
+    if (fs.existsSync(gifRoot)) {
+      fs.readdirSync(gifRoot, { withFileTypes: true }).forEach((folder) => {
+        if (!folder.isDirectory()) return;
+        fs.readdirSync(path.join(gifRoot, folder.name), { withFileTypes: true }).forEach((entry) => {
+          if (!entry.isFile()) return;
+          if (storageEncryption.encryptFileInPlace(path.join(gifRoot, folder.name, entry.name))) {
+            encryptedGifs += 1;
+          }
+        });
+      });
+    }
+
     let encryptedAvatars = 0;
     if (fs.existsSync(avatarUploadRootDir)) {
       fs.readdirSync(avatarUploadRootDir, { withFileTypes: true }).forEach(
@@ -790,10 +849,10 @@ async function backfillStorageEncryption() {
       );
     }
 
-    if (encryptedFiles > 0 || encryptedAvatars > 0) {
+    if (encryptedFiles > 0 || encryptedAvatars > 0 || encryptedGifs > 0) {
       adminSave();
       console.log(
-        `[storage-encryption] encrypted ${encryptedFiles} file(s) and ${encryptedAvatars} avatar file(s) at rest.`,
+        `[storage-encryption] encrypted ${encryptedFiles} file(s), ${encryptedAvatars} avatar file(s) and ${encryptedGifs} saved GIF(s) at rest.`,
       );
     }
   } catch (error) {
@@ -1173,6 +1232,53 @@ const remoteChannelManager = createRemoteChannelManager({
 apiDeps.remoteChannelManager = remoteChannelManager;
 apiDeps.mirrorJobRegistry = mirrorJobRegistry;
 
+// Multi-select forward and delete look messages up in bulk.
+Object.assign(apiDeps, {
+  findMessagesByIds,
+  listMessageIdsHiddenForUser,
+});
+
+// Message reactions.
+Object.assign(apiDeps, {
+  isMessageHiddenForUser,
+  listMessageReactionSummaries,
+  listMessageReactionUsers,
+  toggleMessageReaction,
+});
+
+// Pinned messages.
+Object.assign(apiDeps, {
+  pinMessage,
+  unpinMessage,
+  unpinAllMessages,
+  listPinnedMessages,
+  listPinnedMessageIds,
+});
+
+// Saved GIFs (a private collection per person) and the animated-picture flag.
+Object.assign(apiDeps, {
+  listSavedGifs,
+  countSavedGifs,
+  findSavedGif,
+  findSavedGifBySource,
+  findSavedGifByHash,
+  insertSavedGif,
+  deleteSavedGif,
+  listSavedGifsForUsers,
+  listAllSavedGifs,
+  savedGifStorage,
+});
+
+// Pinned chats (per person, top of the chat list).
+Object.assign(apiDeps, {
+  pinChat,
+  removeChatPins,
+  reorderChatPins,
+  listChatPins,
+  listChatPinsForUsers,
+  listChatPinHolders,
+});
+
 // End-to-end encryption device directory + 1:1 call signaling.
 Object.assign(apiDeps, {
   findE2eeDevice,
@@ -1185,6 +1291,8 @@ Object.assign(apiDeps, {
   listE2eeDevicesByUserIds,
   setMessageE2eeEnvelope,
   findDmChat,
+  // The history entry a finished call leaves in the chat.
+  createCallMessage,
   callRegistry: createCallRegistry(),
   callsConfig: () => readCallsConfig(),
   emitToUser: (username, payload) => {
@@ -1269,115 +1377,15 @@ app.use((err, req, res, next) => {
   return next(err);
 });
 
-async function cleanupExpiredTextOnlyMessages() {
-  if (getSetting("MESSAGE_TEXT_RETENTION") <= 0) {
-    return { removedMessages: 0 };
-  }
-
-  const rawRows = adminGetAll(
-    dbKnex("chat_messages")
-      .select("id", "chat_id")
-      .whereNotNull("expires_at")
-      .where("expires_at", "!=", "")
-      .whereNull("hidden_everyone_at")
-      .whereRaw("julianday(expires_at) <= julianday(?)", [new Date().toISOString()])
-      .whereNotExists(
-        dbKnex("chat_message_files")
-          .select(1)
-          .whereRaw("chat_message_files.message_id = chat_messages.id"),
-      ),
-  );
-  const rows = Array.isArray(rawRows) ? rawRows : (await rawRows) || [];
-
-  const messageIds = rows.map((row) => row?.id).filter(Boolean);
-
-  if (!messageIds.length) {
-    return { removedMessages: 0 };
-  }
-
-  const deletedByChat = new Map();
-  rows.forEach((row) => {
-    const chatId = row?.chat_id;
-    const messageId = row?.id;
-    if (!chatId || !messageId) return;
-    const list = deletedByChat.get(chatId) || [];
-    list.push(messageId);
-    deletedByChat.set(chatId, list);
-  });
-
-  adminRun("BEGIN");
-  try {
-    chunkArray(messageIds, 500).forEach((chunk) => {
-      adminRun(dbKnex("chat_message_reads").whereIn("message_id", chunk).del());
-      adminRun(dbKnex("hidden_chat_messages").whereIn("message_id", chunk).del());
-      adminRun(dbKnex("chat_messages").whereIn("id", chunk).del());
-    });
-    adminRun("COMMIT");
-  } catch (error) {
-    adminRun("ROLLBACK");
-    throw error;
-  }
-
-  adminSave();
-  deletedByChat.forEach((ids, chatId) => {
-    emitChatEvent(chatId, {
-      type: "chat_message_deleted",
-      chatId: chatId,
-      messageIds: ids,
-    });
-  });
-
-  return { removedMessages: messageIds.length };
-}
-
-async function backfillTextMessageExpiry() {
-  const textRetentionDays = getSetting("MESSAGE_TEXT_RETENTION");
-  if (textRetentionDays <= 0) return 0;
-
-  const rawRow = adminGetRow(
-    dbKnex("chat_messages")
-      .count({ n: "*" })
-      .where((builder) => {
-        builder.whereNull("expires_at").orWhere("expires_at", "");
-      })
-      .whereNull("hidden_everyone_at")
-      .whereNotNull("body")
-      .whereRaw("TRIM(body) != ''")
-      .whereRaw("body NOT LIKE '[[system:%]]'")
-      .whereNotExists(
-        dbKnex("chat_message_files")
-          .select(1)
-          .whereRaw("chat_message_files.message_id = chat_messages.id"),
-      )
-      .first(),
-  );
-  const row = rawRow && typeof rawRow.then === "function" ? await rawRow : rawRow;
-
-  const pending = Number(row?.n || 0);
-  if (!pending) return 0;
-
-  adminRun(
-    dbKnex("chat_messages")
-      .where((builder) => {
-        builder.whereNull("expires_at").orWhere("expires_at", "");
-      })
-      .whereNull("hidden_everyone_at")
-      .whereNotNull("body")
-      .whereRaw("TRIM(body) != ''")
-      .whereRaw("body NOT LIKE '[[system:%]]'")
-      .whereNotExists(
-        dbKnex("chat_message_files")
-          .select(1)
-          .whereRaw("chat_message_files.message_id = chat_messages.id"),
-      )
-      .update({
-        expires_at: dbKnex.raw("datetime(created_at, '+' || ? || ' days')", [textRetentionDays]),
-      }),
-  );
-
-  adminSave();
-  return pending;
-}
+// MESSAGE_TEXT_RETENTION jobs (text messages and call history entries).
+const { backfillTextMessageExpiry, cleanupExpiredTextOnlyMessages } = createTextRetentionJobs({
+  getSetting,
+  adminGetRow,
+  adminGetAll,
+  adminRun,
+  adminSave,
+  emitChatEvent,
+});
 
 // Cleanup timers always run — each tick re-reads the live setting, so
 // enabling/disabling retention via the admin panel takes effect without a
@@ -1387,7 +1395,7 @@ try {
   await pruneOrphanAvatarObjects();
   if (getSetting("MESSAGE_FILE_RETENTION") > 0) {
     await backfillMessageFileExpiry();
-    await cleanupExpiredMessageFiles();
+    emitUnpinnedMessages(emitChatEvent, (await cleanupExpiredMessageFiles())?.unpinned);
   }
 } catch (_) {
   // best effort startup cleanup
@@ -1398,7 +1406,7 @@ const expiryCleanupTimer = setInterval(async () => {
     await pruneOrphanRemoteObjects();
     await pruneOrphanAvatarObjects();
     if (getSetting("MESSAGE_FILE_RETENTION") > 0) {
-      await cleanupExpiredMessageFiles();
+      emitUnpinnedMessages(emitChatEvent, (await cleanupExpiredMessageFiles())?.unpinned);
     }
   } catch (_) {
     // keep server alive if cleanup fails

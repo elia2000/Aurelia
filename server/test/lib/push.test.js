@@ -138,3 +138,61 @@ describe("createPushService", () => {
     expect(deletePushSubscription).not.toHaveBeenCalled();
   });
 });
+
+describe("createPushService preview privacy", () => {
+  const dummyVapid = {
+    publicKey: "dummy-public-key",
+    privateKey: "dummy-private-key",
+    subject: "mailto:admin@example.com",
+  };
+
+  const run = async (messagePreview, payload) => {
+    const sent = [];
+    const pushService = createPushService({
+      webpush: {
+        setVapidDetails: vi.fn(),
+        sendNotification: vi.fn(async (_sub, body) => {
+          sent.push(JSON.parse(body));
+        }),
+      },
+      listPushSubscriptionsByUserIds: () => [
+        {
+          user_id: "user-1",
+          endpoint: "https://push.example.com/e1",
+          p256dh: "key",
+          auth: "auth",
+          message_preview: messagePreview,
+        },
+      ],
+      deletePushSubscription: vi.fn(),
+      vapid: dummyVapid,
+    });
+    await pushService.sendPushNotificationToUsers(["user-1"], payload);
+    return sent[0];
+  };
+
+  const reactionPayload = {
+    title: "Alice",
+    body: "Alice reacted \u{1F44D} to your message",
+    redactedBody: "New reaction",
+    data: { chatId: "c1" },
+  };
+
+  test("a person who allows previews gets the real body, never the redacted one", async () => {
+    const delivered = await run(1, reactionPayload);
+    expect(delivered.body).toBe("Alice reacted \u{1F44D} to your message");
+    expect(delivered).not.toHaveProperty("redactedBody");
+  });
+
+  test("a person who turned previews off gets the redacted body", async () => {
+    const delivered = await run(0, reactionPayload);
+    expect(delivered.body).toBe("New reaction");
+    expect(delivered).not.toHaveProperty("redactedBody");
+    expect(delivered.title).toBe("Alice");
+  });
+
+  test("without a redacted body the generic text is used, as before", async () => {
+    const delivered = await run(0, { title: "Alice", body: "secret text" });
+    expect(delivered.body).toBe("New message");
+  });
+});

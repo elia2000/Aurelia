@@ -16,6 +16,16 @@ Aurelle از متغیر محیطی `STORAGE_DRIVER` برای تعیین محل �
 STORAGE_DRIVER=remote
 ```
 
+### فایل‌ها کجا ذخیره می‌شوند
+
+| چه چیزی | دیسک محلی (`data/uploads/...`) | کلید در باکت |
+|---|---|---|
+| پیوست‌های پیام | `messages/<name>` | `uploads/messages/<name>` |
+| آواتارها | `avatars/<name>` | `uploads/avatars/<name>` |
+| GIFهای ذخیره‌شده (مجموعه‌ی خصوصی هر نفر) | `gifs/<userId>/<gifId>.<ext>` | `gifs/<userId>/<gifId>.<ext>` |
+
+GIFهای ذخیره‌شده کپی هستند و جدا از پیوست‌های پیام نگه داشته می‌شوند: نگهداری خودکار فایل‌ها (`MESSAGE_FILE_RETENTION`) هرگز به آن‌ها دست نمی‌زند و فقط وقتی حذف می‌شوند که خود شخص آن را پاک کند، قدیمی‌ترین GIF به‌خاطر حد `MAX_SAVED_GIFS` جایگزین شود، یا حساب کاربری حذف شود. فرستادن یک GIF ذخیره‌شده، یک کپی تازه زیر `uploads/messages/` می‌نویسد.
+
 ## معماری آپلود مستقیم با Presigned URL
 
 هنگامی که `STORAGE_DRIVER=remote` فعال است، Aurelle از جریان کاری آپلود مستقیم کلاینت به باکت با Presigned URL استفاده میکند. محتوای فایل مستقیماً از مرورگر کاربر به Cloudflare R2 یا AWS S3 استریم میشود و سرور برنامه Node.js Aurelle به طور کامل بایپاس میشود.

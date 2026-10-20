@@ -2,6 +2,7 @@ import { validateUuidBody, validateUuidParams } from "../lib/uuidMiddleware.js";
 import { isBase64Url, isValidP256PublicKey } from "../lib/e2eeKeys.js";
 import { CALL_KINDS, CallError } from "../lib/calls.js";
 import { buildIceServers } from "../lib/callsConfig.js";
+import { createCallMessageService } from "../lib/services/callMessageService.js";
 import { createRelayDnsCheck } from "../lib/relayDns.js";
 import { createThrottle } from "../lib/throttle.js";
 
@@ -79,7 +80,21 @@ function registerCallRoutes(app, deps) {
     sendPushNotificationToUsers,
     isUserConnected,
     listMutedUserIdsForChat,
+    // The history entry a finished call leaves in the chat.
+    createCallMessage,
+    emitChatEvent,
+    findUserById,
+    getSetting,
   } = deps;
+
+  const callMessages = createCallMessageService({
+    createCallMessage,
+    emitChatEvent,
+    findChatById,
+    findUserById,
+    getSetting,
+    isMember,
+  });
 
   const emit = (username, payload) => {
     try {
@@ -183,6 +198,11 @@ function registerCallRoutes(app, deps) {
     // A call that was answered already told the callee's devices at that
     // moment (see the accept route); only one that rang out needs this.
     if (!call.answeredAt) pushCallOver(call, reason);
+    // The chat keeps a line about it ("Missed call", "Outgoing call 0:23").
+    // The registry hands an ended call back once, and the database refuses a
+    // second entry for the same call, so this is exactly once however the
+    // call ended. A failure here never changes how the call ended.
+    void callMessages.recordEndedCall(call).catch(() => {});
   };
 
   // Periodic expiry: unanswered calls become "missed", dead calls are freed.
@@ -328,6 +348,19 @@ function registerCallRoutes(app, deps) {
           callee: publicUser(calleeRow),
         });
       } catch (error) {
+        // The person is in another call: nobody was rung, but the chat keeps a
+        // "busy" line so the attempt is not lost.
+        if (error instanceof CallError && error.code === "busy") {
+          void callMessages
+            .recordBusyCall({
+              callId,
+              kind,
+              chatId,
+              caller: { id: caller.id, username: caller.username },
+              callee: { id: calleeRow.id, username: calleeRow.username },
+            })
+            .catch(() => {});
+        }
         return sendCallError(res, error);
       }
     },
@@ -460,7 +493,9 @@ function registerCallRoutes(app, deps) {
     },
   );
 
-  // Cancel (caller, ringing), decline (callee, ringing) or hang up.
+  // Cancel (caller, ringing), decline (callee, ringing) or hang up. An
+  // optional `durationMs` is how long the device measured the call; it is only
+  // a hint (see the registry) and a bad value never stops the call from ending.
   app.post(
     "/api/calls/:callId/end",
     validateUuidParams("callId"),
@@ -468,7 +503,9 @@ function registerCallRoutes(app, deps) {
       const user = await resolveCaller(req, res);
       if (!user) return;
       try {
-        const ended = callRegistry.endBy(req.params.callId, user.id, req.body?.reason);
+        const ended = callRegistry.endBy(req.params.callId, user.id, req.body?.reason, {
+          durationMs: req.body?.durationMs,
+        });
         if (ended) endAndNotify(ended, ended.endReason, user.id);
         return res.json({ ok: true });
       } catch (error) {

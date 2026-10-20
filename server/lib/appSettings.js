@@ -212,6 +212,54 @@ export const SETTING_DEFS = [
     max: 64,
     restart: true,
   },
+  {
+    key: "MAX_REACTIONS_PER_USER",
+    type: TYPE_INT,
+    label: "Reactions per person per message",
+    description:
+      "How many different emoji one person can react with on a single message. With 1, reacting with another emoji replaces the previous one (like Telegram).",
+    group: "limits",
+    envKey: "MAX_REACTIONS_PER_USER",
+    defaultVal: 1,
+    min: 1,
+    max: 3,
+  },
+  {
+    key: "MAX_PINNED_MESSAGES",
+    type: TYPE_INT,
+    label: "Pinned messages per chat",
+    description:
+      "How many messages can be pinned in one chat at the same time. A chat that is full refuses another pin until one is unpinned.",
+    group: "limits",
+    envKey: "MAX_PINNED_MESSAGES",
+    defaultVal: 20,
+    min: 1,
+    max: 100,
+  },
+  {
+    key: "MAX_PINNED_CHATS",
+    type: TYPE_INT,
+    label: "Pinned chats per person",
+    description:
+      "How many conversations one person can pin to the top of their chat list. Someone who already has more keeps them but cannot pin another until they are under the limit.",
+    group: "limits",
+    envKey: "MAX_PINNED_CHATS",
+    defaultVal: 5,
+    min: 1,
+    max: 30,
+  },
+  {
+    key: "MAX_SAVED_GIFS",
+    type: TYPE_INT,
+    label: "Saved GIFs per person",
+    description:
+      "How many GIFs one person can keep in their own GIF collection. When someone saves another one past the limit, their oldest GIF is removed automatically and they are told.",
+    group: "limits",
+    envKey: "MAX_SAVED_GIFS",
+    defaultVal: 50,
+    min: 1,
+    max: 200,
+  },
 
   // ── Remote Channel ────────────────────────────────────────────────────────────
   {

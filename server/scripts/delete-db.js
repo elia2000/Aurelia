@@ -7,6 +7,7 @@ import { readDbConfig } from "../settings/env.js";
 
 const dbPath = path.join(dataDir, "songbird.db");
 const uploadsDir = path.join(dataDir, "uploads", "messages");
+const gifsDir = path.join(dataDir, "uploads", "gifs");
 
 async function main() {
   const args = getCliArgs();
@@ -26,6 +27,7 @@ async function main() {
     }
     await createPostgresMaintenance({ config: dbConfig }).dropDatabase();
     fs.rmSync(uploadsDir, { recursive: true, force: true });
+    fs.rmSync(gifsDir, { recursive: true, force: true });
     console.log("PostgreSQL database and local message uploads deleted.");
     return;
   }
@@ -40,6 +42,7 @@ async function main() {
   fs.rmSync(dbPath, { force: true });
   const removedUploads = fs.existsSync(uploadsDir);
   fs.rmSync(uploadsDir, { recursive: true, force: true });
+  fs.rmSync(gifsDir, { recursive: true, force: true });
   console.log(`Data directory: ${dataDir}`);
   console.log(`Database removed: ${removedDb ? "yes" : "no (not found)"}`);
   console.log(`Message uploads removed: ${removedUploads ? "yes" : "no (not found)"}`);

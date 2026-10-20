@@ -7,6 +7,7 @@ import { getSetting } from "./appSettings.js";
 
 import { isValidUuid } from "./uuidUtils.js";
 import { markEncryptedFileRecord } from "./storageEncryption.js";
+import { detectAnimatedFile, isAnimationCandidate } from "./animatedImage.js";
 
 // ─── Aurelle outbound proxy ──────────────────────────────────────────────────
 // Applied per-fetch-call (no persistent connection to bake it into), so this
@@ -2044,6 +2045,13 @@ export function createRemoteChannelManager(deps = {}) {
         safeUnlink(filePath);
         return null;
       }
+      // An animated GIF (or WebP / APNG) is a GIF on this side too. The check
+      // reads the plain file, before it is encrypted or handed to the worker,
+      // and only for files that could be one; the file itself is never touched.
+      descriptor.isAnimated = false;
+      if (isAnimationCandidate({ mimeType: descriptor.mimeType, name: descriptor.originalName })) {
+        descriptor.isAnimated = (await detectAnimatedFile({ fs, filePath })) === true;
+      }
       return { descriptor, storedName, filePath, actualSize };
     } catch (error) {
       safeUnlink(filePath);
@@ -2077,6 +2085,7 @@ export function createRemoteChannelManager(deps = {}) {
           typeof computeExpiryIso === "function"
             ? computeExpiryIso(new Date().toISOString(), messageFileRetentionDays)
             : null,
+        isAnimated: Boolean(descriptor.isAnimated),
         // Local disk by default; replaced with bucket coordinates below.
         storageDriver: "local",
         storage_driver: "local",

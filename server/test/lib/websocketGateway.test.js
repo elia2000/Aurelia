@@ -47,7 +47,10 @@ describe("WebSocket Gateway", () => {
     const chatId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     realSseHub.emitChatEvent(chatId, { type: "chat_message", chatId, text: "hello" });
 
-    expect(wsAlice.send).toHaveBeenCalledWith(JSON.stringify({ type: "chat_message", chatId, text: "hello" }));
+    // The hub stamps every new message with an (empty) reactions list.
+    expect(wsAlice.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: "chat_message", chatId, text: "hello", reactions: [] }),
+    );
 
     gateway.close();
   });

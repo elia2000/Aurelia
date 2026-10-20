@@ -172,6 +172,81 @@ describe("Remote Uploads & File Management Routes", () => {
       expect(createMessageFilesMock).not.toHaveBeenCalled();
     });
 
+    // Call history and "X pinned a message" entries are written by the server
+    // alone: nobody, not even their author, may hang files on them.
+    describe("server-written entries", () => {
+      const ENTRY_ID = "c0c0c0c0-d1d1-4e2e-af3f-060606060608";
+      const presignFor = async (row) => {
+        const createMessageFilesMock = vi.fn(() => []);
+        const customApp = makeApp({
+          deps: {
+            storageProvider: mockRemoteProvider,
+            createMessageFiles: createMessageFilesMock,
+            adminGetRow: (sql) => (sql.includes("chat_messages") ? row(uId) : null),
+            MESSAGE_FILE_LIMITS: { maxFileSizeBytes: 50 * 1024 * 1024 },
+          },
+        });
+        const uId = customApp.userStore.createUser("author", "pass", "Author", null, "#fff");
+        customApp.sessionStore.createSession(uId, sessionToken);
+        const res = await request(customApp.app)
+          .post("/api/uploads/presign")
+          .set("Cookie", [`sid=${sessionToken}`])
+          .send({
+            messageId: ENTRY_ID,
+            filename: "evil.txt",
+            contentType: "text/plain",
+            fileSize: 10,
+          });
+        return { res, createMessageFilesMock };
+      };
+
+      test("a call history entry of the caller gets no file", async () => {
+        const { res, createMessageFilesMock } = await presignFor((id) => ({
+          user_id: id,
+          call_id: "call-1",
+          body: "",
+        }));
+        expect(res.status).toBe(400);
+        expect(res.body.error).toMatch(/cannot have files/i);
+        expect(res.body.uploadUrl).toBeUndefined();
+        expect(createMessageFilesMock).not.toHaveBeenCalled();
+      });
+
+      test.each([
+        ["a pin entry", "[[system:pinned:c0c0c0c0-d1d1-4e2e-af3f-060606060606]]"],
+        ["a joined entry", "[[system:joined:Mallory]]"],
+        ["an upper case entry", "[[SYSTEM:joined:Mallory]]"],
+      ])("%s of the caller gets no file", async (_label, body) => {
+        const { res, createMessageFilesMock } = await presignFor((id) => ({
+          user_id: id,
+          call_id: null,
+          body,
+        }));
+        expect(res.status).toBe(400);
+        expect(res.body.error).toMatch(/cannot have files/i);
+        expect(createMessageFilesMock).not.toHaveBeenCalled();
+      });
+
+      test("an ordinary message of the caller still gets its file", async () => {
+        const { res, createMessageFilesMock } = await presignFor((id) => ({
+          user_id: id,
+          call_id: null,
+          body: "hello",
+        }));
+        expect(res.status).toBe(200);
+        expect(createMessageFilesMock).toHaveBeenCalled();
+      });
+
+      test("somebody else's call entry is still a 403, not a hint about its kind", async () => {
+        const { res } = await presignFor(() => ({
+          user_id: "someone-else",
+          call_id: "call-1",
+          body: "",
+        }));
+        expect(res.status).toBe(403);
+      });
+    });
+
     test("presign returns storageKey and no fileId when messageId is absent (no row inserted)", async () => {
       const createMessageFilesMock = vi.fn(() => []);
       const customApp = makeApp({

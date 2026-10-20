@@ -4,6 +4,10 @@ const UUID_EVENT_TYPES = new Set([
   "chat_message",
   "chat_message_updated",
   "chat_message_deleted",
+  "message_reactions",
+  "message_pinned",
+  "message_unpinned",
+  "messages_unpinned_all",
   "chat_read",
   "chat_typing",
   "chat_updated",
@@ -12,13 +16,51 @@ const UUID_EVENT_TYPES = new Set([
   "presence_update",
   "profile_updated",
   "user_profile_updated",
+  "chat_pins_changed",
+  "saved_gif_added",
+  "saved_gif_removed",
 ]);
+
+// Events about one person's own state. They go to that person's sessions
+// (emitSseEvent) and never to the members of a chat (emitChatEvent): the other
+// members of a chat must not learn who pinned it. The same goes for a person's
+// saved GIFs.
+const USER_ONLY_EVENT_TYPES = new Set(["chat_pins_changed", "saved_gif_added", "saved_gif_removed"]);
 
 function hasValidUuidReferences(payload = {}) {
   const type = String(payload?.type || "");
   if (!UUID_EVENT_TYPES.has(type)) return true;
 
-  const uuidFields = ["chatId", "messageId", "userId", "replyToMessageId", "sourceChatId", "sourceUserId"];
+  if (type === "chat_pins_changed") {
+    return (
+      Array.isArray(payload.pinned) &&
+      payload.pinned.every(
+        (pin) =>
+          pin &&
+          typeof pin === "object" &&
+          isValidUuid(String(pin.chatId || "")) &&
+          Number.isInteger(pin.position),
+      )
+    );
+  }
+
+  if (type === "saved_gif_added") {
+    return (
+      Boolean(payload.gif) &&
+      typeof payload.gif === "object" &&
+      isValidUuid(String(payload.gif.id || "")) &&
+      Array.isArray(payload.evicted) &&
+      payload.evicted.every(
+        (entry) => entry && typeof entry === "object" && isValidUuid(String(entry.id || "")),
+      )
+    );
+  }
+
+  if (type === "saved_gif_removed") {
+    return isValidUuid(String(payload.gifId || ""));
+  }
+
+  const uuidFields = ["chatId", "messageId", "userId", "actorId", "pinnedBy", "replyToMessageId", "sourceChatId", "sourceUserId"];
   for (const field of uuidFields) {
     if (payload[field] !== undefined && payload[field] !== null && !isValidUuid(String(payload[field]))) {
       return false;
@@ -29,7 +71,7 @@ function hasValidUuidReferences(payload = {}) {
     return false;
   }
 
-  if (["chat_message", "chat_message_updated", "chat_message_deleted", "chat_read", "chat_typing", "chat_updated", "chat_deleted"].includes(type) && !isValidUuid(String(payload.chatId || ""))) {
+  if (["chat_message", "chat_message_updated", "chat_message_deleted", "message_reactions", "message_pinned", "message_unpinned", "messages_unpinned_all", "chat_read", "chat_typing", "chat_updated", "chat_deleted"].includes(type) && !isValidUuid(String(payload.chatId || ""))) {
     return false;
   }
   if (type === "presence_update" && !isValidUuid(String(payload.userId || ""))) {
@@ -40,6 +82,21 @@ function hasValidUuidReferences(payload = {}) {
   }
 
   return true;
+}
+
+// A message that was just sent has no reactions yet. Every `chat_message`
+// event says so explicitly, whoever emits it (people, system messages,
+// mirrored channel posts), so clients can rely on the field being there.
+function withMessageDefaults(payload) {
+  if (
+    payload &&
+    typeof payload === "object" &&
+    payload.type === "chat_message" &&
+    payload.reactions === undefined
+  ) {
+    return { ...payload, reactions: [] };
+  }
+  return payload;
 }
 
 export function createSseHub({ listChatMembers }) {
@@ -102,7 +159,8 @@ export function createSseHub({ listChatMembers }) {
     }
   }
 
-  function emitSseEvent(username, payload) {
+  function emitSseEvent(username, rawPayload) {
+    const payload = withMessageDefaults(rawPayload);
     if (!hasValidUuidReferences(payload)) return;
     const key = String(username || "").toLowerCase();
     if (!key) return;
@@ -119,7 +177,9 @@ export function createSseHub({ listChatMembers }) {
     });
   }
 
-  function emitChatEvent(chatId, payload) {
+  function emitChatEvent(chatId, rawPayload) {
+    if (USER_ONLY_EVENT_TYPES.has(String(rawPayload?.type || ""))) return;
+    const payload = withMessageDefaults(rawPayload);
     if (!isValidUuid(String(chatId || "")) || !hasValidUuidReferences(payload)) return;
     const rawMembers = getCachedMembers(chatId);
     const processMembers = (members) => {

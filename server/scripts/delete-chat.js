@@ -49,6 +49,14 @@ async function deleteChatsByIds(dbApi, chatIds) {
     for (const chunk of chunkArray(chatIds, 500)) {
       const chunkPlaceholders = chunk.map(() => '?').join(', ')
       await dbApi.run(
+        `DELETE FROM message_reactions WHERE message_id IN (
+          SELECT id FROM chat_messages WHERE chat_id IN (${chunkPlaceholders})
+        )`,
+        chunk,
+      )
+      await dbApi.run(`DELETE FROM chat_pinned_messages WHERE chat_id IN (${chunkPlaceholders})`, chunk)
+      await dbApi.run(`DELETE FROM chat_pins WHERE chat_id IN (${chunkPlaceholders})`, chunk)
+      await dbApi.run(
         `DELETE FROM chat_message_files WHERE message_id IN (
           SELECT id FROM chat_messages WHERE chat_id IN (${chunkPlaceholders})
         )`,

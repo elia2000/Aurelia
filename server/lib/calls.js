@@ -90,8 +90,16 @@ export function createCallRegistry({
       state: CALL_STATES.RINGING,
       createdAt: ts,
       answeredAt: null,
+      // When the first participant reported that the media connected.
+      connectedAt: null,
       endedAt: null,
       endReason: null,
+      // What state the call was in when it ended (ringing, connecting or
+      // active): the history entry in the chat is made from it.
+      endedFrom: null,
+      // How long the device that ended the call says it lasted, already
+      // checked against the time the server saw between answer and end.
+      reportedDurationMs: null,
       callerDeviceId: callerDeviceId || null,
       calleeDeviceId: null,
       invitePayload,
@@ -159,16 +167,38 @@ export function createCallRegistry({
     if (!auth) throw new CallError("forbidden", "Not your call.", 403);
     if (auth.call.state === CALL_STATES.CONNECTING) {
       auth.call.state = CALL_STATES.ACTIVE;
+      auth.call.connectedAt = now();
     }
     return auth.call;
   }
 
-  function end(callId, reason = "hangup") {
+  /**
+   * A duration reported by a device is only a hint: it must be a plain finite
+   * number of milliseconds, it only means something for a call somebody
+   * answered, and it can never be longer than the time the server itself saw
+   * between the answer and the end.
+   */
+  function sanitizeReportedDurationMs(value, call, endedAt) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
+    if (call.answeredAt == null) return null;
+    const window = Math.max(0, endedAt - call.answeredAt);
+    return Math.min(Math.round(value), window);
+  }
+
+  /**
+   * Ends a call. Returns the call the first time and null every time after,
+   * so whoever gets it back is the one who may report the end (and write the
+   * history entry): two people hanging up together, or a person and the expiry
+   * sweeper, cannot both get it.
+   */
+  function end(callId, reason = "hangup", { reportedDurationMs = null } = {}) {
     const call = calls.get(callId);
     if (!call || call.state === CALL_STATES.ENDED) return null;
+    call.endedFrom = call.state;
     call.state = CALL_STATES.ENDED;
     call.endedAt = now();
     call.endReason = reason;
+    call.reportedDurationMs = sanitizeReportedDurationMs(reportedDurationMs, call, call.endedAt);
     if (activeByUserId.get(call.caller.id) === callId) {
       activeByUserId.delete(call.caller.id);
     }
@@ -185,8 +215,10 @@ export function createCallRegistry({
    * - anyone hanging up a running call      -> "hangup"
    * - a device whose media never connected  -> "failed" or "connect_failed"
    *   (the latter lets the other side say it was the connection)
+   *
+   * `durationMs` is how long the device measured the call (optional, a hint).
    */
-  function endBy(callId, userId, requestedReason = null) {
+  function endBy(callId, userId, requestedReason = null, { durationMs = null } = {}) {
     const auth = authorize(callId, userId);
     if (!auth) throw new CallError("forbidden", "Not your call.", 403);
     const { call, role } = auth;
@@ -197,7 +229,7 @@ export function createCallRegistry({
     } else if (!["hangup", "failed", "connect_failed"].includes(reason)) {
       reason = "hangup";
     }
-    return end(callId, reason);
+    return end(callId, reason, { reportedDurationMs: durationMs });
   }
 
   /**

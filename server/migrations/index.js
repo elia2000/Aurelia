@@ -41,6 +41,11 @@ import { migration040QueueMessageIdText } from "./040-queue-message-id-text.js";
 import { migration041AdminAuditLogs } from "./041-admin-audit-logs.js";
 import { migration042E2eeDevices } from "./042-e2ee-devices.js";
 import { migration043MessageE2eeEnvelope } from "./043-message-e2ee-envelope.js";
+import { migration044MessageReactions } from "./044-message-reactions.js";
+import { migration045MessagePins } from "./045-message-pins.js";
+import { migration046ChatPins } from "./046-chat-pins.js";
+import { migration047CallMessages } from "./047-call-messages.js";
+import { migration048SavedGifs } from "./048-saved-gifs.js";
 
 export const migrations = [
   migration001InitialSchema,
@@ -86,4 +91,9 @@ export const migrations = [
   migration041AdminAuditLogs,
   migration042E2eeDevices,
   migration043MessageE2eeEnvelope,
+  migration044MessageReactions,
+  migration045MessagePins,
+  migration046ChatPins,
+  migration047CallMessages,
+  migration048SavedGifs,
 ];

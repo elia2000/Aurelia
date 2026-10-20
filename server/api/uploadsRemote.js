@@ -9,6 +9,9 @@ import { resolveWebhookCallbackUrl } from "../lib/webhookUrl.js";
 import { resolveThumbUrl } from "../lib/thumbUrl.js";
 import { isSafeStorageKey } from "../lib/storageKeys.js";
 import { readEnvBool } from "../settings/env.js";
+import { animationFlags } from "../lib/animatedImage.js";
+import { isCallMessage } from "../lib/callMessages.js";
+import { isServiceMessageBody } from "../lib/serviceMessages.js";
 
 // The session row names the person as `id` (the users row it was joined with).
 const sessionUserId = (session) => session?.id ?? session?.userId ?? null;
@@ -270,15 +273,24 @@ export function registerRemoteUploadRoutes(app, deps) {
       }
     }
 
-    // A file can only be attached to a message the caller wrote.
+    // A file can only be attached to a message the caller wrote, and never to
+    // an entry the server writes itself (call history, "X pinned a message"):
+    // those are not messages a person composes, so even their author may not
+    // hang files on them.
     if (messageId && typeof adminGetRow === "function") {
       const rawOwner = callAdminGetRow(
-        dbKnex("chat_messages").select("user_id").where("id", String(messageId)).first(),
+        dbKnex("chat_messages")
+          .select("user_id", "call_id", "body")
+          .where("id", String(messageId))
+          .first(),
       );
       const owner = rawOwner && typeof rawOwner.then === "function" ? await rawOwner : rawOwner;
       const callerId = sessionUserId(session);
       if (owner?.user_id && callerId && owner.user_id !== callerId) {
         return res.status(403).json({ error: "Access denied." });
+      }
+      if (owner && (isCallMessage(owner) || isServiceMessageBody(owner.body))) {
+        return res.status(400).json({ error: "This message cannot have files attached." });
       }
     }
 
@@ -789,6 +801,7 @@ export function registerRemoteUploadRoutes(app, deps) {
               thumbStorageKey: thumbKey || null,
               thumbUrl: thumbUrl || null,
               url: fileUrl,
+              ...animationFlags(f),
             };
           }),
         );

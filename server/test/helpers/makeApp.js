@@ -466,6 +466,54 @@ export function makeApp(overrides = {}) {
     userHasMessageInChat: () => false,
     listE2eeDevicesByUserIds: e2eeStore.listE2eeDevicesByUserIds,
     setMessageE2eeEnvelope: () => {},
+    // ── Message reactions ────────────────────────────────────────────────────
+    isMessageHiddenForUser: () => false,
+    toggleMessageReaction: () => ({ added: null, removed: [] }),
+    listMessageReactionSummaries: () => [],
+    listMessageReactionUsers: () => [],
+    pinMessage: () => ({ status: "pinned", pinnedAt: new Date().toISOString() }),
+    unpinMessage: () => 0,
+    unpinAllMessages: () => 0,
+    listPinnedMessages: () => [],
+    listPinnedMessageIds: () => [],
+    // ── Pinned chats ─────────────────────────────────────────────────────────
+    pinChat: () => ({ status: "pinned", position: 0 }),
+    removeChatPins: () => 0,
+    reorderChatPins: () => ({ status: "ok", changed: false }),
+    listChatPins: () => [],
+    listChatPinsForUsers: () => [],
+    listChatPinHolders: () => [],
+    // ── Saved GIFs ───────────────────────────────────────────────────────────
+    listSavedGifs: () => [],
+    countSavedGifs: () => 0,
+    findSavedGif: () => null,
+    findSavedGifBySource: () => null,
+    findSavedGifByHash: () => null,
+    insertSavedGif: () => {
+      throw new Error("insertSavedGif is not stubbed");
+    },
+    deleteSavedGif: () => null,
+    listSavedGifsForUsers: () => [],
+    listAllSavedGifs: () => [],
+    savedGifStorage: {
+      writeGif: async () => ({ storageDriver: "local" }),
+      readGif: async () => null,
+      removeGifs: async () => ({ removed: 0, failed: 0 }),
+      readMessageFile: async () => null,
+      writeMessageCopy: async () => {
+        throw new Error("savedGifStorage is not stubbed");
+      },
+      removeMessageCopy: async () => {},
+      // No network in tests: a file uploaded straight to a bucket is never inspected.
+      detectStoredAnimation: async () => null,
+    },
+    // ── Call history entries ─────────────────────────────────────────────────
+    createCallMessage: (args) => ({
+      id: generateUuid(),
+      created: true,
+      createdAt: new Date().toISOString().replace("T", " ").slice(0, 19),
+      callId: args?.callId ?? null,
+    }),
     callRegistry: createCallRegistry(),
     callsConfig: () => ({
       enabled: true,

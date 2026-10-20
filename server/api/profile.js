@@ -1,5 +1,6 @@
 import { ownsPendingAvatarUpload } from "../lib/pendingAvatar.js";
 import path from "node:path";
+import { removeSavedGifFilesQuietly } from "../lib/savedGifCleanup.js";
 
 function registerProfileRoutes(app, deps) {
   const {
@@ -443,10 +444,12 @@ function registerProfileRoutes(app, deps) {
     }
 
     const rawDel = deleteUserById(user.id);
-    const { storedNames } = rawDel && typeof rawDel.then === "function" ? await rawDel : rawDel;
+    const { storedNames, savedGifs } = (rawDel && typeof rawDel.then === "function" ? await rawDel : rawDel) || {};
     if (Array.isArray(storedNames) && storedNames.length) {
       removeStoredFileNames(storedNames);
     }
+    // Their private GIF collection goes with them, files included.
+    await removeSavedGifFilesQuietly(deps.savedGifStorage, savedGifs);
 
     clearSessionCookie(req, res);
     return res.json({ ok: true });

@@ -10,6 +10,27 @@ import {
   parseVideoNoteEnvelope,
   safeParseStoredEnvelope,
 } from "../lib/e2eeEnvelope.js";
+import { summarizeReactionRows } from "../lib/reactions.js";
+import { isServiceMessageBody, parsePinServiceBody } from "../lib/serviceMessages.js";
+import { emitUnpinnedMessages } from "../lib/pins.js";
+import { isCallMessage, serializeCall } from "../lib/callMessages.js";
+import { createThrottle } from "../lib/throttle.js";
+import {
+  ANIMATION_REQUEST_SCAN_BUDGET_BYTES,
+  animationFlags,
+  detectAnimatedFile,
+  isAnimationCandidate,
+} from "../lib/animatedImage.js";
+import { createSavedGifService } from "../lib/services/savedGifService.js";
+import { createMessageForwardService } from "../lib/services/messageForwardService.js";
+import { createMessageDeleteService } from "../lib/services/messageDeleteService.js";
+import {
+  FORWARD_MAX_CREATED_MESSAGES,
+  FORWARD_MAX_TARGET_CHATS,
+  commonFailureStatus,
+  parseMessageIdList,
+} from "../lib/batchMessages.js";
+import { isValidUuid } from "../lib/uuidUtils.js";
 
 function registerMessageRoutes(app, deps) {
   const {
@@ -18,7 +39,6 @@ function registerMessageRoutes(app, deps) {
     cleanupMissingMessageFiles,
     computeExpiryIso,
     crypto,
-    createMessage,
     createOrReuseMessage,
     createMessageFiles,
     editMessage,
@@ -32,12 +52,9 @@ function registerMessageRoutes(app, deps) {
     findChatById,
     findMessageIdByClientRequestId,
     findMessageById,
-    findUserById,
     findUserByUsername,
     getMessages,
     getFirstUnreadMessage,
-    hideMessageForEveryone,
-    hideMessageForUser,
     getMessageReadCounts,
     getMessageAuthors,
     getMessageReadByUser,
@@ -66,7 +83,6 @@ function registerMessageRoutes(app, deps) {
     setMessageExpiresAt,
     setMessageForwardOrigin,
     storageEncryption,
-    unhideChat,
     uploadFiles,
     uploadRootDir,
     enqueueVideoTranscodeJob,
@@ -74,6 +90,8 @@ function registerMessageRoutes(app, deps) {
     markMessageRead,
     findE2eeDevice,
     setMessageE2eeEnvelope,
+    listMessageReactionSummaries,
+    listPinnedMessageIds,
   } = deps;
 
   const safeBasename = (p) => {
@@ -133,6 +151,10 @@ function registerMessageRoutes(app, deps) {
   const resolveMaybePromise = async (value) =>
     value && typeof value.then === "function" ? await value : value;
 
+  // Sending a saved GIF copies up to 20 MB, so it is limited per person.
+  const savedGifService = createSavedGifService(deps);
+  const savedGifSendThrottle = createThrottle({ windowMs: 60 * 1000, max: 30 });
+
   const computeTextExpiryIso = (createdAt) => {
     const textRetentionDays = Number(getSetting("MESSAGE_TEXT_RETENTION") || 0);
     if (textRetentionDays <= 0) return null;
@@ -143,6 +165,15 @@ function registerMessageRoutes(app, deps) {
       baseMs + textRetentionDays * 24 * 60 * 60 * 1000,
     ).toISOString();
   };
+
+  // Forwarding and deleting, one message or many: the same code judges and
+  // handles each message whichever way it was asked for (lib/services).
+  const forwardService = createMessageForwardService(deps, { computeTextExpiryIso });
+  const deleteService = createMessageDeleteService(deps);
+  // Limits are per signed-in person, one token per request however many
+  // messages it names (see lib/throttle.js).
+  const forwardThrottle = createThrottle({ windowMs: 60 * 1000, max: 30 });
+  const deleteThrottle = createThrottle({ windowMs: 60 * 1000, max: 120 });
 
   const canUserPostInChat = async (chatId, userId, chat = null) => {
     const rawChat = chat || findChatById(chatId);
@@ -183,90 +214,6 @@ function registerMessageRoutes(app, deps) {
   const isMessageAuthoredByUser = (message, userId) =>
     String(message?.user_id || "") === String(userId) &&
     !isRemoteChannelMessage(message);
-
-  const normalizeForwardOriginAvatarUrl = (userId, avatarUrl) => {
-    const normalized = ensureAvatarExists(userId, avatarUrl);
-    return String(normalized || "").trim() || null;
-  };
-
-  const deriveForwardOrigin = async (sourceMessage, sourceChat) => {
-    if (String(sourceChat?.type || "").toLowerCase() === "channel") {
-      const label =
-        String(sourceChat?.name || "").trim() ||
-        String(sourceChat?.group_username || "").trim() ||
-        "Channel";
-      return {
-        sourceChatId: sourceChat?.id || null,
-        label,
-        sourceUserId: null,
-        sourceUsername: null,
-        sourceAvatarUrl: null,
-        sourceColor: null,
-      };
-    }
-
-    const sourceUserRaw = findUserById(sourceMessage?.user_id);
-    const sourceUser = sourceUserRaw && typeof sourceUserRaw.then === "function"
-      ? await sourceUserRaw
-      : sourceUserRaw;
-    const sourceUserId = sourceUser?.id || sourceMessage?.user_id || null;
-    const sourceUsername = String(sourceUser?.username || "").trim() || null;
-    const label =
-      String(sourceUser?.nickname || "").trim() ||
-      String(sourceUser?.username || "").trim() ||
-      "Deleted user";
-
-    return {
-      sourceChatId: null,
-      label,
-      sourceUserId,
-      sourceUsername,
-      sourceAvatarUrl: sourceUser
-        ? normalizeForwardOriginAvatarUrl(sourceUser.id, sourceUser.avatar_url)
-        : null,
-      sourceColor: String(sourceUser?.color || "").trim() || null,
-    };
-  };
-
-  const reuseMessageFilesForForward = async (sourceMessageId, targetMessageId) => {
-    const rawSourceFiles = listMessageFilesByMessageIds([sourceMessageId]);
-    const sourceFiles = rawSourceFiles && typeof rawSourceFiles.then === "function"
-      ? await rawSourceFiles
-      : rawSourceFiles;
-    if (!sourceFiles?.length) return [];
-
-    const reusedFiles = sourceFiles.flatMap((file) => {
-      const storedName = safeBasename(String(file?.stored_name || "").trim());
-      if (!storedName) return [];
-      const sourcePath = path.join(uploadRootDir, storedName);
-      if (!fs.existsSync(sourcePath)) return [];
-
-      return [
-        {
-          kind: file.kind,
-          originalName: file.original_name,
-          storedName,
-          mimeType: file.mime_type,
-          sizeBytes: Number(file.size_bytes || 0),
-          widthPx: Number.isFinite(Number(file.width_px)) ? Number(file.width_px) : null,
-          heightPx: Number.isFinite(Number(file.height_px)) ? Number(file.height_px) : null,
-          durationSeconds: Number.isFinite(Number(file.duration_seconds))
-            ? Number(file.duration_seconds)
-            : null,
-          expiresAt: file.expires_at || null,
-        },
-      ];
-    });
-
-    if (reusedFiles.length) {
-      const rawCreatedFiles = createMessageFiles(targetMessageId, reusedFiles);
-      if (rawCreatedFiles && typeof rawCreatedFiles.then === "function") {
-        await rawCreatedFiles;
-      }
-    }
-
-    return reusedFiles;
-  };
 
   app.get("/api/messages", async (req, res) => {
     const session = await requireSession(req, res);
@@ -326,6 +273,8 @@ function registerMessageRoutes(app, deps) {
               messageIds,
             });
           });
+          // Pins go with their messages.
+          emitUnpinnedMessages(emitChatEvent, cleanup.unpinned);
         }
       } catch (_) {
         // best-effort background cleanup — never crash the server
@@ -362,6 +311,36 @@ function registerMessageRoutes(app, deps) {
     const readByMe = new Set(
       readRows.map((row) => row?.message_id).filter(Boolean),
     );
+    // Reactions for the whole page in one query. They are secondary to the
+    // messages themselves, so a failure here must not hide the conversation.
+    let reactionsByMessageId = new Map();
+    if (typeof listMessageReactionSummaries === "function" && messageIds.length) {
+      try {
+        const rawReactionRows = listMessageReactionSummaries(messageIds, user.id);
+        reactionsByMessageId = summarizeReactionRows(
+          rawReactionRows && typeof rawReactionRows.then === "function"
+            ? await rawReactionRows
+            : rawReactionRows,
+        );
+      } catch (error) {
+        console.error("GET /api/messages reactions ERROR:", error);
+      }
+    }
+    // Which messages of the page are pinned: one query for the whole page. A
+    // failure here must not hide the conversation either.
+    let pinnedMessageIds = new Set();
+    if (typeof listPinnedMessageIds === "function" && messageIds.length) {
+      try {
+        const rawPinnedRows = listPinnedMessageIds(chatId, messageIds);
+        const pinnedRows =
+          (rawPinnedRows && typeof rawPinnedRows.then === "function"
+            ? await rawPinnedRows
+            : rawPinnedRows) || [];
+        pinnedMessageIds = new Set(pinnedRows.map((row) => row?.message_id).filter(Boolean));
+      } catch (error) {
+        console.error("GET /api/messages pins ERROR:", error);
+      }
+    }
     const rawFiles = listMessageFilesByMessageIds(messageIds);
     const resolvedFiles = (rawFiles && typeof rawFiles.then === "function" ? await rawFiles : rawFiles) || [];
     const files = await hydrateMissingVideoMetadata(resolvedFiles);
@@ -414,6 +393,7 @@ function registerMessageRoutes(app, deps) {
         thumbStorageKey: thumbKey || null,
         thumbUrl: thumbUrl || null,
         url: fileUrl,
+        ...animationFlags(file),
       });
     }
 
@@ -425,13 +405,34 @@ function registerMessageRoutes(app, deps) {
           isMessageAuthoredByUser(message, user.id) ||
           readByMe.has(message.id),
         files: filesByMessageId[message.id] || [],
+        reactions: reactionsByMessageId.get(message.id) || [],
+        pinned: pinnedMessageIds.has(message.id),
+        // "X pinned a message" entries carry their structured form; every
+        // other message (and every other service message) has none.
+        service: parsePinServiceBody(message.body, message.user_id),
+        // Call history entries ("Outgoing call 0:23", "Missed call") are
+        // messages with an empty body and a structured call; `messageType`
+        // is also on realtime events, where `type` is the event's own name.
+        call: serializeCall(message),
+        messageType: isCallMessage(message) ? "call" : "text",
+        ...(isCallMessage(message) ? { type: "call" } : {}),
         e2ee: safeParseStoredEnvelope(message.e2ee_envelope),
         // The sender of an encrypted message signed the chat it belongs to;
         // the recipient must know it to verify (message rows carry no chat id).
         ...(message.e2ee_envelope ? { chat_id: chatId } : {}),
         expiresAt: null,
       }))
-      .map(({ e2ee_envelope: _envelope, ...message }) => message)
+      .map(
+        ({
+          e2ee_envelope: _envelope,
+          // The call is sent structured (`call`), not as raw columns.
+          call_id: _callId,
+          call_kind: _callKind,
+          call_outcome: _callOutcome,
+          call_duration_sec: _callDurationSec,
+          ...message
+        }) => message,
+      )
       .map((message) => ({
         ...message,
         expiresAt:
@@ -810,6 +811,10 @@ function registerMessageRoutes(app, deps) {
             error: `Message must be at most ${maxMessageChars} characters.`,
           });
         }
+        if (isServiceMessageBody(body)) {
+          removeUploadedFiles(uploadedFiles);
+          return res.status(400).json({ error: "Invalid message body." });
+        }
 
         let e2eeEnvelope = null;
         let e2eeEnvelopeJson = null;
@@ -924,7 +929,7 @@ function registerMessageRoutes(app, deps) {
         }
         if (replyToMessageId) {
           const replyTarget = await resolveMaybePromise(findMessageById(replyToMessageId));
-          if (!replyTarget || replyTarget.chat_id !== chatId) {
+          if (!replyTarget || replyTarget.chat_id !== chatId || isCallMessage(replyTarget)) {
             removeUploadedFiles(uploadedFiles);
             return res
               .status(400)
@@ -945,6 +950,14 @@ function registerMessageRoutes(app, deps) {
             return res.status(403).json({
               error: "Only the message author can edit this message.",
             });
+          }
+          // Call history and "X pinned a message" entries are server records:
+          // like POST /api/messages/edit, this route may not change them (an
+          // empty caption would leave the service body in place and only add
+          // files and clear the expiry).
+          if (isCallMessage(editTarget) || isServiceMessageBody(editTarget.body)) {
+            removeUploadedFiles(uploadedFiles);
+            return res.status(400).json({ error: "This message cannot be edited." });
           }
         }
 
@@ -1228,6 +1241,48 @@ function registerMessageRoutes(app, deps) {
           ...normalizedPresignedFiles,
         ];
 
+        // Is a picture an animated one (GIF, animated WebP, APNG)? The server
+        // decides, from the file's own bytes: nothing the client says counts.
+        // Photos, videos and documents are not even opened; a file that cannot
+        // be read for the check is simply not marked, and the message goes out.
+        // The file itself is never re-encoded, so the animation stays intact.
+        // One file at a time, so the memory used is that of one prefix.
+        //
+        // Objects in a bucket are whatever their sender put there, so what the
+        // check may read from it is limited per request: the same object named
+        // twice is looked at once, and all of them together spend one budget.
+        const bucketAnimationByKey = new Map();
+        const bucketScanBudget = { remaining: ANIMATION_REQUEST_SCAN_BUDGET_BYTES };
+        for (let index = 0; index < normalizedFiles.length; index += 1) {
+          const file = normalizedFiles[index];
+          file.isAnimated = false;
+          if (!isAnimationCandidate({ mimeType: file.mimeType, name: file.originalName })) continue;
+          try {
+            let animated = null;
+            if (index < uploadedFiles.length) {
+              animated = await detectAnimatedFile({ fs, filePath: uploadedFiles[index].path });
+            } else if (typeof deps.savedGifStorage?.detectStoredAnimation === "function") {
+              // Uploaded straight to the bucket: only the start of it is read.
+              const objectKey = `${file.storageDriver}:${file.storageKey}`;
+              if (bucketAnimationByKey.has(objectKey)) {
+                animated = bucketAnimationByKey.get(objectKey);
+              } else {
+                animated = await deps.savedGifStorage.detectStoredAnimation({
+                  storageKey: file.storageKey,
+                  storageDriver: file.storageDriver,
+                  mimeType: file.mimeType,
+                  name: file.originalName,
+                  budget: bucketScanBudget,
+                });
+                bucketAnimationByKey.set(objectKey, animated);
+              }
+            }
+            file.isAnimated = animated === true;
+          } catch {
+            file.isAnimated = false;
+          }
+        }
+
         const storageProcessingMode = String(
           deps.storageProcessingMode || process.env.STORAGE_PROCESSING_MODE || "auto",
         ).toLowerCase();
@@ -1318,6 +1373,10 @@ function registerMessageRoutes(app, deps) {
             String(file.mimeType || "").toLowerCase().startsWith("audio/"),
           ).length;
           const docCount = Math.max(0, files.length - videoCount - imageCount - audioCount);
+          const gifCount = files.filter((file) => file.isAnimated).length;
+          if (gifCount > 0 && gifCount === files.length) {
+            return gifCount === 1 ? "Sent a GIF" : `Sent ${gifCount} GIFs`;
+          }
           if (files.length === 1) {
             if (videoCount === 1) return "Sent a video";
             if (imageCount === 1) return "Sent a photo";
@@ -1604,6 +1663,7 @@ function registerMessageRoutes(app, deps) {
               thumbStorageKey: thumbKey,
               thumbUrl: resolvedThumbUrl,
               url: resolvedUrl,
+              ...animationFlags(file),
             };
           }),
         );
@@ -1731,22 +1791,30 @@ function registerMessageRoutes(app, deps) {
     },
   );
 
-  app.post("/api/messages", validateUuidBody([{ field: "chatId", required: true }, { field: "replyToMessageId", required: false }]), async (req, res) => {
+  app.post("/api/messages", validateUuidBody([{ field: "chatId", required: true }, { field: "replyToMessageId", required: false }, { field: "savedGifId", required: false }]), async (req, res) => {
     const session = await requireSession(req, res);
     if (!session) return;
 
-    const { chatId, username, body, replyToMessageId } = req.body || {};
+    const { chatId, username, body, replyToMessageId, savedGifId } = req.body || {};
     const clientRequestIdRaw = String(req.body?.clientRequestId || "").trim();
     const clientRequestId = clientRequestIdRaw
       ? clientRequestIdRaw.slice(0, 120)
       : null;
-    if (!chatId || !username || !body) {
+    // A saved GIF from the person's own collection, sent as a picture; the
+    // text, if any, is its caption.
+    const hasSavedGif = savedGifId !== undefined && savedGifId !== null && savedGifId !== "";
+    if (hasSavedGif && (typeof savedGifId !== "string" || savedGifId !== savedGifId.trim())) {
+      return res.status(400).json({ error: "Field 'savedGifId' is not a valid UUID." });
+    }
+    if (!chatId || !username || (!body && !hasSavedGif)) {
       return res.status(400).json({
         error: "Chat, username, and message body are required.",
       });
     }
     const bodyText = String(body || "");
-    if (bodyText === "[object Object]") {
+    if (bodyText === "[object Object]" || isServiceMessageBody(bodyText)) {
+      // Service entries ("X joined", "X pinned a message") are written by the
+      // server only; a person cannot make their own look like one.
       return res.status(400).json({
         error: "Invalid message body.",
       });
@@ -1790,10 +1858,34 @@ function registerMessageRoutes(app, deps) {
     if (replyToMessageId) {
       const rawReplyTarget = findMessageById(replyToMessageId);
       const replyTarget = rawReplyTarget && typeof rawReplyTarget.then === "function" ? await rawReplyTarget : rawReplyTarget;
-      if (!replyTarget || replyTarget.chat_id !== chatId) {
+      // A call history entry has no text to quote.
+      if (!replyTarget || replyTarget.chat_id !== chatId || isCallMessage(replyTarget)) {
         return res
           .status(400)
           .json({ error: "Reply target is not available in this chat." });
+      }
+    }
+
+    if (hasSavedGif) {
+      if (Number(user.banned)) {
+        return res.status(403).json({ error: "Account is banned." });
+      }
+      if (!savedGifSendThrottle.take(String(user.id))) {
+        return res.status(429).json({ error: "Too many GIFs sent. Please slow down." });
+      }
+      try {
+        const sent = await savedGifService.sendAsMessage({
+          user,
+          chat,
+          savedGifId,
+          caption: bodyText,
+          replyToMessageId,
+          clientRequestId,
+        });
+        return res.status(sent.status).json(sent.body);
+      } catch (error) {
+        console.error("POST /api/messages (saved GIF) ERROR:", error);
+        return res.status(500).json({ error: "Unable to send the GIF." });
       }
     }
 
@@ -1867,7 +1959,7 @@ function registerMessageRoutes(app, deps) {
     if (!requireSessionUsernameMatch(res, session, username)) return;
 
     const bodyText = String(body || "");
-    if (bodyText === "[object Object]") {
+    if (bodyText === "[object Object]" || isServiceMessageBody(bodyText)) {
       return res.status(400).json({ error: "Invalid message body." });
     }
     const trimmedBody = bodyText.trim();
@@ -1911,6 +2003,9 @@ function registerMessageRoutes(app, deps) {
     if (!isMessageAuthoredByUser(message, user.id)) {
       return res.status(403).json({ error: "Only the author can edit this message." });
     }
+    if (isServiceMessageBody(message.body) || isCallMessage(message)) {
+      return res.status(400).json({ error: "This message cannot be edited." });
+    }
 
     const editRes = editMessage(messageId, trimmedBody);
     if (editRes && typeof editRes.then === "function") await editRes;
@@ -1927,221 +2022,213 @@ function registerMessageRoutes(app, deps) {
     res.json({ ok: true, id: messageId });
   });
 
-  app.post("/api/messages/delete", validateUuidBody([{ field: "chatId", required: true }, { field: "messageId", required: true }]), async (req, res) => {
+  // ── Delete and forward: one message or many ──────────────────────────────
+  //
+  // A multi-select request names `messageIds` / `sourceMessageIds` (1 to
+  // BATCH_MESSAGE_LIMIT); the older single request names one `messageId` /
+  // `sourceMessageId` and keeps its answers exactly. Both are handled by the
+  // services in lib/services, so every message gets the same checks.
+
+  const hasValue = (value) => value !== undefined && value !== null && value !== "";
+  const publicFailure = ({ sourceMessageId, targetChatId, code, error }) => ({
+    sourceMessageId,
+    ...(targetChatId ? { targetChatId } : {}),
+    code,
+    error,
+  });
+
+  const validateDeleteChatOnly = validateUuidBody([{ field: "chatId", required: true }]);
+  const validateDeleteSingle = validateUuidBody([
+    { field: "chatId", required: true },
+    { field: "messageId", required: true },
+  ]);
+  const validateDeleteRequest = (req, res, next) =>
+    (hasValue(req.body?.messageIds) ? validateDeleteChatOnly : validateDeleteSingle)(req, res, next);
+
+  app.post("/api/messages/delete", validateDeleteRequest, async (req, res) => {
     const session = await requireSession(req, res);
     if (!session) return;
 
-    const { chatId, username, messageId, scope } = req.body || {};
-    if (!chatId || !username || !messageId) {
+    const { chatId, username, messageId, messageIds, scope } = req.body || {};
+    const isBatch = hasValue(messageIds);
+    if (!chatId || !username || (!isBatch && !messageId)) {
       return res.status(400).json({
-        error: "Chat, username, and message id are required.",
+        error: isBatch
+          ? "Chat, username, and message ids are required."
+          : "Chat, username, and message id are required.",
+      });
+    }
+    if (isBatch && hasValue(messageId)) {
+      return res.status(400).json({
+        error: "Send either 'messageId' or 'messageIds', not both.",
       });
     }
     if (!requireSessionUsernameMatch(res, session, username)) return;
 
-    const rawUser = findUserByUsername(String(username || "").toLowerCase());
-    const user = rawUser && typeof rawUser.then === "function" ? await rawUser : rawUser;
-    if (!user) {
-      return res.status(404).json({ error: "User not found." });
-    }
-    const rawIsMem = isMember(chatId, user.id);
-    const memberCheck = rawIsMem && typeof rawIsMem.then === "function" ? await rawIsMem : rawIsMem;
-    if (!memberCheck) {
-      return res.status(403).json({ error: "Not a member of this chat." });
-    }
-    const rawMessage = findMessageById(messageId);
-    const message = rawMessage && typeof rawMessage.then === "function" ? await rawMessage : rawMessage;
-    if (!message || message.chat_id !== chatId) {
-      return res.status(404).json({ error: "Message not found." });
+    let ids = [messageId];
+    if (isBatch) {
+      const parsed = parseMessageIdList(messageIds, "messageIds");
+      if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+      ids = parsed.ids;
     }
 
-    const deleteScope = String(scope || "").toLowerCase() === "everyone"
-      ? "everyone"
-      : "self";
+    try {
+      const rawUser = findUserByUsername(String(username || "").toLowerCase());
+      const user = rawUser && typeof rawUser.then === "function" ? await rawUser : rawUser;
+      if (!user) {
+        return res.status(404).json({ error: "User not found." });
+      }
+      // Banning ends a person's sessions, but a request already in flight must
+      // not get through. (Postgres returns BIGINT as a string.)
+      if (Number(user.banned)) {
+        return res.status(403).json({ error: "Account is banned." });
+      }
+      if (!deleteThrottle.take(String(user.id))) {
+        return res.status(429).json({ error: "Too many delete requests. Please slow down." });
+      }
 
-    if (deleteScope === "everyone") {
-      const rawChat = findChatById(chatId);
-      const chat = rawChat && typeof rawChat.then === "function" ? await rawChat : rawChat;
-      if (!chat) {
-        return res.status(404).json({ error: "Chat not found." });
-      }
-      const rawRole = getChatMemberRole(chatId, user.id);
-      const role = String(rawRole && typeof rawRole.then === "function" ? await rawRole : rawRole).toLowerCase();
-      const rawCanPost = canUserPostInChat(chatId, user.id, chat);
-      const canPost = rawCanPost && typeof rawCanPost.then === "function" ? await rawCanPost : rawCanPost;
-      const canDeleteForEveryone =
-        canPost &&
-        (message.user_id === user.id || role === "owner");
-      if (!canDeleteForEveryone) {
-        return res.status(403).json({
-          error: "You cannot delete this message for everyone.",
-        });
-      }
-      const h = hideMessageForEveryone(message.id);
-      if (h && typeof h.then === "function") await h;
-      emitChatEvent(chatId, {
-        type: "chat_message_deleted",
+      const outcome = await deleteService.deleteMessages({
+        user,
         chatId,
-        messageIds: [message.id],
+        messageIds: ids,
+        scope,
       });
-      return res.json({ ok: true, scope: "everyone", id: message.id });
-    }
+      if (!outcome.ok) {
+        return res.status(outcome.status).json({ error: outcome.error });
+      }
 
-    const hSelf = hideMessageForUser(message.id, user.id);
-    if (hSelf && typeof hSelf.then === "function") await hSelf;
-    return res.json({ ok: true, scope: "self", id: message.id });
+      if (!isBatch) {
+        const [result] = outcome.results;
+        if (!result.ok) {
+          // The one answer the single request has always carried a code for.
+          return res.status(result.status).json({
+            error: result.error,
+            ...(result.code === "call_message_self_only" ? { code: result.code } : {}),
+          });
+        }
+        return res.json({ ok: true, scope: outcome.scope, id: messageId });
+      }
+
+      const results = outcome.results.map((result) =>
+        result.ok
+          ? { messageId: result.messageId, ok: true }
+          : { messageId: result.messageId, ok: false, code: result.code, error: result.error },
+      );
+      if (results.every((result) => !result.ok)) {
+        // Nothing could be deleted: an error, with the reasons attached.
+        const status = commonFailureStatus(outcome.results.map((result) => result.status));
+        return res.status(status).json({ error: results[0].error, results });
+      }
+      return res.json({ results });
+    } catch (error) {
+      console.error("POST /api/messages/delete ERROR:", error);
+      return res.status(500).json({ error: "Unable to delete message." });
+    }
   });
 
-  app.post("/api/messages/forward", validateUuidBody([{ field: "sourceMessageId", required: true }]), async (req, res) => {
+  const validateForwardSingleId = validateUuidBody([
+    { field: "sourceMessageId", required: true },
+  ]);
+  const validateForwardRequest = (req, res, next) =>
+    hasValue(req.body?.sourceMessageIds)
+      ? next()
+      : validateForwardSingleId(req, res, next);
+
+  app.post("/api/messages/forward", validateForwardRequest, async (req, res) => {
     const session = await requireSession(req, res);
     if (!session) return;
 
     const {
       username,
       sourceMessageId,
+      sourceMessageIds,
       targetChatIds = [],
-      body,
     } = req.body || {};
-    if (!username || !sourceMessageId || !Array.isArray(targetChatIds) || !targetChatIds.length) {
+    // A `body` in the request is ignored: a forward always carries the text
+    // of the message it names (see messageForwardService).
+    const isBatch = hasValue(sourceMessageIds);
+    if (!username || !Array.isArray(targetChatIds) || !targetChatIds.length) {
       return res.status(400).json({
         error: "Username, source message, and target chats are required.",
       });
     }
-    if (!requireSessionUsernameMatch(res, session, username)) return;
-
-    const rawUser = findUserByUsername(String(username || "").toLowerCase());
-    const user = rawUser && typeof rawUser.then === "function" ? await rawUser : rawUser;
-    if (!user) {
-      return res.status(404).json({ error: "User not found." });
-    }
-
-    const rawSourceMessage = findMessageById(sourceMessageId);
-    const sourceMessage = rawSourceMessage && typeof rawSourceMessage.then === "function" ? await rawSourceMessage : rawSourceMessage;
-    if (!sourceMessage) {
-      return res.status(404).json({ error: "Source message not found." });
-    }
-    if (sourceMessage.hidden_everyone_at) {
-      return res.status(410).json({ error: "Source message is no longer available." });
-    }
-    if (sourceMessage.e2ee_envelope) {
-      // The content key is wrapped for the original chat's devices only.
+    if (isBatch && hasValue(sourceMessageId)) {
       return res.status(400).json({
-        error: "End-to-end encrypted messages cannot be forwarded.",
+        error: "Send either 'sourceMessageId' or 'sourceMessageIds', not both.",
       });
     }
-    const rawIsMem = isMember(sourceMessage.chat_id, user.id);
-    const memberCheck = rawIsMem && typeof rawIsMem.then === "function" ? await rawIsMem : rawIsMem;
-    if (!memberCheck) {
-      return res.status(403).json({ error: "You cannot forward from this chat." });
-    }
-    const rawSourceChat = findChatById(sourceMessage.chat_id);
-    const sourceChat = rawSourceChat && typeof rawSourceChat.then === "function"
-      ? await rawSourceChat
-      : rawSourceChat;
-    if (!sourceChat) {
-      return res.status(404).json({ error: "Source chat not found." });
-    }
-    const forwardOrigin = await deriveForwardOrigin(sourceMessage, sourceChat);
+    if (!requireSessionUsernameMatch(res, session, username)) return;
 
-    const forwardBody = String(body || "");
-    if (!forwardBody.trim()) {
-      return res.status(400).json({ error: "Forwarded message body is required." });
+    let sourceIds = [sourceMessageId];
+    if (isBatch) {
+      const parsed = parseMessageIdList(sourceMessageIds, "sourceMessageIds");
+      if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+      sourceIds = parsed.ids;
     }
 
+    if (targetChatIds.some((id) => typeof id !== "string" || !isValidUuid(id))) {
+      return res.status(400).json({ error: "Field 'targetChatIds' contains an invalid UUID." });
+    }
     const uniqueTargetChatIds = Array.from(
-      new Set(
-        targetChatIds
-          .map((id) => String(id || "").trim())
-          .filter(Boolean),
-      ),
+      new Set(targetChatIds.map((id) => id.trim()).filter(Boolean)),
     );
     if (!uniqueTargetChatIds.length) {
       return res.status(400).json({ error: "Choose at least one target chat." });
     }
-
-    const rawSourceFiles = listMessageFilesByMessageIds([sourceMessage.id]);
-    const sourceFiles = rawSourceFiles && typeof rawSourceFiles.then === "function"
-      ? await rawSourceFiles
-      : rawSourceFiles;
-    const forwardExpiresAt = sourceFiles?.length
-      ? null
-      : computeTextExpiryIso(new Date().toISOString());
-
-    const forwardedIds = [];
-    for (const targetChatId of uniqueTargetChatIds) {
-      const rawMemberCheck = isMember(targetChatId, user.id);
-      const targetMemberCheck = rawMemberCheck && typeof rawMemberCheck.then === "function"
-        ? await rawMemberCheck
-        : rawMemberCheck;
-      if (!targetMemberCheck) {
-        return res.status(403).json({ error: "Cannot send to one or more selected chats." });
-      }
-      const rawTargetChat = findChatById(targetChatId);
-      const targetChat = rawTargetChat && typeof rawTargetChat.then === "function"
-        ? await rawTargetChat
-        : rawTargetChat;
-      if (!targetChat) {
-        return res.status(404).json({ error: "One of the selected chats was not found." });
-      }
-      if (String(targetChat.type || "").toLowerCase() === "channel") {
-        const rawRole = getChatMemberRole(targetChatId, user.id);
-        const role = String(rawRole && typeof rawRole.then === "function" ? await rawRole : rawRole).toLowerCase();
-        if (role !== "owner") {
-          return res.status(403).json({
-            error: "You can only forward to channels you own.",
-          });
-        }
-      }
-
-      const rawNextMessageId = createMessage(
-        targetChatId,
-        user.id,
-        forwardBody,
-        null,
-        forwardExpiresAt,
-      );
-      const nextMessageId = rawNextMessageId && typeof rawNextMessageId.then === "function"
-        ? await rawNextMessageId
-        : rawNextMessageId;
-      if (!nextMessageId) {
-        return res.status(500).json({ error: "Unable to forward message." });
-      }
-      await setMessageForwardOrigin(nextMessageId, {
-        sourceChatId: forwardOrigin.sourceChatId,
-        label: forwardOrigin.label,
-        sourceUserId: forwardOrigin.sourceUserId,
-        sourceUsername: forwardOrigin.sourceUsername,
-        sourceAvatarUrl: forwardOrigin.sourceAvatarUrl,
-        sourceColor: forwardOrigin.sourceColor,
+    if (uniqueTargetChatIds.length > FORWARD_MAX_TARGET_CHATS) {
+      return res.status(400).json({
+        error: `You can forward to at most ${FORWARD_MAX_TARGET_CHATS} chats at once.`,
       });
-      await reuseMessageFilesForForward(sourceMessage.id, nextMessageId);
-      const isSavedTargetChat = String(targetChat.type || "").toLowerCase() === "saved";
-      if (isSavedTargetChat) {
-        const rawRead = markMessageRead(nextMessageId, user.id);
-        if (rawRead && typeof rawRead.then === "function") await rawRead;
-        const rawUnhide = unhideChat(user.id, targetChatId);
-        if (rawUnhide && typeof rawUnhide.then === "function") await rawUnhide;
-      }
-
-      emitChatEvent(targetChatId, {
-        type: "chat_message",
-        chatId: targetChatId,
-        messageId: nextMessageId,
-        username: user.username,
-        userId: user.id,
-        body: forwardBody,
-        replyToMessageId: null,
-        ...(isSavedTargetChat
-          ? {
-              read_at: new Date().toISOString(),
-              read_by_user_id: user.id,
-            }
-          : {}),
+    }
+    if (sourceIds.length * uniqueTargetChatIds.length > FORWARD_MAX_CREATED_MESSAGES) {
+      return res.status(400).json({
+        error: `A single request can create at most ${FORWARD_MAX_CREATED_MESSAGES} forwarded messages. Forward fewer messages or to fewer chats.`,
       });
-      forwardedIds.push(nextMessageId);
     }
 
-    return res.json({ ok: true, ids: forwardedIds });
+    try {
+      const rawUser = findUserByUsername(String(username || "").toLowerCase());
+      const user = rawUser && typeof rawUser.then === "function" ? await rawUser : rawUser;
+      if (!user) {
+        return res.status(404).json({ error: "User not found." });
+      }
+      if (Number(user.banned)) {
+        return res.status(403).json({ error: "Account is banned." });
+      }
+      if (!forwardThrottle.take(String(user.id))) {
+        return res.status(429).json({ error: "Too many forward requests. Please slow down." });
+      }
+
+      const outcome = await forwardService.forward({
+        user,
+        sourceMessageIds: sourceIds,
+        targetChatIds: uniqueTargetChatIds,
+      });
+      if (!outcome.ok) {
+        return res.status(outcome.status).json({ error: outcome.error });
+      }
+      const { forwarded, failed } = outcome;
+
+      if (!isBatch) {
+        if (failed.length) {
+          return res.status(failed[0].status).json({ error: failed[0].error });
+        }
+        return res.json({ ok: true, ids: forwarded.map((message) => message.id) });
+      }
+
+      if (!forwarded.length) {
+        // Nothing could be forwarded: an error, with the reasons attached.
+        return res.status(commonFailureStatus(failed.map((entry) => entry.status))).json({
+          error: failed[0]?.error || "Unable to forward message.",
+          forwarded: [],
+          failed: failed.map(publicFailure),
+        });
+      }
+      return res.json({ forwarded, failed: failed.map(publicFailure) });
+    } catch (error) {
+      console.error("POST /api/messages/forward ERROR:", error);
+      return res.status(500).json({ error: "Unable to forward message." });
+    }
   });
 }
 
