@@ -54,6 +54,25 @@ setup() {
   mkdir -p "$INSTALL_DIR"
   touch "$LOG_FILE"
 
+  # No test may write to the machine it runs on (it runs as root in CI images and in
+  # sandboxes): every path the installer writes points into TEST_DIR.
+  DATA_COMMAND_LAUNCHER="$INSTALL_DIR/scripts/run-data-command.sh"
+  SERVICE_FILE="$TEST_DIR/songbird.service"
+  WORKER_SERVICE_FILE="$TEST_DIR/songbird-worker.service"
+  LEGO_RENEW_SERVICE_FILE="$TEST_DIR/songbird-lego-renew.service"
+  LEGO_RENEW_TIMER_FILE="$TEST_DIR/songbird-lego-renew.timer"
+  NGINX_SITE_FILE="$TEST_DIR/nginx-site"
+  NGINX_ENABLED_FILE="$TEST_DIR/nginx-enabled"
+  GLOBAL_COMMAND_PATH="$TEST_DIR/songbird-deploy"
+  CERT_INSTALL_DIR="$TEST_DIR/ssl"
+  ACME_WEBROOT="$TEST_DIR/acme"
+  LEGO_STATE_DIR="$TEST_DIR/lego-state"
+  LEGO_BIN="$TEST_DIR/lego"
+  # Nothing listens in a test: do not wait for the app to come up, and do not share
+  # the install lock with a real installer that may be running on this machine.
+  AURELLE_HEALTH_TIMEOUT=0
+  INSTALL_LOCK_PATH="$TEST_DIR/install.lock.d"
+
   # Override clear to a no-op so handle_exit doesn't wipe test output
   clear() { return 0; }
 

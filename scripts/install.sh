@@ -3,6 +3,13 @@
 
 set -uo pipefail
 
+# A few environments (cron, "sudo env -i", some CI runners) run without HOME.
+export HOME="${HOME:-/root}"
+# Package installs write their output to the log, so a question from apt or
+# needrestart would wait for an answer nobody can see.
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+
 COLOR_RESET=""
 COLOR_LOG=""
 COLOR_WARN=""
@@ -17,23 +24,62 @@ if [[ -z "${NO_COLOR:-}" && ( "${FORCE_COLOR:-0}" != "0" || ( "${TERM:-}" != "du
   COLOR_SUCCESS=$'\033[1;32m'
 fi
 
+is_truthy() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|y|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_unattended() {
+  [[ "${UNATTENDED:-0}" == "1" ]]
+}
+
+# clear only when it can work and is wanted: a terminal on stdout and a TERM.
+# Never in unattended mode, where the output is a log that must stay complete.
+clear_screen() {
+  if is_unattended; then
+    return 0
+  fi
+  if [[ -t 1 && -n "${TERM:-}" && "${TERM:-}" != "dumb" ]]; then
+    clear
+  fi
+  return 0
+}
+
+# The last install summary is remembered so it can be shown again after the
+# menu clears the screen: it is the one thing the user still needs.
+INSTALL_SUMMARY_TITLE=""
+INSTALL_SUMMARY_LINES=()
+SUCCESS_FRAME_LOG="1"
+
 handle_exit() {
   local exit_code=$?
+  # One message per exit, even when a signal handler exits too.
+  trap - EXIT
+  release_install_lock
+
   if [[ "$exit_code" -eq 0 ]]; then
     if [[ "${SKIP_CLEAR_ON_EXIT:-0}" != "1" ]]; then
-      clear
+      clear_screen
+    fi
+    if ! is_unattended && (( ${#INSTALL_SUMMARY_LINES[@]} > 0 )); then
+      SUCCESS_FRAME_LOG="0" print_success_frame "$INSTALL_SUMMARY_TITLE" "${INSTALL_SUMMARY_LINES[@]}"
     fi
     return 0
   fi
 
-  printf "\n%b[SONGBIRD] Script exited with code %s.%b\n" "$COLOR_ERROR" "$exit_code" "$COLOR_RESET" >&2
+  printf "\n%b[AURELLE] Script exited with code %s.%b\n" "$COLOR_ERROR" "$exit_code" "$COLOR_RESET" >&2
   if [[ -f "$LOG_FILE" ]]; then
-    printf "%b[SONGBIRD] Review the log at %s for the last recorded step.%b\n" "$COLOR_ERROR" "$LOG_FILE" "$COLOR_RESET" >&2
+    printf "%b[AURELLE] Review the log at %s for the last recorded step.%b\n" "$COLOR_ERROR" "$LOG_FILE" "$COLOR_RESET" >&2
+  fi
+  if is_unattended; then
+    printf "%b[AURELLE] Every step can be repeated: fix the problem above and run the same command again.%b\n" "$COLOR_ERROR" "$COLOR_RESET" >&2
   fi
 }
 
 handle_interrupt() {
-  handle_exit
+  # The EXIT trap prints the single "exited with code" message.
   exit 130
 }
 
@@ -45,6 +91,9 @@ INSTALL_DIR="/opt/songbird"
 LOG_FILE="/opt/songbird/logs/install.log"
 DATA_COMMAND_LAUNCHER="${DATA_COMMAND_LAUNCHER:-${INSTALL_DIR}/scripts/run-data-command.sh}"
 REPO_URL="${REPO_URL:-https://github.com/elia2000/Aurelia.git}"
+# Branch or tag to install. Empty means the default branch of the repository
+# (main on GitHub); a branch or a tag name installs exactly that.
+REPO_BRANCH="${REPO_BRANCH:-}"
 SERVICE_USER="songbird"
 SERVICE_GROUP="songbird"
 SERVICE_NAME="songbird"
@@ -67,6 +116,14 @@ DEFAULT_SIGN_UP="true"
 DEFAULT_CHAT_VOICE_WAVEFORM_MAX_DECODE_MB="5"
 DEFAULT_CHAT_VOICE_WAVEFORM_MAX_DECODE_SECONDS="480"
 NODE_MAJOR="24"
+# What an install needs: free disk for packages, dependencies and the build, and
+# memory (RAM plus swap) for the client build. AURELLE_MIN_FREE_DISK_MB=0 skips the
+# disk check (a server whose build is known to fit in less).
+MIN_FREE_DISK_MB="${AURELLE_MIN_FREE_DISK_MB:-2048}"
+MIN_MEMORY_MB=1024
+[[ "$MIN_FREE_DISK_MB" =~ ^[0-9]+$ ]] || MIN_FREE_DISK_MB=2048
+# Keep in step with "engines.node" in package.json.
+NODE_MIN_VERSION="24.18.0"
 SCRIPT_REMOTE_URL="${SCRIPT_REMOTE_URL:-https://raw.githubusercontent.com/elia2000/Aurelia/main/scripts/install.sh}"
 LOG_LINES="${LOG_LINES:-100}"
 CERT_INSTALL_DIR="/etc/ssl/songbird"
@@ -100,6 +157,12 @@ DEFAULT_POSTGRES_URL=""
 DEFAULT_POSTGRES_SSL="false"
 POSTGRES_URL=""
 POSTGRES_SSL="false"
+DB_CLIENT="$DEFAULT_DB_CLIENT"
+POSTGRES_HOST="$DEFAULT_POSTGRES_HOST"
+POSTGRES_PORT="$DEFAULT_POSTGRES_PORT"
+POSTGRES_DB="$DEFAULT_POSTGRES_DB"
+POSTGRES_USER="$DEFAULT_POSTGRES_USER"
+POSTGRES_PASSWORD="$DEFAULT_POSTGRES_PASSWORD"
 SERVER_PORT="$DEFAULT_SERVER_PORT"
 CLIENT_PORT="$DEFAULT_CLIENT_PORT"
 WORKER_PORT="$DEFAULT_WORKER_PORT"
@@ -126,9 +189,67 @@ NODE_EXEC_PATH=""
 NPM_EXEC_PATH=""
 SKIP_CLEAR_ON_EXIT="0"
 MENU_ACTION_PAUSED="0"
+# Unattended mode (AURELLE_YES=1 or --yes): no prompt, no terminal needed.
+UNATTENDED="0"
+# Exit codes: 0 done, 1 failed, 2 wrong usage or no terminal to ask on, 3 installed
+# but the TLS certificate could not be issued (the site answers over HTTP).
+EXIT_USAGE=2
+EXIT_TLS_FAILED=3
+# Log lines written before the log directory exists; flushed by ensure_log_dir.
+PENDING_LOG_LINES=()
+# Set when the certificate step failed but the site works over plain HTTP.
+TLS_FAILED="0"
+# Calls relay (coturn) choice: yes, no, force (replace a coturn configuration that is
+# not ours) or empty when nobody decided yet.
+CALLS_RELAY_MODE=""
+PUBLIC_IP=""
+UPDATE_STOPPED_SERVICES="no"
+
+# Answers for unattended mode. Each one can come from the environment or from a
+# command line flag; empty means "use the default".
+AURELLE_YES="${AURELLE_YES:-0}"
+AURELLE_ACTION="${AURELLE_ACTION:-auto}"
+AURELLE_DOMAIN="${AURELLE_DOMAIN:-}"
+AURELLE_EMAIL="${AURELLE_EMAIL:-}"
+AURELLE_TLS="${AURELLE_TLS:-auto}"
+AURELLE_TLS_CERT="${AURELLE_TLS_CERT:-}"
+AURELLE_TLS_KEY="${AURELLE_TLS_KEY:-}"
+AURELLE_PUBLIC_IP="${AURELLE_PUBLIC_IP:-}"
+AURELLE_SERVER_PORT="${AURELLE_SERVER_PORT:-}"
+AURELLE_CLIENT_PORT="${AURELLE_CLIENT_PORT:-}"
+AURELLE_WORKER_PORT="${AURELLE_WORKER_PORT:-}"
+AURELLE_DB="${AURELLE_DB:-sqlite3}"
+AURELLE_POSTGRES_URL="${AURELLE_POSTGRES_URL:-}"
+AURELLE_BACKUP="${AURELLE_BACKUP:-0}"
+AURELLE_RESTORE_BACKUP="${AURELLE_RESTORE_BACKUP:-}"
+AURELLE_OWNER_USERNAME="${AURELLE_OWNER_USERNAME:-}"
+AURELLE_OWNER_PASSWORD="${AURELLE_OWNER_PASSWORD:-}"
+AURELLE_OWNER_NICKNAME="${AURELLE_OWNER_NICKNAME:-}"
+# Calls relay (coturn): 1/yes, 0/no, or force (replace a coturn configuration that
+# this installer did not write; the old file is kept as a backup).
+AURELLE_CALLS_RELAY="${AURELLE_CALLS_RELAY:-}"
+AURELLE_RELAY_PORT="${AURELLE_RELAY_PORT:-3478}"
+AURELLE_RELAY_MIN_PORT="${AURELLE_RELAY_MIN_PORT:-49160}"
+AURELLE_RELAY_MAX_PORT="${AURELLE_RELAY_MAX_PORT:-49260}"
+SHOW_VERSION="0"
+# Checks that need a live system (the app answering after a restart) only run in a
+# real run; main() switches them on. The unit tests source this file without it.
+STRICT_CHECKS="0"
+ABORT_ON_INPUT_CLOSED="0"
+INSTALL_LOCK_HELD="0"
+INSTALL_LOCK_DIR=""
+INSTALL_LOCK_PATH="/run/lock/aurelle-install.lock.d"
+if [[ ! -d /run/lock ]]; then
+  INSTALL_LOCK_PATH="/tmp/aurelle-install.lock.d"
+fi
+CALLS_RELAY_SUMMARY=""
+OWNER_CREATED=""
 
 resolve_current_script_path() {
-  local source_hint="${BASH_SOURCE[0]:-$0}"
+  # "curl ... | bash" has no script file: BASH_SOURCE is empty and $0 is just
+  # "bash", which must never be mistaken for a file called bash in the current
+  # directory (or for /usr/bin/bash when that is the current directory).
+  local source_hint="${BASH_SOURCE[0]:-}"
   if [[ -z "$source_hint" ]]; then
     return 1
   fi
@@ -184,14 +305,24 @@ resolve_script_version_for_path() {
   fi
 
   local script_dir=""
-  script_dir="$(cd -- "$(dirname -- "$script_path")" && pwd -P 2>/dev/null || true)"
   local repo_root=""
+  if [[ -n "$script_path" ]]; then
+    script_dir="$(cd -- "$(dirname -- "$script_path")" && pwd -P 2>/dev/null || true)"
+  fi
   if [[ -n "$script_dir" ]]; then
     repo_root="$(cd -- "$script_dir/.." && pwd -P 2>/dev/null || true)"
   fi
   if [[ -n "$repo_root" && -f "$repo_root/VERSION" ]]; then
     read_version_file_value "$repo_root/VERSION"
     return $?
+  fi
+
+  if [[ -f "$INSTALL_DIR/scripts/install.sh" ]]; then
+    header_version="$(read_script_version_header "$INSTALL_DIR/scripts/install.sh" 2>/dev/null || true)"
+    if [[ -n "$header_version" ]]; then
+      printf "%s" "$header_version"
+      return 0
+    fi
   fi
 
   if [[ -f "$INSTALL_DIR/VERSION" ]]; then
@@ -206,15 +337,37 @@ CURRENT_SCRIPT_PATH="$(resolve_current_script_path 2>/dev/null || true)"
 SCRIPT_VERSION="$(resolve_script_version_for_path "$CURRENT_SCRIPT_PATH" 2>/dev/null || printf "0.0.0")"
 LAST_GLOBAL_COMMAND_VERSION=""
 
+# Secrets must never reach the log: the commands the installer runs (sed on the
+# env file, curl, db commands) carry them as plain text.
+redact_secrets() {
+  sed -E \
+    -e 's/([A-Za-z_]*(SECRET|TOKEN|PASSWORD|PRIVATE_KEY|ENCRYPTION_KEY|API_KEY)[A-Za-z_]*)=["'"'"']?[^[:space:]|"'"'"']+/\1=<redacted>/g' \
+    -e 's/(--password[ =])[^[:space:]]+/\1<redacted>/g'
+}
+
+# Append one already formatted line to the install log. Before the log directory
+# exists (it lives inside the clone) lines are kept and written by ensure_log_dir.
+log_to_file() {
+  local line=""
+  line="$(printf '%s' "$1" | redact_secrets)"
+  if [[ -f "$LOG_FILE" ]]; then
+    if ! printf '%s\n' "$line" >> "$LOG_FILE" 2>/dev/null; then
+      # Not writable for this user (the service user owns the log): go through sudo.
+      if [[ -n "${SUDO:-}" ]]; then
+        printf '%s\n' "$line" | $SUDO tee -a "$LOG_FILE" >/dev/null 2>&1 || true
+      fi
+    fi
+  else
+    PENDING_LOG_LINES+=("$line")
+  fi
+  return 0
+}
+
 log() {
   local timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
-  local log_dir="$(dirname "$LOG_FILE")"
 
-  printf "%b[SONGBIRD] %s%b\n" "$COLOR_LOG" "$1" "$COLOR_RESET"
-
-  if [[ -d "$log_dir" ]]; then
-    printf "[%s] [SONGBIRD] %s\n" "$timestamp" "$1" >> "$LOG_FILE" 2>/dev/null || true
-  fi
+  printf "%b[AURELLE] %s%b\n" "$COLOR_LOG" "$1" "$COLOR_RESET"
+  log_to_file "$(printf "[%s] [AURELLE] %s" "$timestamp" "$1")"
 }
 
 
@@ -224,23 +377,138 @@ ensure_log_dir() {
     run_as_root mkdir -p "$log_dir" || return 1
     log "Created log directory: $log_dir"
   fi
+  if [[ ! -f "$LOG_FILE" ]]; then
+    run_as_root touch "$LOG_FILE" 2>/dev/null || true
+  fi
+  # The log mentions what was configured: keep it away from other local users.
+  run_as_root chmod 750 "$log_dir" 2>/dev/null || true
+  run_as_root chmod 600 "$LOG_FILE" 2>/dev/null || true
+  if [[ -f "$LOG_FILE" ]] && (( ${#PENDING_LOG_LINES[@]} > 0 )); then
+    local pending_line=""
+    for pending_line in "${PENDING_LOG_LINES[@]}"; do
+      log_to_file "$pending_line"
+    done
+    PENDING_LOG_LINES=()
+  fi
 }
 
 warn() {
   local timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
-  printf "%b[%s] WARNING: %s%b\n" "$COLOR_WARN" "SONGBIRD" "$*" "$COLOR_RESET" >&2
-  if [[ -f "$LOG_FILE" ]]; then
-    printf "[%s] [SONGBIRD] WARNING: %s\n" "$timestamp" "$*" >> "$LOG_FILE" 2>/dev/null || true
-  fi
+  printf "%b[%s] WARNING: %s%b\n" "$COLOR_WARN" "AURELLE" "$*" "$COLOR_RESET" >&2
+  log_to_file "$(printf "[%s] [AURELLE] WARNING: %s" "$timestamp" "$*")"
 }
 
 fail() {
   local timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
-  printf "%b[%s] ERROR: %s%b\n" "$COLOR_ERROR" "SONGBIRD" "$*" "$COLOR_RESET" >&2
-  if [[ -f "$LOG_FILE" ]]; then
-    printf "[%s] [SONGBIRD] ERROR: %s\n" "$timestamp" "$*" >> "$LOG_FILE" 2>/dev/null || true
-  fi
+  printf "%b[%s] ERROR: %s%b\n" "$COLOR_ERROR" "AURELLE" "$*" "$COLOR_RESET" >&2
+  log_to_file "$(printf "[%s] [AURELLE] ERROR: %s" "$timestamp" "$*")"
   exit 1
+}
+
+# Wrong command line or environment: exit code 2, nothing has been changed.
+usage_fail() {
+  local timestamp=""
+  timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+  printf "%b[%s] ERROR: %s%b\n" "$COLOR_ERROR" "AURELLE" "$*" "$COLOR_RESET" >&2
+  printf "Run with --help for the list of options.\n" >&2
+  log_to_file "$(printf "[%s] [AURELLE] ERROR: %s" "$timestamp" "$*")"
+  exit "$EXIT_USAGE"
+}
+
+# curl for downloads: follow redirects, retry on a flaky link, give up on a dead one.
+download() {
+  curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 "$@"
+}
+
+# apt-get that never waits for an answer. DPkg::Lock::Timeout makes it wait for the
+# dpkg lock; the lists lock ("apt-get update") and the download cache lock are not
+# covered by it, see wait_for_package_manager. The timeouts keep one unreachable
+# mirror from stalling the whole install: apt would otherwise wait on a dead
+# connection for minutes.
+apt_get_run() {
+  run_as_root env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 \
+    apt-get -o DPkg::Lock::Timeout=300 -o Dpkg::Options::=--force-confold \
+    -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 "$@"
+}
+
+# True while another process holds one of the package manager's locks. A new cloud
+# server runs apt itself after its first boot (cloud-init, unattended-upgrades) for
+# several minutes, and "apt-get update" gives up at once when it finds the lock taken
+# ("Could not get lock /var/lib/apt/lists/lock"). lslocks (util-linux) lists the
+# locks by file; without it nothing is known and the install just tries.
+package_manager_is_busy() {
+  have_cmd lslocks || return 1
+  lslocks --noheadings --output PATH 2>/dev/null \
+    | grep -qE '^/var/(lib/apt/lists/lock|lib/dpkg/lock(-frontend)?|cache/apt/archives/lock)$'
+}
+
+# Waits (AURELLE_APT_LOCK_WAIT seconds at most, default 300) until the package manager
+# is free. Call it before an apt step, outside run_silent, so that the message is seen.
+wait_for_package_manager() {
+  local limit="${AURELLE_APT_LOCK_WAIT:-300}"
+  local waited=0
+  [[ "$limit" =~ ^[0-9]+$ ]] || limit=300
+  while package_manager_is_busy; do
+    if (( waited >= limit )); then
+      warn "Another package manager is still running after ${limit} seconds; trying anyway."
+      return 0
+    fi
+    if (( waited == 0 )); then
+      log "Another package manager is running (a new server updates itself after its first boot). Waiting for it, up to ${limit} seconds..."
+    fi
+    sleep 5
+    waited=$((waited + 5))
+  done
+  return 0
+}
+
+# The release name ("noble") without lsb_release, which a minimal Debian or Ubuntu
+# image does not have until the lsb-release package is installed.
+apt_release_codename() {
+  local codename=""
+  if [[ -r /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    codename="$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-${UBUNTU_CODENAME:-}}")"
+  fi
+  if [[ -z "$codename" ]] && have_cmd lsb_release; then
+    codename="$(lsb_release -sc 2>/dev/null)"
+  fi
+  printf '%s' "$codename"
+}
+
+# Two installers at once would corrupt each other's work. The lock is a directory
+# holding the owner's PID, not a file lock: a file lock would be inherited by every
+# daemon the installer starts and stay held for as long as they run.
+acquire_install_lock() {
+  if [[ "$INSTALL_LOCK_HELD" == "1" ]]; then
+    return 0
+  fi
+  local lock_dir="$INSTALL_LOCK_PATH"
+  local holder=""
+  if ! run_as_root mkdir "$lock_dir" 2>/dev/null; then
+    holder="$(cat "${lock_dir}/pid" 2>/dev/null || true)"
+    if [[ "$holder" =~ ^[0-9]+$ && -d "/proc/${holder}" ]]; then
+      warn "Another Aurelle install or update is already running (process ${holder}, lock ${lock_dir})."
+      return 1
+    fi
+    # Left behind by a run that was killed.
+    run_as_root rm -rf "$lock_dir"
+    if ! run_as_root mkdir "$lock_dir" 2>/dev/null; then
+      warn "Could not take the install lock ${lock_dir}."
+      return 1
+    fi
+  fi
+  printf '%s\n' "$$" | run_as_root tee "${lock_dir}/pid" >/dev/null 2>&1 || true
+  INSTALL_LOCK_DIR="$lock_dir"
+  INSTALL_LOCK_HELD="1"
+  return 0
+}
+
+release_install_lock() {
+  if [[ "$INSTALL_LOCK_HELD" == "1" && -n "$INSTALL_LOCK_DIR" ]]; then
+    run_as_root rm -rf "$INSTALL_LOCK_DIR" 2>/dev/null || true
+  fi
+  INSTALL_LOCK_HELD="0"
 }
 
 terminal_columns() {
@@ -301,7 +569,7 @@ print_plain_success_block() {
   local lines=("$@")
   local line=""
 
-  printf "\n%b[SONGBIRD] %s%b\n" "$COLOR_SUCCESS" "$title" "$COLOR_RESET"
+  printf "\n%b[AURELLE] %s%b\n" "$COLOR_SUCCESS" "$title" "$COLOR_RESET"
   for line in "${lines[@]}"; do
     if [[ -z "$line" ]]; then
       printf "\n"
@@ -317,18 +585,24 @@ print_success_frame() {
   shift || true
 
   local lines=("$@")
+  # Kept so it can be shown again on exit: the menu clears the screen and the
+  # summary is the one thing the user still needs afterwards.
+  if [[ "${SUCCESS_FRAME_LOG:-1}" != "0" ]]; then
+    INSTALL_SUMMARY_TITLE="$title"
+    INSTALL_SUMMARY_LINES=("${lines[@]}")
+  fi
   local terminal_width=""
   terminal_width="$(terminal_columns)"
   local frame_width=$((terminal_width - 4))
 
   if (( frame_width < 40 )); then
     print_plain_success_block "$title" "${lines[@]}"
-    if [[ -f "$LOG_FILE" ]]; then
+    if [[ -f "$LOG_FILE" && "${SUCCESS_FRAME_LOG:-1}" != "0" ]]; then
       local timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
-      printf "[%s] [SONGBIRD] %s\n" "$timestamp" "$title" >> "$LOG_FILE" 2>/dev/null || true
+      log_to_file "$(printf "[%s] [AURELLE] %s\n" "$timestamp" "$title")"
       local line=""
       for line in "${lines[@]}"; do
-        printf "[%s] [SONGBIRD] %s\n" "$timestamp" "$line" >> "$LOG_FILE" 2>/dev/null || true
+        log_to_file "$(printf "[%s] [AURELLE] %s\n" "$timestamp" "$line")"
       done
     fi
     return 0
@@ -361,12 +635,43 @@ print_success_frame() {
   done
   printf "%b+%s+%b\n\n" "$COLOR_SUCCESS" "$border" "$COLOR_RESET"
 
-  if [[ -f "$LOG_FILE" ]]; then
+  if [[ -f "$LOG_FILE" && "${SUCCESS_FRAME_LOG:-1}" != "0" ]]; then
     local timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
-    printf "[%s] [SONGBIRD] %s\n" "$timestamp" "$title" >> "$LOG_FILE" 2>/dev/null || true
+    log_to_file "$(printf "[%s] [AURELLE] %s\n" "$timestamp" "$title")"
     for line in "${lines[@]}"; do
-      printf "[%s] [SONGBIRD] %s\n" "$timestamp" "$line" >> "$LOG_FILE" 2>/dev/null || true
+      log_to_file "$(printf "[%s] [AURELLE] %s\n" "$timestamp" "$line")"
     done
+  fi
+}
+
+# "Visit:" lines for the address(es) the site answers on.
+site_visit_lines() {
+  local mode="$CERT_MODE"
+  local port="$CLIENT_PORT"
+  local scheme="http"
+  local hosts=()
+  local host=""
+  if [[ "$TLS_FAILED" == "1" ]]; then
+    mode="http"
+    port="80"
+  fi
+  if [[ "$DEPLOY_MODE" == "domain" && ${#DOMAIN_NAMES[@]} -gt 0 ]]; then
+    hosts=("${DOMAIN_NAMES[@]}")
+  else
+    hosts=("${CERTBOT_IP_ADDRESS:-${PUBLIC_IP:-<your-server-ip>}}")
+  fi
+  if [[ "$mode" != "http" ]]; then
+    scheme="https"
+  fi
+  for host in "${hosts[@]}"; do
+    if [[ ( "$scheme" == "https" && "$port" == "443" ) || ( "$scheme" == "http" && "$port" == "80" ) ]]; then
+      printf 'Visit: %s://%s\n' "$scheme" "$host"
+    else
+      printf 'Visit: %s://%s:%s\n' "$scheme" "$host" "$port"
+    fi
+  done
+  if [[ "$mode" == "selfsigned" ]]; then
+    printf 'Note: Self-signed cert - accept the browser security warning to proceed.\n'
   fi
 }
 
@@ -374,62 +679,94 @@ show_deployment_success_frame() {
   local action="$1"
   local title=""
   local lines=()
+  local line=""
+  local sudo_prefix=""
+  if [[ "$EUID" -ne 0 ]]; then
+    sudo_prefix="sudo "
+  fi
 
   case "$action" in
     install)
       title="Aurelle Installation Complete"
-      lines+=("Aurelle has been installed successfully.")
-      lines+=("")
-      lines+=("App:")
-      if [[ "$CERT_MODE" == "http" ]]; then
-        if [[ "$DEPLOY_MODE" == "domain" ]]; then
-          local d=""
-          for d in "${DOMAIN_NAMES[@]}"; do
-            lines+=("Visit: http://${d}:${CLIENT_PORT}")
-          done
-        else
-          lines+=("Visit: http://<your-server-ip>:${CLIENT_PORT}")
-        fi
-      elif [[ "$CERT_MODE" == "selfsigned" ]]; then
-        local visit_ip="${CERTBOT_IP_ADDRESS:-<your-server-ip>}"
-        [[ "$DEPLOY_MODE" == "domain" && "${#DOMAIN_NAMES[@]}" -gt 0 ]] && visit_ip="${DOMAIN_NAMES[0]}"
-        if [[ "$CLIENT_PORT" == "443" ]]; then
-          lines+=("Visit: https://${visit_ip}")
-        else
-          lines+=("Visit: https://${visit_ip}:${CLIENT_PORT}")
-        fi
-        lines+=("Note: Self-signed cert — accept the browser security warning to proceed.")
-      elif [[ "$DEPLOY_MODE" == "domain" ]]; then
-        local d=""
-        for d in "${DOMAIN_NAMES[@]}"; do
-          if [[ "$CLIENT_PORT" == "443" ]]; then
-            lines+=("Visit: https://${d}")
-          else
-            lines+=("Visit: https://${d}:${CLIENT_PORT}")
-          fi
-        done
+      if [[ "$TLS_FAILED" == "1" ]]; then
+        lines+=("Aurelle is installed and runs, but HTTPS could not be set up.")
       else
-        local visit_ip="${CERTBOT_IP_ADDRESS:-<your-server-ip>}"
-        if [[ "$CERT_MODE" == "files" ]]; then
-          visit_ip="<your-server-ip>"
-        fi
-        if [[ "$CLIENT_PORT" == "443" ]]; then
-          lines+=("Visit: https://${visit_ip}")
-        else
-          lines+=("Visit: https://${visit_ip}:${CLIENT_PORT}")
-        fi
+        lines+=("Aurelle has been installed successfully.")
       fi
       ;;
     update)
       title="Aurelle Update Complete"
       lines+=("Aurelle has been updated successfully.")
       lines+=("Service restarted and nginx reloaded.")
+      # An update does not ask for the setup again: read it from the files.
+      load_deployment_from_existing
+      ;;
+    current)
+      title="Aurelle Is Up To Date"
+      lines+=("This installation is already at the newest version; nothing was changed.")
+      load_deployment_from_existing
+      ;;
+    repaired)
+      title="Aurelle Is Running Again"
+      lines+=("This installation was at the newest version but was not working; it has been repaired.")
+      load_deployment_from_existing
       ;;
     *)
       title="Aurelle Success"
       lines+=("Operation completed successfully.")
       ;;
   esac
+
+  if [[ "$action" == "install" || "$action" == "update" || "$action" == "current" || "$action" == "repaired" ]]; then
+    if [[ "$DEPLOY_MODE" == "ip" && -z "$CERTBOT_IP_ADDRESS" ]]; then
+      detect_public_ip
+    fi
+    lines+=("")
+    lines+=("App:")
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && lines+=("$line")
+    done < <(site_visit_lines)
+    if [[ "$TLS_FAILED" == "1" ]]; then
+      lines+=("HTTPS is NOT active: the certificate could not be issued. The domain must point at this server and port 80 must be open. Fix that and run the install command again.")
+    fi
+  fi
+
+  if [[ "$action" == "install" ]]; then
+    lines+=("")
+    lines+=("First admin account:")
+    if [[ -n "$OWNER_CREATED" && "$OWNER_CREATED" != "existing" ]]; then
+      lines+=("The owner account ${OWNER_CREATED} was created. Log in with it and open the Admin Panel.")
+    elif [[ "$OWNER_CREATED" == "existing" ]]; then
+      lines+=("An owner account already exists in the database.")
+    elif [[ "$CERT_MODE" == "http" || "$TLS_FAILED" == "1" ]]; then
+      # The claim in the browser refuses plain HTTP on a remote host (docs/Admin-Panel.md).
+      lines+=("This site is on plain HTTP, and claiming the owner role in the browser needs HTTPS. Create the owner from the shell: ${sudo_prefix}songbird-deploy, then Manage Database, Create user (role owner).")
+      lines+=("Or give the site a domain and HTTPS (run the install command again with AURELLE_DOMAIN=your.domain), then register in the browser and claim the owner role at /admin.")
+    else
+      lines+=("1. Open the site and register an account.")
+      lines+=("2. Open /admin on the site and enter the ADMIN_API_TOKEN to claim the owner role. Read the token with: ${sudo_prefix}grep '^ADMIN_API_TOKEN=' ${INSTALL_DIR}/.env")
+      lines+=("Or create the owner from the shell: ${sudo_prefix}songbird-deploy, then Manage Database, Create user (role owner).")
+    fi
+  fi
+
+  if [[ "$action" == "install" || "$action" == "update" || "$action" == "current" || "$action" == "repaired" ]]; then
+    lines+=("")
+    lines+=("Calls relay (voice and video between different networks):")
+    if [[ -n "$CALLS_RELAY_SUMMARY" ]]; then
+      lines+=("$CALLS_RELAY_SUMMARY")
+    else
+      lines+=("$(describe_calls_relay_state)")
+    fi
+    lines+=("")
+    lines+=("Logs:")
+    lines+=("Installer: ${LOG_FILE}")
+    lines+=("Server: ${sudo_prefix}journalctl -u ${SERVICE_NAME} -f")
+    lines+=("Media worker: ${sudo_prefix}journalctl -u ${WORKER_SERVICE_NAME} -f")
+    lines+=("nginx: /var/log/nginx/error.log")
+    lines+=("")
+    lines+=("Update later:")
+    lines+=("${sudo_prefix}songbird-deploy opens the menu (Update Aurelle); ${sudo_prefix}songbird-deploy --yes updates without questions. Running the install command again also updates.")
+  fi
 
   lines+=("")
   lines+=("Links:")
@@ -444,6 +781,9 @@ have_cmd() {
 
 press_enter_to_continue() {
   MENU_ACTION_PAUSED="1"
+  if is_unattended; then
+    return 0
+  fi
   printf "\nPress Enter to return to the main menu..." >&$PROMPT_FD_OUT
   if ! IFS= read -r -u "$PROMPT_FD" _; then
     _=""
@@ -472,13 +812,13 @@ run_silent() {
   local output
   # Append command being run to log file
   if [[ -f "$LOG_FILE" ]]; then
-    printf "[%s] Running: %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG_FILE" 2>/dev/null || true
+    log_to_file "$(printf "[%s] Running: %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$*")"
   fi
 
   if ! output="$("$@" 2>&1)"; then
     # Log the failure
     if [[ -f "$LOG_FILE" ]]; then
-      printf "[%s] FAILED: %s\n%s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$*" "$output" >> "$LOG_FILE" 2>/dev/null || true
+      log_to_file "$(printf "[%s] FAILED: %s\n%s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$*" "$output")"
     fi
     # Show error to user
     printf "\n%b[ERROR] Command failed: %s%b\n" "$COLOR_ERROR" "$*" "$COLOR_RESET"
@@ -487,7 +827,7 @@ run_silent() {
   else
     # Log success + output
     if [[ -f "$LOG_FILE" ]]; then
-      printf "[%s] SUCCESS: %s\n%s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$*" "$output" >> "$LOG_FILE" 2>/dev/null || true
+      log_to_file "$(printf "[%s] SUCCESS: %s\n%s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$*" "$output")"
     fi
   fi
 }
@@ -495,18 +835,18 @@ run_silent() {
 run_logged_quiet() {
   local output
   if [[ -f "$LOG_FILE" ]]; then
-    printf "[%s] Running: %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG_FILE" 2>/dev/null || true
+    log_to_file "$(printf "[%s] Running: %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$*")"
   fi
 
   if ! output="$("$@" 2>&1)"; then
     if [[ -f "$LOG_FILE" ]]; then
-      printf "[%s] FAILED: %s\n%s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$*" "$output" >> "$LOG_FILE" 2>/dev/null || true
+      log_to_file "$(printf "[%s] FAILED: %s\n%s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$*" "$output")"
     fi
     return 1
   fi
 
   if [[ -f "$LOG_FILE" ]]; then
-    printf "[%s] SUCCESS: %s\n%s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$*" "$output" >> "$LOG_FILE" 2>/dev/null || true
+    log_to_file "$(printf "[%s] SUCCESS: %s\n%s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$*" "$output")"
   fi
 }
 
@@ -627,6 +967,10 @@ run_in_install_dir() {
   if [[ -n "$path_prefix" ]]; then
     path_export="export PATH=$(printf '%q' "$path_prefix"):\$PATH; "
   fi
+  # Nobody can type credentials: a repository that asks for them fails at once.
+  if is_unattended; then
+    path_export="export GIT_TERMINAL_PROMPT=0; ${path_export}"
+  fi
   run_silent run_as_root bash -lc "cd '$INSTALL_DIR' && ${path_export}$*"
 }
 
@@ -636,6 +980,9 @@ run_in_install_dir_output() {
   path_prefix="$(node_tools_path_prefix)"
   if [[ -n "$path_prefix" ]]; then
     path_export="export PATH=$(printf '%q' "$path_prefix"):\$PATH; "
+  fi
+  if is_unattended; then
+    path_export="export GIT_TERMINAL_PROMPT=0; ${path_export}"
   fi
   if [[ -n "$SUDO" ]]; then
     $SUDO bash -lc "cd '$INSTALL_DIR' && ${path_export}$*"
@@ -651,8 +998,19 @@ dir_has_entries() {
   [[ -n "$first_entry" ]]
 }
 
+# Questions are read from the controlling terminal, not from stdin: with
+# "curl ... | bash" stdin is the script itself. The test opens /dev/tty for real
+# because the device node exists even where there is no controlling terminal
+# (CI, "ssh host command" without -t, cron), and opening it then fails.
 init_prompt_io() {
-  if [[ -r /dev/tty && -w /dev/tty ]]; then
+  if is_unattended; then
+    # Nothing is asked. A question that slips through reads an empty answer.
+    exec 3</dev/null
+    PROMPT_FD=3
+    PROMPT_FD_OUT=2
+    return 0
+  fi
+  if (exec </dev/tty) 2>/dev/null && (exec >/dev/tty) 2>/dev/null; then
     exec 3</dev/tty
     exec 4>/dev/tty
     PROMPT_FD=3
@@ -664,16 +1022,45 @@ init_prompt_io() {
     PROMPT_FD_OUT=1
     return 0
   fi
-  fail "No interactive TTY detected. Run this script in an interactive shell."
+  no_terminal_error
+}
+
+# Without a terminal the menu and its questions cannot work. Say how to run
+# the installer unattended instead of looping on empty answers.
+no_terminal_error() {
+  local url="${SCRIPT_REMOTE_URL}"
+  printf "%b[AURELLE] ERROR: No terminal is available to ask questions on.%b\n" "$COLOR_ERROR" "$COLOR_RESET" >&2
+  printf "This happens in CI, in cron and with 'ssh host command' (no -t). Either:\n" >&2
+  printf "  - connect with a terminal (ssh -t host) and run the installer again, or\n" >&2
+  printf "  - run it unattended; every question then takes its default or an AURELLE_* value:\n\n" >&2
+  printf "    curl -fsSL %s | sudo env AURELLE_YES=1 AURELLE_DOMAIN=chat.example.com AURELLE_EMAIL=you@example.com bash\n\n" "$url" >&2
+  printf "    (leave AURELLE_DOMAIN and AURELLE_EMAIL out to serve on the server IP over HTTP)\n" >&2
+  exit "$EXIT_USAGE"
+}
+
+# The input ended (Ctrl-D, closed terminal) while a question was open. Going on
+# with empty answers would loop forever on menus, so stop the whole script.
+prompt_input_closed() {
+  printf "\n%b[AURELLE] Input closed while waiting for an answer. Stopping.%b\n" "$COLOR_ERROR" "$COLOR_RESET" >&2
+  # A question can be asked inside $( ... ): signal the main shell as well.
+  if [[ "${ABORT_ON_INPUT_CLOSED:-0}" == "1" ]]; then
+    kill -s TERM "$$" 2>/dev/null || true
+  fi
+  exit 1
 }
 
 prompt_read() {
   local __prompt_text="$1"
   local __prompt_result_var="$2"
   local __prompt_value=""
+  if is_unattended; then
+    log_to_file "$(printf "[%s] [AURELLE] Question not asked in unattended mode, default used: %s" "$(date '+%Y-%m-%d %H:%M:%S')" "$__prompt_text")"
+    printf -v "$__prompt_result_var" "%s" ""
+    return 0
+  fi
   printf "%s" "$__prompt_text" >&$PROMPT_FD_OUT
   if ! IFS= read -r -u "$PROMPT_FD" __prompt_value; then
-    __prompt_value=""
+    prompt_input_closed
   fi
   printf -v "$__prompt_result_var" "%s" "$__prompt_value"
 }
@@ -681,6 +1068,9 @@ prompt_read() {
 prompt_non_empty() {
   local prompt="$1"
   local value=""
+  if is_unattended; then
+    fail "A value is required for: ${prompt}. Set the matching AURELLE_* variable."
+  fi
   while true; do
     prompt_read "$prompt: " value
     value="${value#"${value%%[![:space:]]*}"}"
@@ -696,10 +1086,13 @@ prompt_non_empty() {
 prompt_secret() {
   local prompt="$1"
   local value=""
+  if is_unattended; then
+    fail "A value is required for: ${prompt}. Set the matching AURELLE_* variable."
+  fi
   while true; do
     printf "%s: " "$prompt" >&$PROMPT_FD_OUT
     if ! IFS= read -ers -u "$PROMPT_FD" value; then
-      value=""
+      prompt_input_closed
     fi
     printf "\n" >&$PROMPT_FD_OUT
     value="${value#"${value%%[![:space:]]*}"}"
@@ -715,9 +1108,12 @@ prompt_secret() {
 prompt_secret_optional() {
   local prompt="$1"
   local value=""
+  if is_unattended; then
+    return 0
+  fi
   printf "%s: " "$prompt" >&$PROMPT_FD_OUT
   if ! IFS= read -ers -u "$PROMPT_FD" value; then
-    value=""
+    prompt_input_closed
   fi
   printf "\n" >&$PROMPT_FD_OUT
   value="${value#"${value%%[![:space:]]*}"}"
@@ -729,6 +1125,11 @@ prompt_yes_no() {
   local prompt="$1"
   local default="$2"
   local value=""
+  if is_unattended; then
+    log_to_file "$(printf "[%s] [AURELLE] Question not asked in unattended mode, answered %s: %s" "$(date '+%Y-%m-%d %H:%M:%S')" "$default" "$prompt")"
+    printf "%s" "$default"
+    return 0
+  fi
   while true; do
     prompt_read "$prompt [y/n] (default: $default): " value
     value="$(printf "%s" "$value" | tr '[:upper:]' '[:lower:]')"
@@ -892,7 +1293,7 @@ clear_mirror_values() {
 
 configure_mirrors_menu() {
   while true; do
-    clear
+    clear_screen
     show_banner
     printf "\n"
     printf "Configure Mirrors\n"
@@ -938,6 +1339,10 @@ configure_mirrors_menu() {
 
 prompt_source_mode() {
   local mode=""
+  if is_unattended; then
+    SOURCE_MODE="github"
+    return 0
+  fi
   while true; do
     printf "\n%bSource Mode%b\n" "$COLOR_LOG" "$COLOR_RESET"
     printf "  1) GitHub\n"
@@ -1070,6 +1475,9 @@ select_backup_path() {
 }
 
 prompt_database_choice() {
+  if is_unattended; then
+    return 0
+  fi
   DB_CLIENT="sqlite3"
   POSTGRES_HOST="$DEFAULT_POSTGRES_HOST"
   POSTGRES_PORT="$DEFAULT_POSTGRES_PORT"
@@ -1143,6 +1551,9 @@ prompt_database_choice() {
 
 prompt_install_backup_restore() {
   local extension=""
+  if is_unattended; then
+    return 0
+  fi
   DB_BACKUP_PATH=""
   extension="$(database_backup_extension)"
   if [[ "$(prompt_yes_no "Restore database from a backup ${extension} file during installation?" "no")" != "yes" ]]; then
@@ -1170,7 +1581,12 @@ ensure_sudo() {
   if [[ "$EUID" -ne 0 ]]; then
     have_cmd sudo || fail "This script needs root privileges. Install sudo or run as root."
     SUDO="sudo"
-    $SUDO -v
+    if is_unattended; then
+      # There is nobody to type a password.
+      $SUDO -n true 2>/dev/null || fail "Unattended mode needs root or sudo without a password. Run it as: curl -fsSL ${SCRIPT_REMOTE_URL} | sudo bash -s -- --yes"
+    else
+      $SUDO -v || fail "sudo did not accept the password."
+    fi
   fi
 }
 
@@ -1207,10 +1623,15 @@ install_required_packages() {
   done
 
   local codename=""
-  codename="$(lsb_release -sc)" || return 1
+  codename="$(apt_release_codename)"
+  if [[ -n "$MIRROR_APT_EXTRA" && -z "$codename" ]]; then
+    warn "The release name of this system could not be found (VERSION_CODENAME in /etc/os-release), which the apt mirror needs."
+    return 1
+  fi
+  wait_for_package_manager
   if [[ -n "$MIRROR_APT_EXTRA" ]]; then
     log "Refreshing apt package index (temporary mirror: ${MIRROR_APT_EXTRA})..."
-    if ! run_silent run_as_root apt-get update \
+    if ! run_silent apt_get_run update \
       -o Dir::Etc::sourcelist=/dev/null \
       -o Dir::Etc::sourceparts=/dev/null \
       -o Dir::Etc::sourcelist=- \
@@ -1222,27 +1643,77 @@ EOF
     fi
   else
     log "Refreshing apt package index..."
-    run_silent run_as_root apt-get update || return 1
+    run_silent apt_get_run update || return 1
   fi
 
   if (( ${#missing_pkgs[@]} > 0 )); then
     log "Installing missing packages: ${missing_pkgs[*]}"
-    run_silent run_as_root apt-get install -y --allow-downgrades "${missing_pkgs[@]}" || return 1
+    run_silent apt_get_run install -y --allow-downgrades "${missing_pkgs[@]}" || return 1
   else
     log "All required base packages are already installed."
   fi
 }
 
-ensure_nodejs_from_nodesource() {
-  if command -v node &>/dev/null; then
-    local current_major
-    current_major="$(node -e 'process.stdout.write(String(process.versions.node.split(".")[0]))')"
-    if (( current_major >= NODE_MAJOR )); then
-      log "Node.js ${current_major}.x already installed. Skipping."
+# True when "24.18.0" or "v24.18.1" is at least NODE_MIN_VERSION (the repository
+# requires >= 24.18.0 in package.json, not just any 24.x).
+node_version_ok() {
+  local version="${1:-}"
+  version="${version#v}"
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || return 1
+  version="${version%%[-+]*}"
+  dpkg --compare-versions "$version" ge "$NODE_MIN_VERSION"
+}
+
+installed_node_version() {
+  have_cmd node || return 1
+  node -p 'process.versions.node' 2>/dev/null | tr -d '\r\n'
+}
+
+# Makes "node" the first acceptable Node.js: the one in PATH, else one in /usr/bin or
+# /usr/local/bin (an nvm or distribution node earlier in PATH would hide it). Prints
+# nothing; returns 0 when node is now new enough.
+use_acceptable_node() {
+  local node_dir=""
+  hash -r
+  if node_version_ok "$(installed_node_version || true)"; then
+    return 0
+  fi
+  for node_dir in /usr/bin /usr/local/bin; do
+    [[ -x "${node_dir}/node" ]] || continue
+    if node_version_ok "$("${node_dir}/node" -p 'process.versions.node' 2>/dev/null | tr -d '\r\n')"; then
+      PATH="${node_dir}:${PATH}"
+      NODE_EXEC_PATH=""
+      NPM_EXEC_PATH=""
+      hash -r
       return 0
     fi
-  fi
+  done
+  return 1
+}
 
+ensure_nodejs_from_nodesource() {
+  local current_version=""
+  if use_acceptable_node; then
+    log "Node.js $(installed_node_version) already installed. Skipping."
+    return 0
+  fi
+  current_version="$(installed_node_version || true)"
+  if [[ -n "$current_version" ]]; then
+    log "Node.js ${current_version} is older than the required ${NODE_MIN_VERSION}. Installing Node.js ${NODE_MAJOR}.x..."
+  fi
+  ensure_nodejs_installed || return 1
+
+  if ! use_acceptable_node; then
+    current_version="$(installed_node_version || true)"
+    warn "Node.js ${NODE_MIN_VERSION} or newer is required but this server has ${current_version:-no Node.js} after the installation. Check the output above, or point MIRROR_NODESOURCE at a mirror."
+    return 1
+  fi
+  log "Node.js $(installed_node_version) is ready."
+}
+
+ensure_nodejs_installed() {
+  # The NodeSource setup script runs apt-get update itself.
+  wait_for_package_manager
   if [[ -n "$MIRROR_NODESOURCE" ]]; then
     # Detect tarball vs setup-script mirror by checking for .tar.gz suffix
     if [[ "$MIRROR_NODESOURCE" == *.tar.gz ]]; then
@@ -1252,8 +1723,9 @@ ensure_nodejs_from_nodesource() {
       tmp_dir="$(mktemp -d)"
       local tarball="${tmp_dir}/node.tar.gz"
 
-      curl -fsSL "$MIRROR_NODESOURCE" -o "$tarball" || {
+      download "$MIRROR_NODESOURCE" -o "$tarball" || {
         rm -rf "$tmp_dir"
+        warn "Could not download Node.js from ${MIRROR_NODESOURCE}."
         return 1
       }
 
@@ -1272,11 +1744,11 @@ ensure_nodejs_from_nodesource() {
       local setup_url="${MIRROR_NODESOURCE%/}/setup_${NODE_MAJOR}.x"
       log "Installing Node.js ${NODE_MAJOR}.x via NodeSource-style mirror: ${setup_url}"
       if [[ -n "$SUDO" ]]; then
-        curl -fsSL "$setup_url" | $SUDO -E bash - || return 1
+        download "$setup_url" | $SUDO -E bash - || return 1
       else
-        curl -fsSL "$setup_url" | bash - || return 1
+        download "$setup_url" | bash - || return 1
       fi
-      run_silent run_as_root apt-get install -y nodejs || return 1
+      run_silent apt_get_run install -y nodejs || return 1
       return 0
     fi
   fi
@@ -1285,11 +1757,17 @@ ensure_nodejs_from_nodesource() {
   local setup_url="https://deb.nodesource.com/setup_${NODE_MAJOR}.x"
   log "Installing Node.js ${NODE_MAJOR}.x via NodeSource..."
   if [[ -n "$SUDO" ]]; then
-    curl -fsSL "$setup_url" | $SUDO -E bash - || return 1
+    download "$setup_url" | $SUDO -E bash - || {
+      warn "Could not set up NodeSource. Check the network or use a mirror (MIRROR_NODESOURCE)."
+      return 1
+    }
   else
-    curl -fsSL "$setup_url" | bash - || return 1
+    download "$setup_url" | bash - || {
+      warn "Could not set up NodeSource. Check the network or use a mirror (MIRROR_NODESOURCE)."
+      return 1
+    }
   fi
-  run_silent run_as_root apt-get install -y nodejs || return 1
+  run_silent apt_get_run install -y nodejs || return 1
 }
 
 resolve_node_exec_path() {
@@ -1528,28 +2006,111 @@ ensure_lego_installed() {
   fi
 }
 
+# Runs a command up to three times: one dropped connection should not fail an install.
+run_with_retries() {
+  local attempt=1
+  while true; do
+    if "$@"; then
+      return 0
+    fi
+    if (( attempt >= 3 )); then
+      return 1
+    fi
+    attempt=$((attempt + 1))
+    warn "That failed; trying again (attempt ${attempt} of 3)."
+    sleep 3
+  done
+}
+
+# The branch or tag the installation follows: REPO_BRANCH, else the default branch
+# of the repository (main on GitHub).
+repo_target_ref() {
+  local ref="$REPO_BRANCH"
+  if [[ -z "$ref" ]]; then
+    ref="$(run_in_install_dir_output "git symbolic-ref --quiet --short refs/remotes/origin/HEAD" 2>/dev/null | tr -d '\r\n')" || ref=""
+    ref="${ref#origin/}"
+  fi
+  printf '%s' "${ref:-main}"
+}
+
+# The commit the branch (or tag) points at on the remote, after a fetch.
+repo_remote_commit() {
+  local ref="$1"
+  local commit=""
+  commit="$(run_in_install_dir_output "git rev-parse origin/${ref}" 2>/dev/null | tr -d '\r\n')" || commit=""
+  if [[ -z "$commit" ]]; then
+    commit="$(run_in_install_dir_output "git rev-parse 'refs/tags/${ref}^{commit}'" 2>/dev/null | tr -d '\r\n')" || commit=""
+  fi
+  printf '%s' "$commit"
+}
+
+# npm may rewrite the lock files while installing. They are not edits worth keeping,
+# and they stop git from moving to a newer commit.
+discard_lockfile_changes() {
+  # shellcheck disable=SC2016
+  run_in_install_dir 'for f in package-lock.json server/package-lock.json worker/package-lock.json client/package-lock.json; do if [ -f "$f" ]; then git checkout -- "$f" 2>/dev/null; fi; done; true' || true
+}
+
+# The installer makes tracked files executable (the data command launcher is copied with
+# mode 755): without this git reports them as edited and refuses to move to a newer commit.
+ignore_checkout_file_modes() {
+  run_in_install_dir "git config core.fileMode false" || true
+}
+
+# Fetches and moves the checkout to the newest commit of the branch (or to the tag).
+sync_repo_to_ref() {
+  local ref=""
+  ignore_checkout_file_modes
+  discard_lockfile_changes
+  run_with_retries run_in_install_dir "git fetch --force --prune --tags origin" || return 1
+  ref="$(repo_target_ref)"
+  if run_in_install_dir_output "git show-ref --verify --quiet 'refs/remotes/origin/${ref}'" >/dev/null 2>&1; then
+    run_in_install_dir "git checkout -q -B '${ref}' 'origin/${ref}'" || {
+      warn "Could not switch ${INSTALL_DIR} to ${ref}. If files in it were edited by hand, see: git -C ${INSTALL_DIR} status"
+      return 1
+    }
+  elif run_in_install_dir_output "git show-ref --verify --quiet 'refs/tags/${ref}'" >/dev/null 2>&1; then
+    run_in_install_dir "git checkout -q --detach 'refs/tags/${ref}'" || return 1
+  else
+    warn "Neither a branch nor a tag called ${ref} exists in ${REPO_URL}."
+    return 1
+  fi
+  log "Source is at ${ref} ($(run_in_install_dir_output "git rev-parse --short HEAD" 2>/dev/null | tr -d '\r\n'))."
+}
+
 clone_repo() {
   run_silent run_as_root mkdir -p "$INSTALL_DIR" || return 1
 
   if run_as_root test -d "$INSTALL_DIR/.git"; then
     log "Repository exists at ${INSTALL_DIR}. Updating source..."
-    run_in_install_dir "git fetch --all --prune" || return 1
-    run_in_install_dir "git checkout main" || return 1
-    run_in_install_dir "git pull --ff-only origin main" || return 1
+    ensure_git_safe_directory || return 1
+    sync_repo_to_ref || return 1
     return 0
   fi
 
   if dir_has_entries "$INSTALL_DIR"; then
     if [[ "$(prompt_yes_no "${INSTALL_DIR} exists and is not empty. Delete it and re-clone from GitHub?" "no")" != "yes" ]]; then
-      warn "Installation canceled. Clear ${INSTALL_DIR} or use offline mode."
+      warn "${INSTALL_DIR} exists, is not empty and is not an Aurelle checkout. Move it away (or clear it) and run the installer again."
       return 1
     fi
     run_as_root rm -rf "$INSTALL_DIR" || return 1
     run_silent run_as_root mkdir -p "$INSTALL_DIR" || return 1
   fi
 
-  log "Cloning Aurelle repository..."
-  run_silent run_as_root git clone "$REPO_URL" "$INSTALL_DIR" || return 1
+  local clone_args=()
+  local clone_env=()
+  if [[ -n "$REPO_BRANCH" ]]; then
+    clone_args=(--branch "$REPO_BRANCH")
+  fi
+  if is_unattended; then
+    clone_env=(env GIT_TERMINAL_PROMPT=0)
+  fi
+  log "Cloning Aurelle repository${REPO_BRANCH:+ (${REPO_BRANCH})}..."
+  if ! run_with_retries run_silent run_as_root "${clone_env[@]}" git clone "${clone_args[@]}" "$REPO_URL" "$INSTALL_DIR"; then
+    warn "Could not clone ${REPO_URL}${REPO_BRANCH:+ (${REPO_BRANCH})}. Check the address and the network (a private repository needs credentials, which an unattended run cannot ask for)."
+    return 1
+  fi
+  ignore_checkout_file_modes
 }
 
 prepare_install_dir_for_offline() {
@@ -1842,21 +2403,39 @@ update_source_from_zip() {
 
 install_songbird_dependencies() {
   local npm_registry_arg=""
+  local package=""
   if [[ -n "$MIRROR_NPM" ]]; then
     npm_registry_arg="--registry $(printf '%q' "$MIRROR_NPM")"
   fi
 
-  log "Installing server dependencies..."
-  run_in_install_dir "npm ${npm_registry_arg} --prefix server install" || return 1
+  # "npm ci" installs exactly what the lock file says and never rewrites it; "npm
+  # install" is the fallback for a lock file that is out of step.
+  for package in server worker client; do
+    log "Installing ${package} dependencies..."
+    run_in_install_dir "npm ${npm_registry_arg} --prefix ${package} ci --no-audit --no-fund --loglevel=error || npm ${npm_registry_arg} --prefix ${package} install --no-audit --no-fund --loglevel=error" || return 1
+  done
+  discard_lockfile_changes
 
-  log "Installing worker dependencies..."
-  run_in_install_dir "npm ${npm_registry_arg} --prefix worker install" || return 1
+  build_client || return 1
+}
 
-  log "Installing client dependencies..."
-  run_in_install_dir "npm ${npm_registry_arg} --prefix client install" || return 1
-
+# Builds the client. The build before it is kept until the new one exists, so a
+# failed build does not take the running site down.
+build_client() {
   log "Building client..."
-  run_in_install_dir "npm --prefix client run build" || return 1
+  run_in_install_dir 'if [ -d client/dist ]; then rm -rf client/dist.previous && mv client/dist client/dist.previous; fi; true' || return 1
+  if ! run_in_install_dir "npm --prefix client run build"; then
+    run_in_install_dir 'rm -rf client/dist; if [ -d client/dist.previous ]; then mv client/dist.previous client/dist; fi; true' || true
+    warn "The client build failed; the previous build (if there was one) is back in place."
+    return 1
+  fi
+  run_in_install_dir 'rm -rf client/dist.previous; true' || true
+}
+
+# Prints an env file. It holds the secrets of the installation and is not readable by
+# every local user (apply_ownership), so a caller that is not root goes through sudo.
+read_env_file() {
+  cat "$1" 2>/dev/null || run_as_root cat "$1" 2>/dev/null || true
 }
 
 get_existing_env_value() {
@@ -1868,7 +2447,7 @@ get_existing_env_value() {
     return 0
   fi
   local existing
-  existing="$(grep -E "^${key}=" "$env_file" | tail -n 1 | cut -d "=" -f 2- || true)"
+  existing="$(read_env_file "$env_file" | grep -E "^${key}=" | tail -n 1 | cut -d "=" -f 2- || true)"
   if [[ -z "$existing" ]]; then
     printf "%s" "$default"
   else
@@ -1886,13 +2465,13 @@ get_existing_env_value_with_fallback() {
     return 0
   fi
   local existing
-  existing="$(grep -E "^${primary}=" "$env_file" | tail -n 1 | cut -d "=" -f 2- || true)"
+  existing="$(read_env_file "$env_file" | grep -E "^${primary}=" | tail -n 1 | cut -d "=" -f 2- || true)"
   if [[ -n "$existing" ]]; then
     printf "%s" "$existing"
     return 0
   fi
   if [[ -n "$fallback" ]]; then
-    existing="$(grep -E "^${fallback}=" "$env_file" | tail -n 1 | cut -d "=" -f 2- || true)"
+    existing="$(read_env_file "$env_file" | grep -E "^${fallback}=" | tail -n 1 | cut -d "=" -f 2- || true)"
     if [[ -n "$existing" ]]; then
       printf "%s" "$existing"
       return 0
@@ -1920,14 +2499,14 @@ get_existing_env_mb_value_with_fallback() {
   fi
 
   local existing
-  existing="$(grep -E "^${primary}=" "$env_file" | tail -n 1 | cut -d "=" -f 2- || true)"
+  existing="$(read_env_file "$env_file" | grep -E "^${primary}=" | tail -n 1 | cut -d "=" -f 2- || true)"
   if [[ -n "$existing" ]]; then
     printf "%s" "$existing"
     return 0
   fi
 
   local legacy_bytes
-  legacy_bytes="$(grep -E "^${legacy_bytes_key}=" "$env_file" | tail -n 1 | cut -d "=" -f 2- || true)"
+  legacy_bytes="$(read_env_file "$env_file" | grep -E "^${legacy_bytes_key}=" | tail -n 1 | cut -d "=" -f 2- || true)"
   if [[ -n "$legacy_bytes" ]]; then
     local converted=""
     converted="$(bytes_to_mb_rounded_up "$legacy_bytes")" || converted=""
@@ -1945,8 +2524,12 @@ replace_env_value() {
   local key="$2"
   local value="$3"
   local escaped
+  local current_content
   escaped="$(printf '%s' "$value" | sed 's/[&/]/\\&/g')"
-  if grep -qE "^${key}=" "$env_file"; then
+  # The content goes through a variable: "grep -q" ends the pipe early and, with
+  # pipefail, a cat that was cut off would read as "no such key" and append a duplicate.
+  current_content="$(read_env_file "$env_file")"
+  if grep -qE "^${key}=" <<< "$current_content"; then
     run_silent run_as_root sed -i "s|^${key}=.*|${key}=${escaped}|" "$env_file"
   else
     run_silent run_as_root bash -lc "printf '%s\n' '${key}=${escaped}' >> '$env_file'"
@@ -2127,8 +2710,28 @@ pregenerate_missing_secrets() {
   return 0
 }
 
+# Keys the generated .env has a line for. Any other key in an existing file (the
+# calls relay, a push proxy, tuning the owner did by hand) is carried over.
+ENV_TEMPLATE_KEYS=" SERVER_PORT CLIENT_PORT APP_ENV DB_CLIENT POSTGRES_HOST POSTGRES_PORT POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD POSTGRES_URL POSTGRES_SSL STORAGE_ENCRYPTION_KEY ADMIN_API_TOKEN WEBHOOK_SECRET VAPID_PUBLIC_KEY VAPID_PRIVATE_KEY VAPID_SUBJECT WORKER_PORT WORKER_URL WEBHOOK_URL PORT "
+
+# Prints the KEY=value lines of an env file that the generated file would lose.
+collect_preserved_env_lines() {
+  local env_file="$1"
+  local line=""
+  local key=""
+  run_as_root test -f "$env_file" || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || continue
+    key="${line%%=*}"
+    if [[ "$ENV_TEMPLATE_KEYS" != *" ${key} "* ]]; then
+      printf '%s\n' "$line"
+    fi
+  done < <(run_as_root cat "$env_file" 2>/dev/null)
+}
+
 write_env_fallback() {
   local env_file="$1"
+  local preserved_lines=""
   local existing_storage_encryption_key
   local existing_admin_api_token
   local existing_webhook_secret
@@ -2141,7 +2744,8 @@ write_env_fallback() {
   existing_public_key="$(get_existing_env_value "VAPID_PUBLIC_KEY" "")"
   existing_private_key="$(get_existing_env_value "VAPID_PRIVATE_KEY" "")"
   existing_subject="$(get_existing_env_value "VAPID_SUBJECT" "mailto:admin@example.com")"
-  run_silent run_as_root bash -lc "cat > '$env_file' <<'EOF'
+  preserved_lines="$(collect_preserved_env_lines "$env_file")"
+  run_silent run_as_root bash -lc "umask 077; cat > '$env_file' <<'EOF'
 # Server Configuration
 SERVER_PORT=${SERVER_PORT}
 CLIENT_PORT=${CLIENT_PORT}
@@ -2183,6 +2787,10 @@ WEBHOOK_URL=http://127.0.0.1:${SERVER_PORT}/api/uploads/webhook/processed
 # limits, remote channel, client tuning, push proxy, etc.) are configured from
 # the in-app Admin Panel after installation.
 EOF" || return 1
+  if [[ -n "$preserved_lines" ]]; then
+    printf '\n# Kept from the previous .env\n%s\n' "$preserved_lines" | run_as_root tee -a "$env_file" >/dev/null || return 1
+    log "Kept $(printf '%s\n' "$preserved_lines" | wc -l | tr -d ' ') setting(s) from the previous .env."
+  fi
   if [[ -n "$CERTBOT_EMAIL" ]]; then
     replace_env_value "$env_file" "VAPID_SUBJECT" "mailto:${CERTBOT_EMAIL}" || return 1
   fi
@@ -2231,13 +2839,13 @@ ensure_vapid_keys() {
   }
   generate_command="cd '$INSTALL_DIR/server' && ${path_export}node --input-type=module -e \"import pkg from 'web-push'; const { generateVAPIDKeys } = pkg; const k = generateVAPIDKeys(); console.log(k.publicKey); console.log(k.privateKey);\""
   if [[ -f "$LOG_FILE" ]]; then
-    printf "[%s] Running: generate VAPID keys\n" "$(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE" 2>/dev/null || true
+    log_to_file "$(printf "[%s] Running: generate VAPID keys\n" "$(date '+%Y-%m-%d %H:%M:%S')")"
   fi
   if ! run_as_root bash -lc "$generate_command" >"$stdout_file" 2>"$stderr_file"; then
     local vapid_error=""
     vapid_error="$(cat "$stderr_file" "$stdout_file" 2>/dev/null || true)"
     if [[ -f "$LOG_FILE" ]]; then
-      printf "[%s] FAILED: generate VAPID keys\n%s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$vapid_error" >> "$LOG_FILE" 2>/dev/null || true
+      log_to_file "$(printf "[%s] FAILED: generate VAPID keys\n%s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$vapid_error")"
     fi
     [[ -n "$vapid_error" ]] && printf "%s\n" "$vapid_error"
     rm -f "$stdout_file" "$stderr_file"
@@ -2252,13 +2860,13 @@ ensure_vapid_keys() {
   new_private="$(printf "%s\n" "$keys" | sed -n '2p' | tr -d '\r')"
   if [[ -z "$new_public" || -z "$new_private" ]]; then
     if [[ -f "$LOG_FILE" ]]; then
-      printf "[%s] FAILED: generate VAPID keys\nExpected public/private key output, but received incomplete output. Raw key output redacted.\n" "$(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE" 2>/dev/null || true
+      log_to_file "$(printf "[%s] FAILED: generate VAPID keys\nExpected public/private key output, but received incomplete output. Raw key output redacted.\n" "$(date '+%Y-%m-%d %H:%M:%S')")"
     fi
     warn "VAPID key generation returned incomplete output."
     return 1
   fi
   if [[ -f "$LOG_FILE" ]]; then
-    printf "[%s] SUCCESS: generate VAPID keys\n(output redacted)\n" "$(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE" 2>/dev/null || true
+    log_to_file "$(printf "[%s] SUCCESS: generate VAPID keys\n(output redacted)\n" "$(date '+%Y-%m-%d %H:%M:%S')")"
   fi
   replace_env_value "$env_file" "VAPID_PUBLIC_KEY" "$new_public" || return 1
   replace_env_value "$env_file" "VAPID_PRIVATE_KEY" "$new_private" || return 1
@@ -2280,7 +2888,7 @@ open_env_editor() {
     "$editor_cmd" "$env_file"
   fi
 
-  clear
+  clear_screen
 }
 
 sync_values_from_env() {
@@ -2504,6 +3112,10 @@ build_domain_cert_groups() {
 
 
 collect_install_options() {
+  if is_unattended; then
+    # resolve_unattended_options already filled everything in.
+    return 0
+  fi
   prompt_deploy_mode
 
   if [[ "$DEPLOY_MODE" == "domain" ]]; then
@@ -2603,7 +3215,23 @@ write_full_env_with_defaults() {
 apply_ownership() {
   log "Ensuring service user file ownership..."
   run_silent run_as_root chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "$INSTALL_DIR" || return 1
-  run_silent run_as_root git config --global --add safe.directory "$INSTALL_DIR" || return 1
+  # The settings file holds the encryption key, the admin token and the relay secret:
+  # the service user and root read it, other local users do not.
+  if run_as_root test -f "${INSTALL_DIR}/.env"; then
+    run_silent run_as_root chmod 640 "${INSTALL_DIR}/.env" || return 1
+  fi
+  ensure_git_safe_directory || return 1
+}
+
+# Root runs git in a directory the service user owns: git refuses that unless the
+# directory is listed. Listed once, not once per run.
+ensure_git_safe_directory() {
+  local listed=""
+  listed="$(run_as_root git config --global --get-all safe.directory 2>/dev/null || true)"
+  if grep -qxF "$INSTALL_DIR" <<< "$listed"; then
+    return 0
+  fi
+  run_silent run_as_root git config --global --add safe.directory "$INSTALL_DIR"
 }
 
 # Wait for the server to materialize generated secrets on first boot.
@@ -2704,8 +3332,16 @@ write_nginx_site_config() {
   local cert_line_path="$cert_path"
   local key_line_path="$key_path"
   local current_listen_line=""
+  # The names of the plain-HTTP server that redirects to HTTPS.
+  local server_name_line="server_name ${NGINX_SERVER_NAME};"
+  if [[ "$DEPLOY_MODE" == "domain" && ${#DOMAIN_NAMES[@]} -gt 0 ]]; then
+    server_name_line="server_name ${DOMAIN_NAMES[*]};"
+  fi
 
-  if [[ "$mode" == "http" && "$DEPLOY_MODE" == "domain" && "$CERT_MODE" == "certbot" ]]; then
+  # Before the certificate exists a site that will use TLS is served on port 80:
+  # that is where the certificate authority checks the domain or the IP, and where
+  # the HTTPS redirect will live. Only a plain HTTP site uses the client port.
+  if [[ "$mode" == "http" && "$CERT_MODE" != "http" ]]; then
     listen_line="listen 80 default_server;"
     alternate_listen_line="listen 80;"
   fi
@@ -2902,7 +3538,11 @@ configure_nginx() {
   log "Testing nginx configuration..."
   run_as_root nginx -t || return 1
   log "Reloading nginx..."
-  run_as_root systemctl reload nginx || return 1
+  run_logged_quiet run_as_root systemctl enable nginx || true
+  reload_nginx || {
+    warn "nginx could not be reloaded or started. Is another web server using port 80 or ${CLIENT_PORT}? See: sudo ss -ltnp | grep -E ':(80|${CLIENT_PORT}) '"
+    return 1
+  }
   log "Initial nginx configuration is active."
 }
 
@@ -2912,7 +3552,7 @@ install_ssl_files_into_nginx() {
 
   write_nginx_site_config "ssl" "$cert_path" "$key_path" || return 1
   run_as_root nginx -t || return 1
-  run_as_root systemctl reload nginx || return 1
+  reload_nginx || return 1
   log "Nginx SSL configured."
 }
 
@@ -2947,7 +3587,7 @@ configure_manual_ssl_files() {
 
     write_nginx_site_config "ssl" || return 1
     run_as_root nginx -t || return 1
-    run_as_root systemctl reload nginx || return 1
+    reload_nginx || return 1
     log "Nginx SSL configured."
     return 0
   fi
@@ -3171,6 +3811,12 @@ configure_ssl_if_needed() {
     for domain_entry in "${group_names[@]}"; do
       certbot_d_args+=(-d "$domain_entry")
     done
+    # An address is optional for Let's Encrypt; without one there are no expiry notices.
+    local certbot_email_args=(--email "$CERTBOT_EMAIL")
+    if [[ -z "$CERTBOT_EMAIL" ]]; then
+      certbot_email_args=(--register-unsafely-without-email)
+      warn "No email address was given: Let's Encrypt cannot send certificate expiry notices."
+    fi
 
     log "Requesting SSL certificate for group: $(group_csv_to_space_list "$domain_group_csv")"
     run_as_root certbot certonly \
@@ -3179,13 +3825,20 @@ configure_ssl_if_needed() {
       --https-port "$CLIENT_PORT" \
       --non-interactive \
       --agree-tos \
-      --email "$CERTBOT_EMAIL" \
-      "${certbot_d_args[@]}" || { log "ERROR: Certbot failed for group: $(group_csv_to_space_list "$domain_group_csv")"; return 1; }
+      "${certbot_email_args[@]}" \
+      "${certbot_d_args[@]}" || {
+        warn "Certbot could not issue a certificate for $(group_csv_to_space_list "$domain_group_csv"). The domain must point at this server (DNS A record) and port 80 must be reachable from the internet."
+        return 1
+      }
   done
+
+  # certbot renews on its own; nginx has to be told to use the new certificate.
+  install_certbot_deploy_hook "$(group_primary_domain "${DOMAIN_GROUPS[0]}")" \
+    || warn "Could not install the certbot renewal hook; reload nginx after each renewal."
 
   write_nginx_site_config "ssl" || return 1
   run_as_root nginx -t || return 1
-  run_as_root systemctl reload nginx || return 1
+  reload_nginx || return 1
   log "Nginx SSL configured for domain groups: ${DOMAIN_GROUPS[*]}"
 }
 
@@ -3311,6 +3964,7 @@ ensure_songbird_stopped_for_update() {
     if have_cmd systemctl && systemctl is-active --quiet songbird-worker.service 2>/dev/null; then
       run_as_root systemctl stop songbird-worker.service || true
     fi
+    UPDATE_STOPPED_SERVICES="yes"
     log "Aurelle service stopped."
   fi
 
@@ -3348,7 +4002,7 @@ update_nginx_runtime_values() {
   fi
 
   if run_as_root nginx -t; then
-    run_as_root systemctl reload nginx
+    reload_nginx
     log "Nginx updated with SERVER_PORT=${SERVER_PORT}, CLIENT_PORT=${CLIENT_PORT}, MAX_UPLOAD_MB=${MAX_UPLOAD_MB}."
     log "Backup saved at ${backup_file}."
     return 0
@@ -3380,16 +4034,68 @@ rebuild_and_restart_after_settings_change() {
   fi
 }
 
+# An update installs the calls relay only when it was asked for (AURELLE_CALLS_RELAY):
+# an installation that never had one is not changed behind its owner's back.
+install_calls_relay_if_requested() {
+  if [[ "$STRICT_CHECKS" == "1" && ( "$CALLS_RELAY_MODE" == "yes" || "$CALLS_RELAY_MODE" == "force" ) ]]; then
+    load_deployment_from_existing
+    install_calls_relay || true
+  fi
+}
+
+# Restarts the app and the worker and reloads nginx after new files are in place.
+# In a real run it also waits for the app to answer: a restart that crashes must not
+# end in a "successfully updated" message.
+restart_services_after_update() {
+  log "Restarting Aurelle service..."
+  run_as_root systemctl restart songbird.service || return 1
+  if have_cmd systemctl && systemctl list-unit-files | grep -q "^songbird-worker.service"; then
+    run_as_root systemctl restart songbird-worker.service || true
+  fi
+  UPDATE_STOPPED_SERVICES="no"
+  reload_nginx || return 1
+  if [[ "$STRICT_CHECKS" == "1" ]]; then
+    confirm_app_started || return 1
+  fi
+}
+
+# The update stops Aurelle first. Whatever ends it early (nothing new to install, a
+# failed download, a declined question) must not leave the site down.
 update_songbird() {
+  acquire_install_lock || return 1
+  update_songbird_run
+  local update_status=$?
+  if [[ "$UPDATE_STOPPED_SERVICES" == "yes" ]]; then
+    warn "The update ended before Aurelle was restarted. Starting it again..."
+    run_as_root systemctl start songbird.service || true
+    if have_cmd systemctl && systemctl list-unit-files | grep -q "^songbird-worker.service"; then
+      run_as_root systemctl start songbird-worker.service || true
+    fi
+    UPDATE_STOPPED_SERVICES="no"
+  fi
+  return "$update_status"
+}
+
+update_songbird_run() {
   if [[ ! -d "$INSTALL_DIR" ]]; then
     warn "No Aurelle install found at ${INSTALL_DIR}."
     press_enter_to_continue
     return 0
   fi
 
+  # The database and ports in use, not the defaults of a fresh shell.
+  sync_values_from_env
+
+  # A new release can need a newer Node.js: find out before the site is stopped.
+  ensure_nodejs_from_nodesource || return 1
+
   ensure_songbird_stopped_for_update || return 1
 
-  if [[ "$(prompt_yes_no "Create a database backup before updating?" "no")" == "yes" ]]; then
+  local backup_default="no"
+  if is_truthy "$AURELLE_BACKUP"; then
+    backup_default="yes"
+  fi
+  if [[ "$(prompt_yes_no "Create a database backup before updating?" "$backup_default")" == "yes" ]]; then
     backup_database || return 1
   else
     log "Skipping pre-update backup."
@@ -3480,12 +4186,8 @@ update_songbird() {
       configure_systemd_service || true
     fi
 
-    log "Restarting Aurelle service..."
-    run_as_root systemctl restart songbird.service || return 1
-    if have_cmd systemctl && systemctl list-unit-files | grep -q "^songbird-worker.service"; then
-      run_as_root systemctl restart songbird-worker.service || true
-    fi
-    run_as_root systemctl reload nginx || return 1
+    restart_services_after_update || return 1
+    install_calls_relay_if_requested
 
     show_deployment_success_frame "update"
     press_enter_to_continue
@@ -3509,9 +4211,10 @@ update_songbird() {
   fi
 
   # Get local and remote commit hashes
-  local local_commit remote_commit
+  local local_commit remote_commit target_branch
   local_commit="$(run_in_install_dir_output "git rev-parse HEAD" | tr -d '\r\n')"
-  remote_commit="$(run_in_install_dir_output "git rev-parse origin/main" | tr -d '\r\n')"
+  target_branch="$(repo_target_ref)"
+  remote_commit="$(repo_remote_commit "$target_branch")"
 
   if [[ -z "$local_commit" || -z "$remote_commit" ]]; then
     warn "Failed to determine current version. Check git repository status."
@@ -3520,7 +4223,7 @@ update_songbird() {
   fi
 
   local is_downgrade="no"
-  local target_ref="main"
+  local target_ref="$target_branch"
   local target_version=""
 
   # Check if update is available
@@ -3567,15 +4270,9 @@ update_songbird() {
     log "Update available. Preparing to update Aurelle..."
     preserve_backup_and_restore_data
 
-    # Ensure we're on main branch and pull latest
-    if ! run_in_install_dir "git checkout main"; then
-      warn "Failed to checkout main branch."
-      press_enter_to_continue
-      return 1
-    fi
-
-    if ! run_in_install_dir "git pull --ff-only origin main"; then
-      warn "Failed to pull updates. Repository may have non-fast-forward changes."
+    # Move to the newest commit of the branch (or tag) that is followed
+    if ! sync_repo_to_ref; then
+      warn "Failed to update the source. See the message above."
       press_enter_to_continue
       return 1
     fi
@@ -3602,12 +4299,8 @@ update_songbird() {
     configure_systemd_service || true
   fi
 
-  log "Restarting Aurelle service..."
-  run_as_root systemctl restart songbird.service || return 1
-  if have_cmd systemctl && systemctl list-unit-files | grep -q "^songbird-worker.service"; then
-    run_as_root systemctl restart songbird-worker.service || true
-  fi
-  run_as_root systemctl reload nginx || return 1
+  restart_services_after_update || return 1
+  install_calls_relay_if_requested
 
   show_deployment_success_frame "update"
   press_enter_to_continue
@@ -3619,7 +4312,7 @@ restart_songbird() {
   if have_cmd systemctl && systemctl list-unit-files | grep -q "^songbird-worker.service"; then
     run_as_root systemctl restart songbird-worker.service || true
   fi
-  run_as_root systemctl reload nginx || return 1
+  reload_nginx || return 1
 
   log "Aurelle restarted successfully."
   press_enter_to_continue
@@ -3650,11 +4343,11 @@ edit_settings() {
   before_max="$(get_existing_env_mb_value_with_fallback "FILE_UPLOAD_MAX_TOTAL_SIZE_MB" "FILE_UPLOAD_MAX_TOTAL_SIZE" "$DEFAULT_MAX_UPLOAD_MB")"
 
   local before after
-  before="$(sha256sum "$env_file" | awk '{print $1}')"
+  before="$(run_as_root sha256sum "$env_file" | awk '{print $1}')"
 
   open_env_editor "$env_file"
 
-  after="$(sha256sum "$env_file" | awk '{print $1}')"
+  after="$(run_as_root sha256sum "$env_file" | awk '{print $1}')"
 
   if [[ "$before" == "$after" ]]; then
     log "No changes detected in .env. Skipping rebuild."
@@ -3767,7 +4460,7 @@ remove_songbird() {
   run_as_root rm -f "$NGINX_ENABLED_FILE"
   run_as_root rm -f "$NGINX_SITE_FILE"
   if run_as_root nginx -t >/dev/null 2>&1; then
-    run_as_root systemctl reload nginx
+    reload_nginx
   fi
 
   if [[ -d "$INSTALL_DIR" ]]; then
@@ -3778,6 +4471,9 @@ remove_songbird() {
   fi
 
   log "Aurelle removed."
+  # The remembered install summary no longer describes anything.
+  INSTALL_SUMMARY_TITLE=""
+  INSTALL_SUMMARY_LINES=()
 
   if [[ -f "$GLOBAL_COMMAND_PATH" ]]; then
     if [[ "$(prompt_yes_no "Remove global command (songbird-deploy) as well?" "no")" == "yes" ]]; then
@@ -3797,7 +4493,7 @@ configure_push_proxy() {
     return 1
   fi
 
-  clear
+  clear_screen
   show_banner
   printf "\n"
   printf "Configure Push Notification Proxy\n"
@@ -3866,10 +4562,14 @@ configure_push_proxy() {
 }
 
 install_songbird() {
+  acquire_install_lock || return 1
   prompt_source_mode
   collect_install_options
   prompt_database_choice
   prompt_install_backup_restore
+  prompt_calls_relay_choice
+  TLS_FAILED="0"
+  check_system_requirements || return 1
   install_required_packages || return 1
   ensure_nodejs_from_nodesource || return 1
   ensure_service_user_exists || return 1
@@ -3899,10 +4599,17 @@ install_songbird() {
   pregenerate_missing_secrets || true
   apply_ownership || return 1
   configure_systemd_service || return 1
+  confirm_app_started || return 1
   log "Starting nginx setup..."
   configure_nginx || return 1
   log "Starting TLS setup..."
-  configure_ssl_if_needed || return 1
+  if ! configure_ssl_if_needed; then
+    # The site already answers over HTTP: keep it, say what failed, finish the rest.
+    TLS_FAILED="1"
+    warn "TLS setup failed, so Aurelle is served over plain HTTP for now (see the message above). Fix the cause and run the installer again."
+  fi
+  configure_firewall
+  install_calls_relay || true
 
   if install_global_command_from_path "$INSTALL_DIR/scripts/install.sh"; then
     log "Global command synchronized to script version ${LAST_GLOBAL_COMMAND_VERSION:-$SCRIPT_VERSION}."
@@ -3910,10 +4617,9 @@ install_songbird() {
     warn "Failed to synchronize global command after install. You can retry from the menu."
   fi
 
+  create_owner_user || warn "The owner account was not created. Create it from the menu: Manage Database, Create user."
+
   show_deployment_success_frame "install"
-
-  create_owner_user || return 1
-
   press_enter_to_continue
 }
 
@@ -3948,10 +4654,16 @@ install_global_command_from_path() {
 install_global_command_from_remote() {
   local install_version="$SCRIPT_VERSION"
   local temp_target=""
+  local remote_version=""
   temp_target="$(mktemp)"
-  if ! curl -fsSL "$SCRIPT_REMOTE_URL" > "$temp_target"; then
+  if ! download "$SCRIPT_REMOTE_URL" > "$temp_target"; then
     rm -f "$temp_target"
     return 1
+  fi
+  # Stamp the version the downloaded script has, not the 0.0.0 of a piped run.
+  remote_version="$(read_script_version_header "$temp_target" 2>/dev/null || true)"
+  if [[ -n "$remote_version" ]]; then
+    install_version="$remote_version"
   fi
   if ! sed -i "1s|^# songbird-deploy-version:.*$|# songbird-deploy-version: ${install_version}|" "$temp_target"; then
     rm -f "$temp_target"
@@ -4078,9 +4790,23 @@ installed_global_command_version() {
 
 ensure_global_command_on_first_run() {
   local installed_version=""
+  local source_path="$CURRENT_SCRIPT_PATH"
+  local source_version="$SCRIPT_VERSION"
+
+  if [[ -z "$source_path" ]]; then
+    # Piped from curl there is no script file. The copy that comes with the installed
+    # sources is the right one; before the first install the install step puts it in place.
+    if [[ -f "$INSTALL_DIR/scripts/install.sh" ]]; then
+      source_path="$INSTALL_DIR/scripts/install.sh"
+      source_version="$(resolve_script_version_for_path "$source_path" 2>/dev/null || printf "%s" "$SCRIPT_VERSION")"
+    else
+      return 0
+    fi
+  fi
+
   if ! run_as_root test -x "$GLOBAL_COMMAND_PATH"; then
     log "Global command not found. Installing it automatically..."
-    if ! install_global_command_core "$CURRENT_SCRIPT_PATH"; then
+    if ! install_global_command_core "$source_path"; then
       warn "Automatic global command installation failed. You can retry from the menu."
     fi
     return 0
@@ -4089,15 +4815,15 @@ ensure_global_command_on_first_run() {
   installed_version="$(installed_global_command_version 2>/dev/null || true)"
   if [[ -z "$installed_version" ]]; then
     log "Global command version could not be determined. Reinstalling it automatically..."
-    if ! install_global_command_core "$CURRENT_SCRIPT_PATH"; then
+    if ! install_global_command_core "$source_path"; then
       warn "Automatic global command reinstall failed. You can retry from the menu."
     fi
     return 0
   fi
 
-  if dpkg --compare-versions "$installed_version" lt "$SCRIPT_VERSION"; then
-    log "Global command version ${installed_version} is older than script version ${SCRIPT_VERSION}. Updating it automatically..."
-    if ! install_global_command_core "$CURRENT_SCRIPT_PATH"; then
+  if dpkg --compare-versions "$installed_version" lt "$source_version"; then
+    log "Global command version ${installed_version} is older than script version ${source_version}. Updating it automatically..."
+    if ! install_global_command_core "$source_path"; then
       warn "Automatic global command update failed. You can retry from the menu."
     fi
   fi
@@ -4105,7 +4831,7 @@ ensure_global_command_on_first_run() {
 
 show_logs() {
   if [[ -f "$LOG_FILE" ]]; then
-    clear
+    clear_screen
     printf "\n  Last %s lines of script log:\n\n" "$LOG_LINES"
     tail -n "$LOG_LINES" "$LOG_FILE"
   else
@@ -4116,7 +4842,7 @@ show_logs() {
 
 show_service_logs() {
   if systemctl list-units --type=service --all | grep songbird; then
-    clear
+    clear_screen
     printf "\n  Last %s lines of songbird service log:\n\n" "$LOG_LINES"
     run_as_root journalctl -u songbird --no-pager -n "$LOG_LINES"
   else
@@ -4127,7 +4853,7 @@ show_service_logs() {
 
 show_worker_service_logs() {
   if systemctl list-units --type=service --all | grep songbird-worker; then
-    clear
+    clear_screen
     printf "\n  Last %s lines of songbird-worker service log:\n\n" "$LOG_LINES"
     run_as_root journalctl -u songbird-worker --no-pager -n "$LOG_LINES"
   else
@@ -4140,7 +4866,7 @@ show_nginx_access_logs() {
   local log_file="/var/log/nginx/access.log"
 
   if [[ -f "$log_file" ]]; then
-    clear
+    clear_screen
     printf "\n  Last %s lines of nginx access log:\n\n" "$LOG_LINES"
     run_as_root tail -n "$LOG_LINES" "$log_file"
   else
@@ -4153,7 +4879,7 @@ show_nginx_error_logs() {
   local log_file="/var/log/nginx/error.log"
 
   if [[ -f "$log_file" ]]; then
-    clear
+    clear_screen
     printf "\n  Last %s lines of nginx error log:\n\n" "$LOG_LINES"
     run_as_root tail -n "$LOG_LINES" "$log_file"
   else
@@ -4168,12 +4894,12 @@ show_banner() {
   cat << 'EOF'
 ╔═══════════════════════════════════════════════════════════════════════════╗
 ║                                                                           ║
-║      ███████╗ ██████╗ ███╗   ██╗ ██████╗ ██████╗ ██╗██████╗ ██████╗       ║
-║      ██╔════╝██╔═══██╗████╗  ██║██╔════╝ ██╔══██╗██║██╔══██╗██╔══██╗      ║
-║      ███████╗██║   ██║██╔██╗ ██║██║  ███╗██████╔╝██║██████╔╝██║  ██║      ║
-║      ╚════██║██║   ██║██║╚██╗██║██║   ██║██╔══██╗██║██╔══██╗██║  ██║      ║
-║      ███████║╚██████╔╝██║ ╚████║╚██████╔╝██████╔╝██║██║  ██║██████╔╝      ║
-║      ╚══════╝ ╚═════╝ ╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚═╝╚═╝  ╚═╝╚═════╝       ║
+║          █████╗ ██╗   ██╗██████╗ ███████╗██╗     ██╗     ███████╗         ║
+║         ██╔══██╗██║   ██║██╔══██╗██╔════╝██║     ██║     ██╔════╝         ║
+║         ███████║██║   ██║██████╔╝█████╗  ██║     ██║     █████╗           ║
+║         ██╔══██║██║   ██║██╔══██╗██╔══╝  ██║     ██║     ██╔══╝           ║
+║         ██║  ██║╚██████╔╝██║  ██║███████╗███████╗███████╗███████╗         ║
+║         ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝╚══════╝╚══════╝╚══════╝         ║
 ║                                                                           ║
 ║                           D E P L O Y   T O O L                           ║
 ╚═══════════════════════════════════════════════════════════════════════════╝
@@ -4184,7 +4910,7 @@ EOF
 
 
 show_menu() {
-  clear
+  clear_screen
   show_banner
   printf "\n"
   printf "Aurelle Deploy Menu\n"
@@ -4197,12 +4923,13 @@ show_menu() {
   printf $'7) 🔄️  Update menu\n'
   printf $'8) 🌐  Configure mirrors\n'
   printf $'9) 📋  View Logs\n'
+  printf $'10) 📞  Calls relay (coturn)\n'
   printf $'0) 🚪  Exit\n\n'
 }
 
 show_logs_menu() {
   while true; do
-    clear
+    clear_screen
     show_banner
     printf "\n"
     printf "Logs Menu\n"
@@ -4353,9 +5080,32 @@ check_owner_exists() {
   run_db_command_logged_quiet npm --prefix server run db:owner:check
 }
 
-# After installation, offer to create an owner user if none exists.
+# After installation, offer to create an owner user if none exists. Unattended, the
+# account is created only when AURELLE_OWNER_USERNAME and AURELLE_OWNER_PASSWORD are set.
 create_owner_user() {
+  local nickname=""
+  local username=""
+  local password=""
+
   if check_owner_exists; then
+    OWNER_CREATED="existing"
+    return 0
+  fi
+
+  if is_unattended; then
+    if [[ -z "$AURELLE_OWNER_USERNAME" ]]; then
+      log "No owner account yet. The summary below says how to create it."
+      return 0
+    fi
+    username="$AURELLE_OWNER_USERNAME"
+    nickname="${AURELLE_OWNER_NICKNAME:-$AURELLE_OWNER_USERNAME}"
+    log "Creating the owner account ${username}..."
+    run_db_command npm --prefix server run db:user:create -- \
+      --nickname "$nickname" \
+      --username "$username" \
+      --password "$AURELLE_OWNER_PASSWORD" \
+      --role owner || return 1
+    OWNER_CREATED="$username"
     return 0
   fi
 
@@ -4364,10 +5114,6 @@ create_owner_user() {
   if [[ "$(prompt_yes_no "Would you like to create an owner user now?" "yes")" != "yes" ]]; then
     return 0
   fi
-
-  local nickname=""
-  local username=""
-  local password=""
 
   nickname="$(prompt_non_empty "Nickname")"
   username="$(prompt_non_empty "Username (lowercase letters, numbers, ., _)")"
@@ -4378,6 +5124,7 @@ create_owner_user() {
     --username "$username" \
     --password "$password" \
     --role owner || return 1
+  OWNER_CREATED="$username"
 }
 
 print_db_script_help() {
@@ -4477,7 +5224,7 @@ db_backup() {
 }
 
 db_help() {
-  clear
+  clear_screen
   show_banner
   printf "\n"
   print_db_script_help
@@ -5080,7 +5827,7 @@ db_user_verify() {
 show_db_menu() {
   sync_values_from_env
   while true; do
-    clear
+    clear_screen
     show_banner
     printf "\n"
 
@@ -5162,25 +5909,1342 @@ show_db_menu() {
   done
 }
 
+# ---------------------------------------------------------------------------
+# Command line and unattended mode
+# ---------------------------------------------------------------------------
+
+print_usage() {
+  cat <<EOF
+Aurelle deploy tool (version ${SCRIPT_VERSION})
+
+Usage: install.sh [options]
+
+Without options the interactive menu opens. With --yes nothing is asked: every
+value comes from a flag, an AURELLE_* variable or a default, and the script
+installs Aurelle (or updates an installation that is already there).
+
+One line, unattended:
+
+  curl -fsSL ${SCRIPT_REMOTE_URL} | sudo env AURELLE_YES=1 AURELLE_DOMAIN=chat.example.com AURELLE_EMAIL=me@example.com bash
+  curl -fsSL ${SCRIPT_REMOTE_URL} | sudo bash -s -- --yes --domain chat.example.com --email me@example.com
+
+Options (the variable that does the same is in brackets):
+  -y, --yes                Install or update without questions [AURELLE_YES=1]
+      --domain NAMES       Serve on these comma-separated domains [AURELLE_DOMAIN]; without one the server IP is used
+      --email ADDRESS      Contact for Let's Encrypt and push notifications [AURELLE_EMAIL]
+      --tls MODE           auto (default: HTTPS for a domain, HTTP for an IP), certbot, selfsigned, files, http [AURELLE_TLS]
+      --tls-cert FILE      fullchain.pem for --tls files [AURELLE_TLS_CERT]
+      --tls-key FILE       privkey.pem for --tls files [AURELLE_TLS_KEY]
+      --ip ADDRESS         This server's public IPv4, when it cannot be detected [AURELLE_PUBLIC_IP]
+      --server-port N      Port of the Aurelle server, default ${DEFAULT_SERVER_PORT} [AURELLE_SERVER_PORT]
+      --client-port N      Port nginx listens on, default 80 (443 with TLS) [AURELLE_CLIENT_PORT]
+      --worker-port N      Port of the media worker, default ${DEFAULT_WORKER_PORT} [AURELLE_WORKER_PORT]
+      --calls-relay        Install the voice and video calls relay (coturn), the default [AURELLE_CALLS_RELAY=1]
+      --no-calls-relay     Do not install it [AURELLE_CALLS_RELAY=0]
+      --action ACTION      auto (default: install, or update when installed), install or update [AURELLE_ACTION]
+      --branch REF         Branch or tag to install, default is the repository's default branch [REPO_BRANCH]
+      --repo URL           Git repository to install from [REPO_URL]
+  -v, --version            Print the version of this script
+  -h, --help               Print this help
+
+More variables: AURELLE_DB (sqlite3 or postgres), AURELLE_POSTGRES_URL, AURELLE_BACKUP=1
+(back up the database before an update), AURELLE_RESTORE_BACKUP (file to restore on a new
+install), AURELLE_OWNER_USERNAME / AURELLE_OWNER_PASSWORD / AURELLE_OWNER_NICKNAME (create the
+first owner account), AURELLE_RELAY_PORT, AURELLE_RELAY_MIN_PORT, AURELLE_RELAY_MAX_PORT,
+MIRROR_NODESOURCE, MIRROR_NPM and MIRROR_APT_EXTRA (restricted networks).
+
+Exit codes: 0 done, 1 failed, ${EXIT_USAGE} wrong usage or no terminal to ask on,
+${EXIT_TLS_FAILED} installed but the TLS certificate could not be issued (the site works over HTTP).
+EOF
+}
+
+# Stores one valued flag in the variable that the unattended mode reads.
+set_cli_option() {
+  local flag="$1"
+  local value="$2"
+  case "$flag" in
+    --domain) AURELLE_DOMAIN="$value" ;;
+    --email) AURELLE_EMAIL="$value" ;;
+    --tls) AURELLE_TLS="$value" ;;
+    --tls-cert) AURELLE_TLS_CERT="$value" ;;
+    --tls-key) AURELLE_TLS_KEY="$value" ;;
+    --ip) AURELLE_PUBLIC_IP="$value" ;;
+    --server-port) AURELLE_SERVER_PORT="$value" ;;
+    --client-port) AURELLE_CLIENT_PORT="$value" ;;
+    --worker-port) AURELLE_WORKER_PORT="$value" ;;
+    --calls-relay) AURELLE_CALLS_RELAY="$value" ;;
+    --action) AURELLE_ACTION="$value" ;;
+    --branch) REPO_BRANCH="$value" ;;
+    --repo) REPO_URL="$value" ;;
+    *) usage_fail "Unknown option: ${flag}" ;;
+  esac
+}
+
+parse_cli_args() {
+  local arg=""
+  local value=""
+  while (( $# > 0 )); do
+    arg="$1"
+    case "$arg" in
+      -y|--yes|--unattended|--non-interactive)
+        AURELLE_YES="1"
+        shift
+        ;;
+      -h|--help)
+        print_usage
+        SKIP_CLEAR_ON_EXIT="1"
+        exit 0
+        ;;
+      -v|--version)
+        SHOW_VERSION="1"
+        shift
+        ;;
+      --no-calls-relay)
+        AURELLE_CALLS_RELAY="0"
+        shift
+        ;;
+      --calls-relay)
+        # A bare --calls-relay means yes; an explicit yes/no/force may follow.
+        if [[ "${2:-}" =~ ^(1|0|yes|no|true|false|force)$ ]]; then
+          AURELLE_CALLS_RELAY="$2"
+          shift 2
+        else
+          AURELLE_CALLS_RELAY="1"
+          shift
+        fi
+        ;;
+      --calls-relay=*)
+        AURELLE_CALLS_RELAY="${arg#*=}"
+        shift
+        ;;
+      --domain|--email|--tls|--tls-cert|--tls-key|--ip|--server-port|--client-port|--worker-port|--action|--branch|--repo)
+        if (( $# < 2 )); then
+          usage_fail "${arg} needs a value."
+        fi
+        value="$2"
+        set_cli_option "$arg" "$value"
+        shift 2
+        ;;
+      --domain=*|--email=*|--tls=*|--tls-cert=*|--tls-key=*|--ip=*|--server-port=*|--client-port=*|--worker-port=*|--action=*|--branch=*|--repo=*)
+        set_cli_option "${arg%%=*}" "${arg#*=}"
+        shift
+        ;;
+      --)
+        shift
+        break
+        ;;
+      *)
+        usage_fail "Unknown option: ${arg}"
+        ;;
+    esac
+  done
+  if (( $# > 0 )); then
+    usage_fail "Unexpected argument: $1"
+  fi
+  if is_truthy "$AURELLE_YES"; then
+    UNATTENDED="1"
+  fi
+}
+
+lowercase() {
+  printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'
+}
+
+# Stores a port from a flag or variable, or the default, in the variable named by
+# the first argument; anything else is a usage error. It does not print its
+# result so that the error exits the script and not a subshell.
+unattended_port() {
+  local __result_var="$1"
+  local name="$2"
+  local value=""
+  value="$(sanitize_input_value "${3:-}")"
+  local default="$4"
+  if [[ -z "$value" ]]; then
+    printf -v "$__result_var" '%s' "$default"
+    return 0
+  fi
+  if [[ "$value" =~ ^[0-9]+$ ]] && (( value >= 1 && value <= 65535 )); then
+    printf -v "$__result_var" '%s' "$value"
+    return 0
+  fi
+  usage_fail "${name} must be a port between 1 and 65535 (got: ${value})."
+}
+
+is_valid_domain_name() {
+  local name="${1:-}"
+  [[ ${#name} -le 253 ]] || return 1
+  [[ "$name" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$ ]]
+}
+
+is_valid_email() {
+  [[ "${1:-}" =~ ^[^@[:space:]\'\"\\]+@[^@[:space:]\'\"\\]+\.[^@[:space:]\'\"\\]+$ ]]
+}
+
+is_valid_ipv4() {
+  local ip="${1:-}"
+  [[ "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || return 1
+  local octet=""
+  local IFS=.
+  for octet in $ip; do
+    (( 10#$octet <= 255 )) || return 1
+  done
+  return 0
+}
+
+# Addresses that cannot be reached from the internet: private, loopback, link-local, CGNAT.
+is_private_ipv4() {
+  local ip="${1:-}"
+  is_valid_ipv4 "$ip" || return 1
+  local a="" b=""
+  IFS=. read -r a b _ _ <<< "$ip"
+  a=$((10#$a))
+  b=$((10#$b))
+  (( a == 10 || a == 127 || a == 0 )) && return 0
+  (( a == 172 && b >= 16 && b <= 31 )) && return 0
+  (( a == 192 && b == 168 )) && return 0
+  (( a == 169 && b == 254 )) && return 0
+  (( a == 100 && b >= 64 && b <= 127 )) && return 0
+  return 1
+}
+
+# Turns the AURELLE_* values into the variables the interactive questions fill.
+resolve_unattended_options() {
+  local domain_raw=""
+  local tls_choice=""
+  local domain=""
+
+  unattended_port SERVER_PORT AURELLE_SERVER_PORT "$AURELLE_SERVER_PORT" "$DEFAULT_SERVER_PORT"
+  unattended_port WORKER_PORT AURELLE_WORKER_PORT "$AURELLE_WORKER_PORT" "$DEFAULT_WORKER_PORT"
+
+  CERTBOT_EMAIL="$(sanitize_input_value "$AURELLE_EMAIL")"
+  if [[ -n "$CERTBOT_EMAIL" ]] && ! is_valid_email "$CERTBOT_EMAIL"; then
+    usage_fail "AURELLE_EMAIL is not an email address: ${CERTBOT_EMAIL}"
+  fi
+
+  domain_raw="$(sanitize_input_value "$AURELLE_DOMAIN")"
+  if [[ -n "$domain_raw" ]]; then
+    DEPLOY_MODE="domain"
+    parse_domain_input "$domain_raw"
+    if (( ${#DOMAIN_NAMES[@]} == 0 )); then
+      usage_fail "AURELLE_DOMAIN has no usable domain name (got: ${domain_raw})."
+    fi
+    for domain in "${DOMAIN_NAMES[@]}"; do
+      if ! is_valid_domain_name "$domain"; then
+        usage_fail "AURELLE_DOMAIN contains an invalid domain name: ${domain}"
+      fi
+    done
+    log_domain_groups
+  else
+    DEPLOY_MODE="ip"
+    DOMAIN_NAMES=()
+    DOMAIN_GROUPS=()
+    NGINX_SERVER_NAME="_"
+  fi
+
+  if [[ -n "$AURELLE_PUBLIC_IP" ]] && ! is_valid_ipv4 "$AURELLE_PUBLIC_IP"; then
+    usage_fail "AURELLE_PUBLIC_IP is not an IPv4 address: ${AURELLE_PUBLIC_IP}"
+  fi
+
+  tls_choice="$(lowercase "$(sanitize_input_value "$AURELLE_TLS")")"
+  case "$tls_choice" in
+    ""|auto)
+      # A domain gets a real certificate. A bare IP stays on HTTP: an IP
+      # certificate lives six days and needs the address to be reachable.
+      if [[ "$DEPLOY_MODE" == "domain" ]]; then
+        CERT_MODE="certbot"
+      else
+        CERT_MODE="http"
+      fi
+      ;;
+    certbot|letsencrypt|acme) CERT_MODE="certbot" ;;
+    selfsigned|self-signed) CERT_MODE="selfsigned" ;;
+    files|file) CERT_MODE="files" ;;
+    http|none|off) CERT_MODE="http" ;;
+    *) usage_fail "AURELLE_TLS must be auto, certbot, selfsigned, files or http (got: ${tls_choice})." ;;
+  esac
+
+  if [[ "$DEPLOY_MODE" == "ip" ]]; then
+    # The address is the one to visit, and the one an IP certificate is issued for.
+    detect_public_ip
+    CERTBOT_IP_ADDRESS="$PUBLIC_IP"
+    if [[ "$CERT_MODE" == "certbot" ]]; then
+      if [[ -z "$CERTBOT_IP_ADDRESS" ]]; then
+        usage_fail "An IP certificate needs the server's public IPv4 and it could not be detected: set AURELLE_PUBLIC_IP."
+      fi
+      if [[ -z "$CERTBOT_EMAIL" ]]; then
+        usage_fail "An IP certificate needs AURELLE_EMAIL."
+      fi
+      NGINX_SERVER_NAME="$CERTBOT_IP_ADDRESS"
+    fi
+  fi
+
+  if [[ "$CERT_MODE" == "files" ]]; then
+    local cert_path="" key_path=""
+    cert_path="$(resolve_file_path "$AURELLE_TLS_CERT")" || cert_path=""
+    key_path="$(resolve_file_path "$AURELLE_TLS_KEY")" || key_path=""
+    if [[ -z "$cert_path" || -z "$key_path" ]]; then
+      usage_fail "AURELLE_TLS=files needs AURELLE_TLS_CERT and AURELLE_TLS_KEY to point at existing files."
+    fi
+    MANUAL_CERT_FULLCHAIN_PATH="$cert_path"
+    MANUAL_CERT_PRIVKEY_PATH="$key_path"
+    MANUAL_CERT_GROUP_FULLCHAIN_PATHS=()
+    MANUAL_CERT_GROUP_PRIVKEY_PATHS=()
+    local group_csv=""
+    for group_csv in "${DOMAIN_GROUPS[@]}"; do
+      # One certificate for every group: it has to cover all the names.
+      MANUAL_CERT_GROUP_FULLCHAIN_PATHS+=("$cert_path")
+      MANUAL_CERT_GROUP_PRIVKEY_PATHS+=("$key_path")
+    done
+  fi
+
+  if [[ "$CERT_MODE" == "http" ]]; then
+    unattended_port CLIENT_PORT AURELLE_CLIENT_PORT "$AURELLE_CLIENT_PORT" "$DEFAULT_CLIENT_PORT"
+  else
+    unattended_port CLIENT_PORT AURELLE_CLIENT_PORT "$AURELLE_CLIENT_PORT" "443"
+  fi
+  if [[ "$WORKER_PORT" == "$SERVER_PORT" || "$WORKER_PORT" == "$CLIENT_PORT" ]]; then
+    usage_fail "The media worker port (${WORKER_PORT}) cannot be the same as the server port (${SERVER_PORT}) or the client port (${CLIENT_PORT})."
+  fi
+
+  case "$(lowercase "$(sanitize_input_value "$AURELLE_DB")")" in
+    ""|sqlite|sqlite3) DB_CLIENT="sqlite3" ;;
+    postgres|postgresql|pg)
+      DB_CLIENT="postgres"
+      POSTGRES_URL="$(sanitize_input_value "$AURELLE_POSTGRES_URL")"
+      if [[ -n "$POSTGRES_URL" ]]; then
+        if [[ ! "$POSTGRES_URL" =~ ^postgres(ql)?:// ]]; then
+          usage_fail "AURELLE_POSTGRES_URL must start with postgres:// or postgresql://."
+        fi
+        if [[ "$POSTGRES_URL" == *"sslmode=require"* || "$POSTGRES_URL" == *"ssl=true"* ]]; then
+          POSTGRES_SSL="true"
+        fi
+      else
+        # A local database gets its own password instead of the well-known default.
+        POSTGRES_PASSWORD="$(get_existing_env_value "POSTGRES_PASSWORD" "")"
+        if [[ -z "$POSTGRES_PASSWORD" || "$POSTGRES_PASSWORD" == "$DEFAULT_POSTGRES_PASSWORD" ]]; then
+          POSTGRES_PASSWORD="$(generate_secret_hex || true)"
+          POSTGRES_PASSWORD="${POSTGRES_PASSWORD:0:32}"
+        fi
+        [[ -n "$POSTGRES_PASSWORD" ]] || usage_fail "Could not generate a password for the local PostgreSQL database."
+      fi
+      ;;
+    *) usage_fail "AURELLE_DB must be sqlite3 or postgres." ;;
+  esac
+
+  if [[ -n "$AURELLE_RESTORE_BACKUP" ]]; then
+    DB_BACKUP_PATH="$(resolve_file_path "$AURELLE_RESTORE_BACKUP")" || usage_fail "AURELLE_RESTORE_BACKUP is not a file: ${AURELLE_RESTORE_BACKUP}"
+  fi
+
+  if [[ -n "$AURELLE_OWNER_USERNAME" || -n "$AURELLE_OWNER_PASSWORD" ]]; then
+    if [[ -z "$AURELLE_OWNER_USERNAME" || -z "$AURELLE_OWNER_PASSWORD" ]]; then
+      usage_fail "AURELLE_OWNER_USERNAME and AURELLE_OWNER_PASSWORD go together."
+    fi
+  fi
+
+  resolve_calls_relay_mode
+  SOURCE_MODE="github"
+}
+
+# What AURELLE_CALLS_RELAY asks for: yes, no, force, or empty when it was not set.
+resolve_calls_relay_mode() {
+  local value=""
+  value="$(lowercase "$(sanitize_input_value "$AURELLE_CALLS_RELAY")")"
+  case "$value" in
+    "") CALLS_RELAY_MODE="" ;;
+    1|true|yes|y|on) CALLS_RELAY_MODE="yes" ;;
+    0|false|no|n|off) CALLS_RELAY_MODE="no" ;;
+    force) CALLS_RELAY_MODE="force" ;;
+    *) usage_fail "AURELLE_CALLS_RELAY must be 1, 0 or force (got: ${value})." ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# Public address, host firewall
+# ---------------------------------------------------------------------------
+
+# The IPv4 address this server uses to reach the internet (may be a private one
+# behind NAT).
+detect_local_ipv4() {
+  local ip=""
+  if have_cmd ip; then
+    ip="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n 1)"
+  fi
+  if ! is_valid_ipv4 "$ip" && have_cmd hostname; then
+    ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  fi
+  if is_valid_ipv4 "$ip"; then
+    printf '%s' "$ip"
+  fi
+}
+
+# Sets PUBLIC_IP: AURELLE_PUBLIC_IP, else what an outside service sees, else the
+# local address when that one is public. Empty when it cannot be found.
+detect_public_ip() {
+  if [[ -n "$PUBLIC_IP" ]]; then
+    return 0
+  fi
+  if [[ -n "$AURELLE_PUBLIC_IP" ]] && is_valid_ipv4 "$AURELLE_PUBLIC_IP"; then
+    PUBLIC_IP="$AURELLE_PUBLIC_IP"
+    return 0
+  fi
+  local url="" ip=""
+  if have_cmd curl; then
+    for url in https://api.ipify.org https://ifconfig.me/ip https://icanhazip.com https://checkip.amazonaws.com; do
+      ip="$(curl -fsS4 --max-time 4 "$url" 2>/dev/null | tr -d '[:space:]' || true)"
+      if is_valid_ipv4 "$ip" && ! is_private_ipv4 "$ip"; then
+        PUBLIC_IP="$ip"
+        return 0
+      fi
+    done
+  fi
+  ip="$(detect_local_ipv4)"
+  if [[ -n "$ip" ]] && ! is_private_ipv4 "$ip"; then
+    PUBLIC_IP="$ip"
+  fi
+  return 0
+}
+
+# IPv4 addresses a name resolves to, separated by spaces.
+resolve_domain_ipv4() {
+  local name="${1:-}"
+  [[ -n "$name" ]] || return 0
+  getent ahostsv4 "$name" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' | sed 's/ *$//'
+}
+
+# Opens ports in whichever host firewall is switched on. Never switches one on:
+# that could lock the owner out of SSH. Arguments look like 80/tcp or 49160-49260/udp.
+firewall_open_ports() {
+  local spec=""
+  local status=""
+  local opened=()
+  if have_cmd ufw; then
+    status="$(run_as_root ufw status 2>/dev/null || true)"
+    if [[ "$status" == *"Status: active"* ]]; then
+      for spec in "$@"; do
+        # ufw writes a port range as 49160:49260.
+        if run_logged_quiet run_as_root ufw allow "${spec//-/:}"; then
+          opened+=("$spec")
+        else
+          warn "ufw could not allow ${spec}. Open it by hand: sudo ufw allow ${spec//-/:}"
+        fi
+      done
+      if (( ${#opened[@]} > 0 )); then
+        log "ufw is active: opened ${opened[*]}."
+      fi
+      return 0
+    fi
+  fi
+  if have_cmd firewall-cmd && run_as_root firewall-cmd --state >/dev/null 2>&1; then
+    for spec in "$@"; do
+      if run_logged_quiet run_as_root firewall-cmd --permanent --add-port="$spec"; then
+        opened+=("$spec")
+      else
+        warn "firewalld could not allow ${spec}. Open it by hand: sudo firewall-cmd --permanent --add-port=${spec}"
+      fi
+    done
+    run_logged_quiet run_as_root firewall-cmd --reload || true
+    if (( ${#opened[@]} > 0 )); then
+      log "firewalld is active: opened ${opened[*]}."
+    fi
+    return 0
+  fi
+  log "No active host firewall (ufw or firewalld) found, so nothing to open here. If your hosting provider has its own firewall, allow: $*"
+}
+
+# The ports nginx needs: 80 for the redirect and for certificate renewal, and
+# the client port.
+configure_firewall() {
+  local ports=("${CLIENT_PORT}/tcp")
+  if [[ "$CERT_MODE" != "http" && "$CLIENT_PORT" != "80" ]]; then
+    ports=("80/tcp" "${CLIENT_PORT}/tcp")
+  fi
+  firewall_open_ports "${ports[@]}"
+}
+
+# ---------------------------------------------------------------------------
+# Voice and video calls relay (coturn)
+# ---------------------------------------------------------------------------
+
+COTURN_MARKER="# Managed by the Aurelle installer"
+# Where the distribution's coturn package keeps its files (the tests point these elsewhere).
+COTURN_CONFIG_PRIMARY="/etc/turnserver.conf"
+COTURN_CONFIG_ALTERNATE="/etc/coturn/turnserver.conf"
+COTURN_CERT_DIR="/etc/coturn/certs"
+COTURN_DEFAULTS_FILE="/etc/default/coturn"
+CERTBOT_HOOK_DIR="/etc/letsencrypt/renewal-hooks/deploy"
+
+# Addresses a relay must never forward to, exactly as docs/Calls-and-Video-Messages.md
+# lists them. Never write ::-:: here: that range is the whole IPv4 space.
+COTURN_DENIED_PEERS=(
+  "0.0.0.0-0.255.255.255"
+  "10.0.0.0-10.255.255.255"
+  "100.64.0.0-100.127.255.255"
+  "127.0.0.0-127.255.255.255"
+  "169.254.0.0-169.254.255.255"
+  "172.16.0.0-172.31.255.255"
+  "192.168.0.0-192.168.255.255"
+  "::1-::1"
+  "::ffff:0:0-::ffff:ffff:ffff"
+  "64:ff9b::-64:ff9b::ffff:ffff"
+  "fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+  "fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+)
+
+# The name to put in CALLS_TURN_URLS. A domain only when it points straight at
+# this server: behind Cloudflare's proxy (orange cloud) a name resolves to
+# Cloudflare, which carries web traffic and never TURN, so the raw IP is used.
+# Arguments: domain (may be empty), public IP (may be empty), the IPs the domain
+# resolves to (space separated).
+relay_host_for() {
+  local domain="${1:-}"
+  local public_ip="${2:-}"
+  local resolved="${3:-}"
+  local ip=""
+  if [[ -z "$domain" ]]; then
+    printf '%s' "$public_ip"
+    return 0
+  fi
+  if [[ -z "$public_ip" ]]; then
+    printf '%s' "$domain"
+    return 0
+  fi
+  for ip in $resolved; do
+    if [[ "$ip" == "$public_ip" ]]; then
+      printf '%s' "$domain"
+      return 0
+    fi
+  done
+  printf '%s' "$public_ip"
+}
+
+# CALLS_TURN_URLS for the app: STUN and TURN on the one port, TURN again over TCP
+# (the app adds the TCP twin itself; writing it out keeps it when
+# CALLS_TURN_TCP_FALLBACK is switched off), and turns: when the relay has TLS.
+# Arguments: host, port, TLS port (empty without TLS).
+build_calls_turn_urls() {
+  local host="$1"
+  local port="$2"
+  local tls_port="${3:-}"
+  local urls="stun:${host}:${port},turn:${host}:${port},turn:${host}:${port}?transport=tcp"
+  if [[ -n "$tls_port" ]]; then
+    urls="${urls},turns:${host}:${tls_port}"
+  fi
+  printf '%s' "$urls"
+}
+
+# The coturn configuration, on stdout. It follows the documented setup (use-auth-secret
+# with one shared secret, the peer deny list, no multicast) and docker-compose.yaml.
+# Arguments: realm, secret, public IP, local IP, port, relay min port, relay max port,
+# then optionally TLS port, certificate file and key file (all three or none).
+render_coturn_config() {
+  local realm="$1"
+  local secret="$2"
+  local public_ip="${3:-}"
+  local local_ip="${4:-}"
+  local port="${5:-3478}"
+  local min_port="${6:-49160}"
+  local max_port="${7:-49260}"
+  local tls_port="${8:-}"
+  local tls_cert="${9:-}"
+  local tls_key="${10:-}"
+  local range=""
+
+  printf '%s\n' "$COTURN_MARKER"
+  printf '%s\n' "# (scripts/install.sh). Running the installer again rewrites this file."
+  printf '%s\n' "# See docs/Calls-and-Video-Messages.md for what each line is for."
+  printf '\n'
+  printf 'realm=%s\n' "$realm"
+  printf 'listening-port=%s\n' "$port"
+  if [[ -n "$tls_port" && -n "$tls_cert" && -n "$tls_key" ]]; then
+    printf 'tls-listening-port=%s\n' "$tls_port"
+    printf 'cert=%s\n' "$tls_cert"
+    printf 'pkey=%s\n' "$tls_key"
+  fi
+  printf '\n'
+  printf '%s\n' "# Short-lived per-user credentials; the app signs them with the same secret"
+  printf '%s\n' "# (CALLS_TURN_SECRET in its .env file)."
+  printf '%s\n' "use-auth-secret"
+  printf 'static-auth-secret=%s\n' "$secret"
+  if [[ -n "$public_ip" ]]; then
+    printf '\n'
+    if [[ -n "$local_ip" && "$local_ip" != "$public_ip" ]]; then
+      printf '%s\n' "# Behind NAT the relay advertises the public address."
+      printf 'external-ip=%s/%s\n' "$public_ip" "$local_ip"
+    else
+      printf 'external-ip=%s\n' "$public_ip"
+    fi
+  fi
+  printf '\n'
+  printf 'min-port=%s\n' "$min_port"
+  printf 'max-port=%s\n' "$max_port"
+  printf '\n'
+  printf '%s\n' "fingerprint"
+  printf '%s\n' "no-cli"
+  printf '%s\n' "no-software-attribute"
+  printf '%s\n' "no-tlsv1"
+  printf '%s\n' "no-tlsv1_1"
+  printf '%s\n' "no-rfc5780"
+  printf '%s\n' "no-stun-backward-compatibility"
+  printf '%s\n' "response-origin-only-with-rfc5780"
+  printf '%s\n' "syslog"
+  printf '\n'
+  printf '%s\n' "# Never relay to private networks or to this machine itself."
+  printf '%s\n' "no-multicast-peers"
+  for range in "${COTURN_DENIED_PEERS[@]}"; do
+    printf 'denied-peer-ip=%s\n' "$range"
+  done
+  printf '\n'
+  printf '%s\n' "# Keep one user from exhausting the relay."
+  printf '%s\n' "user-quota=6"
+  printf '%s\n' "total-quota=200"
+  printf '%s\n' "max-bps=262144"
+}
+
+# Where the distribution's coturn package reads its configuration.
+coturn_config_path() {
+  if [[ ! -f "$COTURN_CONFIG_PRIMARY" && -f "$COTURN_CONFIG_ALTERNATE" ]]; then
+    printf '%s' "$COTURN_CONFIG_ALTERNATE"
+    return 0
+  fi
+  printf '%s' "$COTURN_CONFIG_PRIMARY"
+}
+
+# True when the file holds a coturn setup that somebody else wrote: active
+# settings beyond the distribution's defaults and none of our marker. Replacing it
+# could break another service that uses the same coturn.
+coturn_config_is_unmanaged() {
+  local conf_file="$1"
+  [[ -f "$conf_file" ]] || return 1
+  if grep -qF "$COTURN_MARKER" "$conf_file" 2>/dev/null; then
+    return 1
+  fi
+  local line=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [[ -z "$line" ]] && continue
+    case "$line" in
+      syslog|no-rfc5780|no-stun-backward-compatibility|response-origin-only-with-rfc5780) ;;
+      *) return 0 ;;
+    esac
+  done < "$conf_file"
+  return 1
+}
+
+# A certbot deploy hook: after every renewal nginx reloads and, when the calls relay has
+# its own copy of the certificate (COTURN_CERT_DIR exists), coturn gets the new one. The
+# relay part is always written and checks at run time, so the hook stays right whichever
+# step wrote it last. Argument: certificate name.
+install_certbot_deploy_hook() {
+  local cert_name="$1"
+  local hook_dir="$CERTBOT_HOOK_DIR"
+  local hook_file="${hook_dir}/aurelle-reload.sh"
+  local tmp_file=""
+  tmp_file="$(mktemp)" || return 1
+  {
+    printf '%s\n' "#!/bin/sh"
+    printf '%s\n' "# Installed by the Aurelle installer: use a renewed certificate."
+    printf '%s\n' "systemctl reload nginx >/dev/null 2>&1 || true"
+    printf '%s\n' "if [ \"\$RENEWED_LINEAGE\" = \"/etc/letsencrypt/live/${cert_name}\" ] && [ -d ${COTURN_CERT_DIR} ]; then"
+    printf '%s\n' "  cp -L \"\$RENEWED_LINEAGE/fullchain.pem\" ${COTURN_CERT_DIR}/fullchain.pem"
+    printf '%s\n' "  cp -L \"\$RENEWED_LINEAGE/privkey.pem\" ${COTURN_CERT_DIR}/privkey.pem"
+    printf '%s\n' "  chown root:turnserver ${COTURN_CERT_DIR}/fullchain.pem ${COTURN_CERT_DIR}/privkey.pem"
+    printf '%s\n' "  chmod 640 ${COTURN_CERT_DIR}/fullchain.pem ${COTURN_CERT_DIR}/privkey.pem"
+    printf '%s\n' "  systemctl restart coturn >/dev/null 2>&1 || true"
+    printf '%s\n' "fi"
+  } > "$tmp_file"
+  if ! run_logged_quiet run_as_root mkdir -p "$hook_dir"; then
+    rm -f "$tmp_file"
+    return 1
+  fi
+  if ! run_logged_quiet run_as_root install -m 755 "$tmp_file" "$hook_file"; then
+    rm -f "$tmp_file"
+    return 1
+  fi
+  rm -f "$tmp_file"
+}
+
+# True once something accepts connections on the port (127.0.0.1), waiting up to
+# the given number of seconds.
+wait_for_tcp_port() {
+  local port="$1"
+  local timeout="${2:-15}"
+  local waited=0
+  while (( waited < timeout )); do
+    if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  return 1
+}
+
+# Copies the certificate coturn should present into a folder it can read (it runs
+# as its own user and cannot read the web server's private key).
+stage_coturn_certificate() {
+  local source_cert="$1"
+  local source_key="$2"
+  local cert_dir="$COTURN_CERT_DIR"
+  run_logged_quiet run_as_root mkdir -p "$cert_dir" || return 1
+  run_logged_quiet run_as_root cp -Lf "$source_cert" "${cert_dir}/fullchain.pem" || return 1
+  run_logged_quiet run_as_root cp -Lf "$source_key" "${cert_dir}/privkey.pem" || return 1
+  run_logged_quiet run_as_root chown root:turnserver "$cert_dir" "${cert_dir}/fullchain.pem" "${cert_dir}/privkey.pem" || return 1
+  run_logged_quiet run_as_root chmod 750 "$cert_dir" || return 1
+  run_logged_quiet run_as_root chmod 640 "${cert_dir}/fullchain.pem" "${cert_dir}/privkey.pem" || return 1
+}
+
+# Paths of the certificate the web server uses for a domain, empty when there is none
+# that a relay could use (self-signed and IP certificates do not suit a TURN host name).
+relay_certificate_files() {
+  local domain="$1"
+  local cert=""
+  local key=""
+  case "$CERT_MODE" in
+    certbot)
+      cert="/etc/letsencrypt/live/${domain}/fullchain.pem"
+      key="/etc/letsencrypt/live/${domain}/privkey.pem"
+      ;;
+    files)
+      cert="$(manual_group_fullchain_path "${DOMAIN_GROUPS[0]:-$domain}")"
+      key="$(manual_group_privkey_path "${DOMAIN_GROUPS[0]:-$domain}")"
+      ;;
+    *) return 1 ;;
+  esac
+  if run_as_root test -f "$cert" && run_as_root test -f "$key"; then
+    printf '%s\n%s\n' "$cert" "$key"
+    return 0
+  fi
+  return 1
+}
+
+is_valid_port_range() {
+  local port="$1"
+  local min_port="$2"
+  local max_port="$3"
+  local value=""
+  for value in "$port" "$min_port" "$max_port"; do
+    [[ "$value" =~ ^[0-9]+$ ]] && (( value >= 1 && value <= 65535 )) || return 1
+  done
+  (( min_port < max_port )) || return 1
+  return 0
+}
+
+# Explains a failed relay check; the install itself is fine without a working relay.
+# Third argument: "yes" when the relay answered on the server's own address (so coturn
+# works and the way in from outside is what fails), "no" when it did not.
+advise_relay_problems() {
+  local host="$1"
+  local port="$2"
+  local answers_locally="${3:-no}"
+  local step=1
+  warn "The calls relay is installed but the check from this server failed. The rest of Aurelle works; calls between different networks may not connect until this is fixed."
+  log "What to check:"
+  if [[ "$answers_locally" == "yes" ]]; then
+    log "  ${step}. coturn itself works: it answers on this server's own address. What fails is the way in through ${host}."
+    step=$((step + 1))
+  fi
+  log "  ${step}. Your hosting provider's firewall (security group): allow ${port}/tcp, ${port}/udp and ${AURELLE_RELAY_MIN_PORT}-${AURELLE_RELAY_MAX_PORT}/udp to this server."
+  step=$((step + 1))
+  if ! is_valid_ipv4 "$host"; then
+    log "  ${step}. ${host} must be a DNS-only record. If it is on Cloudflare, switch the orange cloud to grey: the proxy never carries TURN. Or put the server IP in CALLS_TURN_URLS."
+    step=$((step + 1))
+  fi
+  if [[ "$answers_locally" != "yes" ]]; then
+    log "  ${step}. The relay log: journalctl -u coturn -n 50"
+    step=$((step + 1))
+  fi
+  log "  ${step}. Run the check again after the fix: sudo bash ${INSTALL_DIR}/scripts/check-relay.sh (a server behind NAT may not reach its own public address; then run it from another machine)."
+}
+
+# Runs scripts/check-relay.sh and reports; a failure is only ever a warning. When the
+# check against the public address fails, the same check against the server's own
+# address tells "coturn is broken" apart from "the way in from outside is blocked".
+# Arguments: relay host, port, the server's own address (may be empty).
+check_calls_relay() {
+  local host="$1"
+  local port="$2"
+  local private_ip="${3:-}"
+  local check_script="${INSTALL_DIR}/scripts/check-relay.sh"
+  local output=""
+  local status=0
+  local answers_locally="no"
+  if [[ ! -f "$check_script" ]]; then
+    warn "scripts/check-relay.sh is missing, so the relay was not tested."
+    return 0
+  fi
+  log "Testing the relay with scripts/check-relay.sh (this takes up to a minute)..."
+  output="$(run_as_root bash "$check_script" "${INSTALL_DIR}/.env" 2>&1)" || status=$?
+  if [[ -n "$output" ]]; then
+    printf '%s\n' "$output" | sed 's/^/    /'
+    log_to_file "$output"
+  fi
+  if (( status == 0 )); then
+    log "The relay works from this server."
+    return 0
+  fi
+  if [[ -n "$private_ip" && "$private_ip" != "$host" ]]; then
+    log "Testing the relay on this server's own address (${private_ip})..."
+    if run_as_root env "CALLS_TURN_URLS=turn:${private_ip}:${port}" bash "$check_script" "${INSTALL_DIR}/.env" >/dev/null 2>&1; then
+      answers_locally="yes"
+    fi
+  fi
+  advise_relay_problems "$host" "$port" "$answers_locally"
+  return 1
+}
+
+# Installs coturn, writes its configuration and the matching app settings, opens
+# the ports, restarts the app and tests the relay. Every problem here is a warning:
+# calls between different networks need the relay, the rest of Aurelle does not.
+install_calls_relay() {
+  local env_file="${INSTALL_DIR}/.env"
+  local conf_file=""
+  local relay_domain=""
+  local resolved=""
+  local relay_host=""
+  local private_ip=""
+  local secret=""
+  local realm=""
+  local tls_port=""
+  local tls_cert=""
+  local tls_key=""
+  local urls=""
+  local existing_urls=""
+  local relay_port="$AURELLE_RELAY_PORT"
+  local tls_files=()
+  local firewall_ports=()
+  CALLS_RELAY_SUMMARY=""
+
+  if [[ "$CALLS_RELAY_MODE" != "yes" && "$CALLS_RELAY_MODE" != "force" ]]; then
+    CALLS_RELAY_SUMMARY="$(describe_calls_relay_state)"
+    return 0
+  fi
+  if [[ ! -f "$env_file" ]]; then
+    warn "No .env found at ${env_file}; the calls relay was skipped."
+    CALLS_RELAY_SUMMARY="Skipped: no .env file."
+    return 0
+  fi
+  if ! is_valid_port_range "$relay_port" "$AURELLE_RELAY_MIN_PORT" "$AURELLE_RELAY_MAX_PORT"; then
+    warn "The relay ports are not valid (port ${relay_port}, range ${AURELLE_RELAY_MIN_PORT}-${AURELLE_RELAY_MAX_PORT}); the calls relay was skipped."
+    CALLS_RELAY_SUMMARY="Skipped: invalid relay ports."
+    return 0
+  fi
+
+  log "Setting up the calls relay (coturn)..."
+
+  # The address people will use to reach the relay.
+  detect_public_ip
+  private_ip="$(detect_local_ipv4)"
+  if [[ "$DEPLOY_MODE" == "domain" && ${#DOMAIN_GROUPS[@]} -gt 0 ]]; then
+    relay_domain="$(group_primary_domain "${DOMAIN_GROUPS[0]}")"
+    resolved="$(resolve_domain_ipv4 "$relay_domain")"
+  fi
+  relay_host="$(relay_host_for "$relay_domain" "$PUBLIC_IP" "$resolved")"
+  if [[ -z "$relay_host" ]]; then
+    warn "This server's public address could not be found, so the calls relay was skipped. Set AURELLE_PUBLIC_IP and run again."
+    CALLS_RELAY_SUMMARY="Skipped: public IP unknown (set AURELLE_PUBLIC_IP)."
+    return 0
+  fi
+  if [[ -n "$relay_domain" && "$relay_host" != "$relay_domain" ]]; then
+    if [[ -n "$resolved" ]]; then
+      log "${relay_domain} resolves to ${resolved}, not to this server (${PUBLIC_IP}); behind Cloudflare's proxy? The relay address will be the server IP, because a proxy never carries TURN."
+    else
+      log "${relay_domain} does not resolve yet, so the relay address will be the server IP (${PUBLIC_IP})."
+    fi
+  fi
+
+  # The package.
+  if ! dpkg -s coturn >/dev/null 2>&1 || ! have_cmd turnutils_uclient; then
+    log "Installing coturn..."
+    wait_for_package_manager
+    if ! run_silent apt_get_run install -y coturn openssl; then
+      warn "coturn could not be installed, so the calls relay was skipped. Calls between different networks will not connect until a relay exists: fix the apt error above and run again, or follow docs/Calls-and-Video-Messages.md."
+      CALLS_RELAY_SUMMARY="Skipped: coturn could not be installed."
+      return 0
+    fi
+  fi
+
+  # A coturn that somebody set up for another purpose stays as it is.
+  conf_file="$(coturn_config_path)"
+  existing_urls="$(get_existing_env_value "CALLS_TURN_URLS" "")"
+  if [[ "$CALLS_RELAY_MODE" != "force" ]]; then
+    if coturn_config_is_unmanaged "$conf_file"; then
+      warn "${conf_file} already holds a coturn setup that this installer did not write, so it was left alone. To let Aurelle manage coturn (the old file is kept as a backup) run with AURELLE_CALLS_RELAY=force; or add use-auth-secret and static-auth-secret to it and set CALLS_TURN_URLS and CALLS_TURN_SECRET in ${env_file}."
+      CALLS_RELAY_SUMMARY="Left your existing coturn configuration (${conf_file}) alone."
+      return 0
+    fi
+    if [[ -n "$existing_urls" ]] && ! grep -qF "$COTURN_MARKER" "$conf_file" 2>/dev/null; then
+      warn "CALLS_TURN_URLS is already set in ${env_file} (${existing_urls}), so the calls relay was left alone. Use AURELLE_CALLS_RELAY=force to replace it."
+      CALLS_RELAY_SUMMARY="Kept the relay already set in .env (${existing_urls})."
+      return 0
+    fi
+  fi
+
+  # One secret in both places.
+  secret="$(get_existing_env_value "CALLS_TURN_SECRET" "")"
+  if [[ -z "$secret" ]]; then
+    secret="$(generate_secret_hex || true)"
+  fi
+  if [[ -z "$secret" ]]; then
+    warn "Could not generate a relay secret; the calls relay was skipped."
+    CALLS_RELAY_SUMMARY="Skipped: no secret could be generated."
+    return 0
+  fi
+
+  # TLS only where a certificate for the relay's name exists.
+  if [[ -n "$relay_domain" && "$relay_host" == "$relay_domain" ]]; then
+    mapfile -t tls_files < <(relay_certificate_files "$relay_domain" || true)
+    if (( ${#tls_files[@]} == 2 )); then
+      if stage_coturn_certificate "${tls_files[0]}" "${tls_files[1]}"; then
+        tls_port="5349"
+        tls_cert="${COTURN_CERT_DIR}/fullchain.pem"
+        tls_key="${COTURN_CERT_DIR}/privkey.pem"
+        if [[ "$CERT_MODE" == "certbot" ]]; then
+          install_certbot_deploy_hook "$relay_domain" || warn "Could not install the certbot renewal hook for the relay certificate."
+        fi
+      else
+        warn "The certificate could not be copied for coturn; the relay runs without TLS (turns:)."
+      fi
+    fi
+  fi
+
+  if [[ -n "$relay_domain" ]]; then
+    realm="$relay_domain"
+  else
+    realm="$(hostname -f 2>/dev/null || hostname 2>/dev/null || true)"
+    [[ "$realm" =~ ^[A-Za-z0-9.-]+$ ]] || realm="aurelle"
+  fi
+
+  # Write the configuration (a configuration that is not ours is kept as a backup).
+  local tmp_conf=""
+  tmp_conf="$(mktemp)" || return 0
+  render_coturn_config "$realm" "$secret" "$PUBLIC_IP" "$private_ip" "$relay_port" "$AURELLE_RELAY_MIN_PORT" "$AURELLE_RELAY_MAX_PORT" "$tls_port" "$tls_cert" "$tls_key" > "$tmp_conf"
+  if [[ -f "$conf_file" ]] && ! grep -qF "$COTURN_MARKER" "$conf_file" 2>/dev/null; then
+    run_logged_quiet run_as_root cp -a "$conf_file" "${conf_file}.bak.$(date +%Y%m%d%H%M%S)" || true
+  fi
+  # The file holds the secret: it gets its owner and mode before anything is written.
+  local conf_group="turnserver"
+  getent group turnserver >/dev/null 2>&1 || conf_group="root"
+  if ! { [[ -e "$conf_file" ]] || run_logged_quiet run_as_root install -m 640 -o root -g "$conf_group" /dev/null "$conf_file"; } \
+    || ! run_logged_quiet run_as_root chown "root:${conf_group}" "$conf_file" \
+    || ! run_logged_quiet run_as_root chmod 640 "$conf_file" \
+    || ! run_as_root tee "$conf_file" < "$tmp_conf" >/dev/null; then
+    rm -f "$tmp_conf"
+    warn "Could not write ${conf_file}; the calls relay was skipped."
+    CALLS_RELAY_SUMMARY="Skipped: could not write ${conf_file}."
+    return 0
+  fi
+  rm -f "$tmp_conf"
+  log "Wrote ${conf_file}."
+
+  # Older Debian and Ubuntu releases keep coturn switched off until this is set.
+  if [[ -f "$COTURN_DEFAULTS_FILE" ]] && grep -qE '^[[:space:]]*#[[:space:]]*TURNSERVER_ENABLED=1' "$COTURN_DEFAULTS_FILE"; then
+    run_logged_quiet run_as_root sed -i -E 's/^[[:space:]]*#[[:space:]]*(TURNSERVER_ENABLED=1)/\1/' "$COTURN_DEFAULTS_FILE" || true
+  fi
+  run_logged_quiet run_as_root systemctl enable coturn || true
+  if ! run_logged_quiet run_as_root systemctl restart coturn; then
+    warn "coturn did not start. See: journalctl -u coturn -n 50"
+    CALLS_RELAY_SUMMARY="coturn is configured but did not start (journalctl -u coturn)."
+    return 0
+  fi
+  if ! wait_for_tcp_port "$relay_port" 15; then
+    warn "coturn is running but nothing answers on port ${relay_port}. See: journalctl -u coturn -n 50"
+  fi
+
+  # Ports: the relay and its media range, and the app's settings.
+  firewall_ports=("${relay_port}/tcp" "${relay_port}/udp" "${AURELLE_RELAY_MIN_PORT}-${AURELLE_RELAY_MAX_PORT}/udp")
+  if [[ -n "$tls_port" ]]; then
+    firewall_ports+=("${tls_port}/tcp" "${tls_port}/udp")
+  fi
+  firewall_open_ports "${firewall_ports[@]}"
+
+  urls="$(build_calls_turn_urls "$relay_host" "$relay_port" "$tls_port")"
+  replace_env_value "$env_file" "CALLS_TURN_URLS" "$urls" || return 0
+  replace_env_value "$env_file" "CALLS_TURN_SECRET" "$secret" || return 0
+  log "Wrote CALLS_TURN_URLS and CALLS_TURN_SECRET to ${env_file}."
+
+  log "Restarting Aurelle so it uses the relay..."
+  if ! run_as_root systemctl restart songbird.service; then
+    warn "Aurelle did not restart; restart it by hand: sudo systemctl restart songbird"
+  elif ! wait_for_app_health "$SERVER_PORT" 90; then
+    warn "Aurelle did not answer after the restart. See: journalctl -u songbird -n 50"
+  fi
+
+  if check_calls_relay "$relay_host" "$relay_port" "$private_ip"; then
+    CALLS_RELAY_SUMMARY="coturn on ${relay_host}:${relay_port} (UDP and TCP) works from this server. Also allow ${relay_port}/tcp, ${relay_port}/udp and ${AURELLE_RELAY_MIN_PORT}-${AURELLE_RELAY_MAX_PORT}/udp in your hosting provider's firewall."
+  else
+    CALLS_RELAY_SUMMARY="coturn on ${relay_host}:${relay_port} is installed but its check failed: see the advice above. Ports to allow: ${relay_port}/tcp, ${relay_port}/udp, ${AURELLE_RELAY_MIN_PORT}-${AURELLE_RELAY_MAX_PORT}/udp."
+  fi
+  return 0
+}
+
+# Asks (default yes) unless AURELLE_CALLS_RELAY already decided.
+prompt_calls_relay_choice() {
+  if [[ -n "$CALLS_RELAY_MODE" ]]; then
+    return 0
+  fi
+  if is_unattended; then
+    CALLS_RELAY_MODE="yes"
+    return 0
+  fi
+  printf "\n%bVoice and video calls relay%b\n" "$COLOR_LOG" "$COLOR_RESET"
+  printf "  Calls between people on different networks (mobile data, strict firewalls) need a\n"
+  printf "  relay. This installs coturn from apt, configures it and opens its ports.\n"
+  CALLS_RELAY_MODE="$(prompt_yes_no "Install the calls relay (coturn)?" "yes")"
+}
+
+# ---------------------------------------------------------------------------
+# Checks before and after an install
+# ---------------------------------------------------------------------------
+
+# Free space and memory: a build that runs out of either fails half way and leaves
+# a half installed system, so say so before anything is changed.
+check_system_requirements() {
+  local target="$INSTALL_DIR"
+  local free_mb=""
+  local mem_mb=""
+  local swap_mb=""
+
+  while [[ ! -d "$target" && "$target" != "/" ]]; do
+    target="$(dirname "$target")"
+  done
+  free_mb="$(df -Pm "$target" 2>/dev/null | awk 'NR==2 {print $4}')"
+  if [[ "$free_mb" =~ ^[0-9]+$ ]] && (( free_mb < MIN_FREE_DISK_MB )); then
+    warn "Only ${free_mb} MB are free on the disk that holds ${INSTALL_DIR}; at least ${MIN_FREE_DISK_MB} MB are needed for the packages, dependencies and the build. Free some space and run the installer again."
+    return 1
+  fi
+
+  mem_mb="$(awk '/^MemTotal:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null)"
+  swap_mb="$(awk '/^SwapTotal:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null)"
+  if [[ "$mem_mb" =~ ^[0-9]+$ ]] && (( mem_mb + ${swap_mb:-0} < MIN_MEMORY_MB )); then
+    warn "This server has ${mem_mb} MB of memory and ${swap_mb:-0} MB of swap. Building the client needs about ${MIN_MEMORY_MB} MB and the build may be killed. Adding swap helps: sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile"
+  fi
+
+  if [[ ! -d /run/systemd/system ]]; then
+    warn "systemd does not seem to be running on this machine (a container, or WSL without systemd?). The services will be written but cannot be started here."
+  fi
+  return 0
+}
+
+# True when a file exists, also where only root may look.
+path_exists_as_root() {
+  run_as_root test -e "$1" 2>/dev/null
+}
+
+# A finished installation: sources, settings, services and the web server site.
+installation_is_complete() {
+  path_exists_as_root "$INSTALL_DIR/.git" \
+    && path_exists_as_root "$INSTALL_DIR/.env" \
+    && path_exists_as_root "$INSTALL_DIR/server/node_modules" \
+    && path_exists_as_root "$SERVICE_FILE" \
+    && path_exists_as_root "$NGINX_SITE_FILE"
+}
+
+# Waits until the server answers its health check. Seconds default to
+# AURELLE_HEALTH_TIMEOUT (90); 0 only checks once.
+wait_for_app_health() {
+  local port="${1:-$SERVER_PORT}"
+  local timeout="${2:-${AURELLE_HEALTH_TIMEOUT:-90}}"
+  local waited=0
+  while true; do
+    if songbird_healthcheck_responds "$port"; then
+      return 0
+    fi
+    if (( waited >= timeout )); then
+      return 1
+    fi
+    sleep 2
+    waited=$((waited + 2))
+  done
+}
+
+# Fails the step with the last lines of the service log when the server is not up.
+confirm_app_started() {
+  if wait_for_app_health "$SERVER_PORT"; then
+    log "Aurelle answers on port ${SERVER_PORT}."
+    return 0
+  fi
+  warn "Aurelle does not answer on port ${SERVER_PORT}. The last lines of its log:"
+  run_as_root journalctl -u songbird.service --no-pager -n 20 2>/dev/null | sed 's/^/    /' >&2 || true
+  warn "Look at the whole log with: journalctl -u songbird -e"
+  return 1
+}
+
+# Reloads nginx; starts it when it is not running (a reload of a stopped unit fails).
+reload_nginx() {
+  if run_as_root systemctl reload nginx; then
+    return 0
+  fi
+  log "nginx did not reload; starting it..."
+  run_as_root systemctl restart nginx
+}
+
+# Reads what an existing installation uses (names, certificate, ports) from the
+# files the installer wrote, for updates and for steps added later.
+load_deployment_from_existing() {
+  local names=""
+  local cert_path=""
+  local name=""
+  sync_values_from_env
+  WORKER_PORT="$(get_existing_env_value "WORKER_PORT" "$DEFAULT_WORKER_PORT")"
+  DEPLOY_MODE="ip"
+  CERT_MODE="http"
+  DOMAIN_NAMES=()
+  DOMAIN_GROUPS=()
+  NGINX_SERVER_NAME="_"
+  if ! path_exists_as_root "$NGINX_SITE_FILE"; then
+    return 0
+  fi
+  names="$(run_as_root_output grep -E '^[[:space:]]*server_name[[:space:]]' "$NGINX_SITE_FILE" 2>/dev/null \
+    | sed -E 's/^[[:space:]]*server_name[[:space:]]+([^;]+);.*/\1/' | tr '\n' ' ')" || names=""
+  cert_path="$(run_as_root_output grep -E '^[[:space:]]*ssl_certificate[[:space:]]' "$NGINX_SITE_FILE" 2>/dev/null \
+    | head -n 1 | sed -E 's/^[[:space:]]*ssl_certificate[[:space:]]+([^;]+);.*/\1/' | tr -d '\r\n')" || cert_path=""
+
+  local domains=()
+  for name in $names; do
+    if [[ "$name" != "_" ]] && ! is_valid_ipv4 "$name"; then
+      domains+=("$name")
+    elif is_valid_ipv4 "$name"; then
+      CERTBOT_IP_ADDRESS="$name"
+    fi
+  done
+  if (( ${#domains[@]} > 0 )); then
+    DEPLOY_MODE="domain"
+    local csv=""
+    csv="$(IFS=,; printf '%s' "${domains[*]}")"
+    parse_domain_input "$csv"
+  fi
+
+  case "$cert_path" in
+    "") CERT_MODE="http" ;;
+    /etc/letsencrypt/*) CERT_MODE="certbot" ;;
+    *) CERT_MODE="files" ;;
+  esac
+}
+
+# A short note on the calls relay for the summary of an update that did not touch it.
+describe_calls_relay_state() {
+  local urls=""
+  urls="$(get_existing_env_value "CALLS_TURN_URLS" "")"
+  if [[ -n "$urls" ]]; then
+    printf 'Configured: CALLS_TURN_URLS in %s/.env' "$INSTALL_DIR"
+  else
+    printf 'Not installed. Calls between different networks need it: sudo env AURELLE_CALLS_RELAY=1 songbird-deploy --yes'
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Unattended run
+# ---------------------------------------------------------------------------
+
+resolve_unattended_update_options() {
+  resolve_calls_relay_mode
+  load_deployment_from_existing
+  SOURCE_MODE="github"
+}
+
+# True when this run asks for a setup that differs from the one installed: another
+# domain, HTTPS where there is none, other ports. The same command run again after a
+# failure (or with a changed value) then reconfigures instead of only updating.
+# Leaves the requested setup in the variables when it returns 0.
+unattended_request_differs_from_installed() {
+  local asked_for_setup="no"
+  local existing_mode="" existing_domains="" existing_tls="" existing_server="" existing_client="" existing_worker=""
+  local requested_domains=""
+
+  if [[ -n "$AURELLE_DOMAIN" || -n "$AURELLE_SERVER_PORT" || -n "$AURELLE_CLIENT_PORT" || -n "$AURELLE_WORKER_PORT" || "$(lowercase "$AURELLE_TLS")" != "auto" ]]; then
+    asked_for_setup="yes"
+  fi
+  if [[ "$asked_for_setup" == "no" ]]; then
+    return 1
+  fi
+
+  load_deployment_from_existing
+  existing_mode="$DEPLOY_MODE"
+  existing_domains="${DOMAIN_NAMES[*]:-}"
+  existing_tls="yes"
+  [[ "$CERT_MODE" == "http" ]] && existing_tls="no"
+  existing_server="$SERVER_PORT"
+  existing_client="$CLIENT_PORT"
+  existing_worker="$WORKER_PORT"
+
+  resolve_unattended_options
+  requested_domains="${DOMAIN_NAMES[*]:-}"
+
+  [[ "$existing_mode" != "$DEPLOY_MODE" ]] && return 0
+  [[ "$existing_domains" != "$requested_domains" ]] && return 0
+  if [[ "$existing_tls" == "yes" && "$CERT_MODE" == "http" ]] || [[ "$existing_tls" == "no" && "$CERT_MODE" != "http" ]]; then
+    return 0
+  fi
+  [[ -n "$AURELLE_SERVER_PORT" && "$existing_server" != "$SERVER_PORT" ]] && return 0
+  [[ -n "$AURELLE_CLIENT_PORT" && "$existing_client" != "$CLIENT_PORT" ]] && return 0
+  [[ -n "$AURELLE_WORKER_PORT" && "$existing_worker" != "$WORKER_PORT" ]] && return 0
+  return 1
+}
+
+# Why update_is_needed said yes: "newer" (a newer commit, or the remote could not be read),
+# "build" (no client build) or "down" (the app does not answer).
+UPDATE_REASON="newer"
+
+# Returns 0 when an update has something to do: a newer commit upstream, or an
+# installation that does not answer or has no client build (a repair); 1 when there is
+# nothing to do; 2 when the answer is not known because the source cannot be reached.
+# Nothing has been stopped or changed at that point.
+update_is_needed() {
+  local local_commit="" remote_commit="" ref=""
+  UPDATE_REASON="newer"
+  if ! run_with_retries run_in_install_dir "git fetch --force --prune --tags origin"; then
+    # The checkout follows the address it was cloned from, which is what failed.
+    local origin_url=""
+    origin_url="$(run_in_install_dir_output "git remote get-url origin" 2>/dev/null | tr -d '\r\n')"
+    warn "Could not reach ${origin_url:-$REPO_URL} to look for updates. Nothing was changed; check the network and run the same command again."
+    return 2
+  fi
+  ref="$(repo_target_ref)"
+  local_commit="$(run_in_install_dir_output "git rev-parse HEAD" 2>/dev/null | tr -d '\r\n')"
+  remote_commit="$(repo_remote_commit "$ref")"
+  if [[ -z "$remote_commit" || "$local_commit" != "$remote_commit" ]]; then
+    return 0
+  fi
+  if ! path_exists_as_root "$INSTALL_DIR/client/dist/index.html"; then
+    log "The client build is missing: rebuilding."
+    UPDATE_REASON="build"
+    return 0
+  fi
+  if ! songbird_healthcheck_responds "$SERVER_PORT"; then
+    log "Aurelle is not answering on port ${SERVER_PORT}: repairing."
+    UPDATE_REASON="down"
+    return 0
+  fi
+  return 1
+}
+
+# An installation that is at the newest version but does not work: rebuild the client
+# when it is missing and start everything again. Nothing else is touched.
+repair_installation() {
+  acquire_install_lock || return 1
+  sync_values_from_env
+  if [[ "$UPDATE_REASON" == "build" ]]; then
+    install_songbird_dependencies || return 1
+    apply_ownership || return 1
+  fi
+  restart_services_after_update || return 1
+  install_calls_relay_if_requested
+  show_deployment_success_frame "repaired"
+}
+
+run_unattended() {
+  local action=""
+  action="$(lowercase "$(sanitize_input_value "$AURELLE_ACTION")")"
+  case "$action" in
+    ""|auto) action="auto" ;;
+    install|update) ;;
+    *) usage_fail "AURELLE_ACTION must be auto, install or update (got: ${AURELLE_ACTION})." ;;
+  esac
+
+  local setup_resolved="no"
+  if [[ "$action" == "auto" ]]; then
+    if installation_is_complete; then
+      action="update"
+      if unattended_request_differs_from_installed; then
+        action="install"
+        setup_resolved="yes"
+        log "This run asks for a different setup than the installed one: reconfiguring."
+      fi
+    else
+      action="install"
+    fi
+  fi
+
+  if [[ "$action" == "install" ]]; then
+    log "Unattended install (nothing will be asked)."
+    if [[ "$setup_resolved" == "no" ]]; then
+      resolve_unattended_options
+    fi
+    install_songbird || return 1
+  else
+    if ! installation_is_complete; then
+      warn "AURELLE_ACTION=update, but there is no complete installation in ${INSTALL_DIR}. Use install."
+      return 1
+    fi
+    log "Aurelle is installed in ${INSTALL_DIR}: updating it (nothing will be asked)."
+    resolve_unattended_update_options
+    acquire_install_lock || return 1
+    local update_state=0
+    update_is_needed || update_state=$?
+    case "$update_state" in
+      0)
+        if [[ "$UPDATE_REASON" == "newer" ]]; then
+          update_songbird || return 1
+        else
+          repair_installation || return 1
+        fi
+        ;;
+      1)
+        log "Aurelle is already up to date."
+        install_calls_relay_if_requested
+        show_deployment_success_frame "current"
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  fi
+
+  if [[ "$TLS_FAILED" == "1" ]]; then
+    warn "Aurelle is installed and answers over HTTP, but the TLS certificate could not be issued. Fix the cause above and run the same command again."
+    return "$EXIT_TLS_FAILED"
+  fi
+  return 0
+}
+
+# Menu entry: set up (or refresh) the calls relay on an installed server.
+setup_calls_relay_menu() {
+  if ! installation_is_complete; then
+    warn "Aurelle is not installed yet. Install it first."
+    press_enter_to_continue
+    return 0
+  fi
+  acquire_install_lock || return 1
+  load_deployment_from_existing
+  printf "\n  Calls between people on different networks need a relay. This installs coturn from\n"
+  printf "  apt, writes its configuration, opens its ports and points Aurelle at it.\n\n"
+  CALLS_RELAY_MODE="$(prompt_yes_no "Set up the calls relay (coturn) now?" "yes")"
+  if [[ "$CALLS_RELAY_MODE" != "yes" ]]; then
+    log "Calls relay not changed."
+    return 0
+  fi
+  install_calls_relay || true
+  printf "\n  %s\n" "${CALLS_RELAY_SUMMARY:-Done.}"
+  press_enter_to_continue
+}
+
 main() {
-  if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
+  parse_cli_args "$@"
+  if [[ "$SHOW_VERSION" == "1" ]]; then
     SKIP_CLEAR_ON_EXIT="1"
     printf "%s\n" "$SCRIPT_VERSION"
     return 0
   fi
 
+  STRICT_CHECKS="1"
+  ABORT_ON_INPUT_CLOSED="1"
   init_prompt_io
   detect_os
   ensure_sudo
-  ensure_global_command_on_first_run
 
-  trap 'handle_exit' EXIT
-  trap 'handle_interrupt' INT TERM
+  if is_unattended; then
+    run_unattended
+    return $?
+  fi
+
+  ensure_global_command_on_first_run
 
   local choice=""
   while true; do
     show_menu
-    prompt_read "Choose an option [0-9]: " choice
+    prompt_read "Choose an option [0-10]: " choice
     case "$choice" in
       1) run_menu_action install_songbird ;;
       2) run_menu_action update_songbird ;;
@@ -5191,10 +7255,13 @@ main() {
       7) run_menu_action update_menu ;;
       8) run_menu_action configure_mirrors_menu ;;
       9) run_menu_action show_logs_menu ;;
+      10) run_menu_action setup_calls_relay_menu ;;
       0) break ;;
-      *) printf "Invalid choice. Select a number from 0 to 9.\n" ;;
+      *) printf "Invalid choice. Select a number from 0 to 10.\n" ;;
     esac
   done
 }
 
+# Keep this the last line: a download that is cut short never reaches it, so a broken
+# "curl ... | bash" does nothing instead of running half a script.
 main "$@"
