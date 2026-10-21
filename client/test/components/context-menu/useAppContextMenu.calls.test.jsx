@@ -73,14 +73,12 @@ describe("useAppContextMenu - call entries", () => {
     }
   });
 
-  test("with selection mode available it can also be selected (to be deleted with others), nothing else", async () => {
+  test("even with selection mode available the menu is Delete alone (entries are ticked once selection is on)", async () => {
     const onSelectMessage = vi.fn();
     const result = await setup({ onSelectMessage });
-    const msg = callEntry({ id: MSG });
-    const menu = await openFor(result, msg);
-    expect(menu.items.map((item) => item.id).sort()).toEqual(["delete", "select"]);
-    menu.items.find((item) => item.id === "select").onSelect();
-    expect(onSelectMessage).toHaveBeenCalledWith(msg);
+    const menu = await openFor(result, callEntry({ id: MSG }));
+    expect(menu.items.map((item) => item.id)).toEqual(["delete"]);
+    expect(onSelectMessage).not.toHaveBeenCalled();
   });
 
   test("Delete asks to remove it for me only, even when delete for everyone would be allowed", async () => {

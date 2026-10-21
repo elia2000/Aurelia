@@ -10,6 +10,7 @@ import {
   LoaderCircle,
   Lock,
   Pencil,
+  Pin,
   Refresh,
   SatelliteDish,
   Trash,
@@ -55,6 +56,9 @@ export default function NewGroupModal({
   hideSelectedMemberChips = false,
   fileUploadEnabled = true,
   showInviteManagement = false,
+  // "Members Can Pin Messages": only for a group that exists (the owner sets it
+  // while editing); a channel's owner is its only pinner.
+  showMemberPinsSetting = false,
   currentInviteLink = "",
   regeneratingInviteLink = false,
   onRegenerateInvite,
@@ -403,6 +407,26 @@ export default function NewGroupModal({
                   </span>
                   {renderSwitch(memberInvitesEnabled, memberInvitesLocked)}
                 </button>
+                {showMemberPinsSetting ? (
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={groupForm.allowMemberPins === true}
+                    onClick={() =>
+                      setGroupForm((prev) => ({
+                        ...prev,
+                        allowMemberPins: prev.allowMemberPins !== true,
+                      }))
+                    }
+                    className={privacyOptionClass()}
+                  >
+                    <span className="flex min-w-0 items-center gap-3">
+                      <Pin size={18} className="shrink-0 icon-anim-pop" />
+                      <span className="truncate">Members Can Pin Messages</span>
+                    </span>
+                    {renderSwitch(groupForm.allowMemberPins === true)}
+                  </button>
+                ) : null}
               </div>
             </div>
 

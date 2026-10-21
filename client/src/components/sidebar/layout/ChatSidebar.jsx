@@ -50,6 +50,8 @@ export default function ChatSidebar({
   onOpenSavedMessages,
   onOpenUserContextMenu,
   onOpenChatContextMenu,
+  onReorderPinnedChats,
+  onCloseContextMenu,
   showSettings,
   settingsMenuRef,
   setSettingsPanel,
@@ -335,6 +337,8 @@ export default function ChatSidebar({
                 onOpenSavedMessages={onOpenSavedMessages}
                 onOpenUserContextMenu={onOpenUserContextMenu}
                 onOpenChatContextMenu={onOpenChatContextMenu}
+                onReorderPinnedChats={onReorderPinnedChats}
+                onCloseContextMenu={onCloseContextMenu}
               />
             </div>
           </div>

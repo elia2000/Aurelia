@@ -17,6 +17,7 @@ import { MessageFiles } from "../media/MessageFiles.jsx";
 import { MessageMeta } from "./MessageMeta.jsx";
 import CallEntry from "./CallEntry.jsx";
 import UnsupportedMessage from "./UnsupportedMessage.jsx";
+import ServiceChip from "./ServiceChip.jsx";
 import { describeCall, isCallMessage } from "../../../utils/callEntry.js";
 import { isUnsupportedMessage } from "../../../utils/messageKind.js";
 import HeartBurst from "../reactions/HeartBurst.jsx";
@@ -1322,28 +1323,10 @@ export const MessageItem = memo(function MessageItem({
           {...selectionRowProps}
         >
           {leadingGutter}
-          <span
-            className="inline-flex max-w-full items-center justify-center rounded-full border border-emerald-200/60 bg-white/90 px-2.5 py-0.5 text-center text-[11px] font-semibold text-emerald-700 dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-200"
-            style={{ lineHeight: 1.35 }}
-          >
-            <span className="min-w-0 truncate">
-              <span
-                className={`min-w-0 truncate ${
-                  hasPersian(msg?._systemEvent?.name) ? "font-fa sb-fa-baseline-fix" : ""
-                }`}
-                dir="auto"
-                style={{ unicodeBidi: "isolate" }}
-              >
-                {msg?._systemEvent?.name || "A member"}
-              </span>{" "}
-              <span
-                dir="ltr"
-                style={{ unicodeBidi: "isolate" }}
-              >
-                {msg?._systemEvent?.suffix || ""}
-              </span>
-            </span>
-          </span>
+          <ServiceChip
+            event={msg._systemEvent}
+            onJump={selectionMode ? null : onJumpToMessage}
+          />
         </div>
       ) : null}
       {!msg?._systemEvent ? (

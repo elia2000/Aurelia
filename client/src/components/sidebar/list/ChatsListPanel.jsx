@@ -11,6 +11,7 @@ import {
   Minus,
   Bookmark,
   Megaphone,
+  Pin,
   Users,
   VolumeX,
   Video,
@@ -28,6 +29,8 @@ import Avatar from "../../common/Avatar.jsx";
 import UserRoleBadge from "../../common/UserRoleBadge.jsx";
 import VerifiedBadge from "../../common/VerifiedBadge.jsx";
 import Tooltip from "../../common/Tooltip.jsx";
+import { useChatPinReorder } from "../../../hooks/chat/useChatPinReorder.js";
+import { isChatPinned } from "../../../utils/chatPins.js";
 
 export default function ChatsListPanel({
   loadingChats,
@@ -60,6 +63,10 @@ export default function ChatsListPanel({
   onOpenSavedMessages,
   onOpenUserContextMenu,
   onOpenChatContextMenu,
+  // (orderedIds) => void: the new order of the pinned chats after a drag.
+  onReorderPinnedChats = null,
+  // Closes the menu a long press opened, when the same touch turns into a drag.
+  onCloseContextMenu = null,
 }) {
   const SIDEBAR_INITIAL_RENDER = 40;
   const SIDEBAR_RENDER_BATCH = 24;
@@ -137,6 +144,20 @@ export default function ChatsListPanel({
     const safeLimit = Math.max(SIDEBAR_INITIAL_RENDER, renderLimit);
     return visibleChats.slice(0, safeLimit);
   }, [renderLimit, showSearchMode, visibleChats]);
+
+  // The pinned section is only drawn (and only reorderable) when the list is not
+  // being searched.
+  const pinsActive = !showSearchMode && !String(chatsSearchQuery || "").trim();
+  const pinnedIds = useMemo(
+    () => (pinsActive ? sidebarChats.filter(isChatPinned).map((chat) => chat.id) : []),
+    [pinsActive, sidebarChats],
+  );
+  const pinReorder = useChatPinReorder({
+    enabled: pinsActive && !editMode && typeof onReorderPinnedChats === "function",
+    pinnedIds,
+    onReorder: onReorderPinnedChats,
+    onDragStart: onCloseContextMenu,
+  });
 
   useEffect(() => {
     if (showSearchMode) return;
@@ -592,6 +613,8 @@ export default function ChatsListPanel({
           if (unreadCount > 999) unreadCount = formatCompactCount(unreadCount);
 
           const isActive = activeChatId === conv.id;
+          const isPinnedRow = pinsActive && isChatPinned(conv);
+          const isDraggedRow = pinReorder.draggingId === conv.id;
 
           const rowInner = (
             <>
@@ -832,16 +855,29 @@ export default function ChatsListPanel({
                           : ""}
                       </p>
                     </div>
-                  {conv.unread_count > 0 ? (
-                    <span
-                      className={`inline-flex h-5 min-w-[20px] items-center justify-center rounded-full px-1.5 text-xs font-bold text-white ${
-                        conv._muted
-                          ? "bg-slate-400 dark:bg-slate-500"
-                          : "bg-emerald-500"
-                      }`}
-                    >
-                      {unreadCount}
-                    </span>
+                  {isPinnedRow || conv.unread_count > 0 ? (
+                    <div className="flex items-center gap-1">
+                      {isPinnedRow ? (
+                        <Pin
+                          size={14}
+                          role="img"
+                          aria-label="Pinned chat"
+                          data-pin-icon
+                          className="shrink-0 -rotate-45 text-slate-400 dark:text-slate-500"
+                        />
+                      ) : null}
+                      {conv.unread_count > 0 ? (
+                        <span
+                          className={`inline-flex h-5 min-w-[20px] items-center justify-center rounded-full px-1.5 text-xs font-bold text-white ${
+                            conv._muted
+                              ? "bg-slate-400 dark:bg-slate-500"
+                              : "bg-emerald-500"
+                          }`}
+                        >
+                          {unreadCount}
+                        </span>
+                      ) : null}
+                    </div>
                   ) : null}
                 </div>
               </div>
@@ -852,12 +888,23 @@ export default function ChatsListPanel({
             <div
               key={conv.id}
               className="relative flex w-full flex-col px-2"
+              data-dragging={isDraggedRow ? "true" : undefined}
+              style={
+                isPinnedRow
+                  ? pinReorder.getRowStyle(conv.id, pinnedIds.indexOf(conv.id))
+                  : undefined
+              }
+              {...(isPinnedRow ? pinReorder.getRowProps(conv.id) : {})}
             >
               <div
                 className={`group flex min-h-[72px] w-full items-center rounded-xl border transition ${
                   isActive
                     ? "border-emerald-400 bg-emerald-50 text-emerald-700 dark:border-emerald-400/60 dark:bg-emerald-500/10 dark:text-emerald-300"
                     : "border-transparent text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 dark:text-slate-100 dark:hover:bg-emerald-500/10 dark:hover:text-emerald-200"
+                } ${isPinnedRow && !isActive ? "bg-slate-50/80 dark:bg-white/[0.04]" : ""} ${
+                  isDraggedRow
+                    ? "bg-white shadow-lg ring-1 ring-emerald-300 dark:bg-slate-800 dark:ring-emerald-500/40"
+                    : ""
                 } ${editMode ? "animate-chat-wiggle-ios" : ""}`}
                 style={wiggleStyle}
               >
@@ -877,7 +924,7 @@ export default function ChatsListPanel({
                 <ContextMenuSurface
                   type="button"
                   as="button"
-                  aria-label={`${name}${conv.unread_count > 0 ? `, ${conv.unread_count} unread` : ""}`}
+                  aria-label={`${name}${conv.unread_count > 0 ? `, ${conv.unread_count} unread` : ""}${isPinnedRow ? ", pinned" : ""}`}
                   onClick={() => {
                     if (editMode) return;
                     setActiveChatId(conv.id);

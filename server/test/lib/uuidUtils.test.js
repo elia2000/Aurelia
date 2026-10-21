@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { generateUuid, isValidUuid } from "../../lib/uuidUtils.js";
+import { generateOrderedUuid, generateUuid, isValidUuid } from "../../lib/uuidUtils.js";
 
 describe("uuidUtils", () => {
   describe("generateUuid", () => {
@@ -16,6 +16,44 @@ describe("uuidUtils", () => {
       const count = 100;
       const set = new Set(Array.from({ length: count }, () => generateUuid()));
       expect(set.size).toBe(count);
+    });
+  });
+
+  describe("generateOrderedUuid", () => {
+    // The clock is passed in, and each test starts later than the one before,
+    // because the generator never goes back to an earlier time.
+    const base = Date.now() + 10 * 60 * 1000;
+
+    test("is a valid UUID (version 7 layout, RFC variant)", () => {
+      const uuid = generateOrderedUuid(base);
+      expect(isValidUuid(uuid)).toBe(true);
+      expect(uuid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    });
+
+    test("later ids sort after earlier ones, also many inside one millisecond", () => {
+      const ids = Array.from({ length: 5000 }, () => generateOrderedUuid(base + 1000));
+      expect(new Set(ids).size).toBe(ids.length);
+      expect([...ids].sort()).toEqual(ids);
+    });
+
+    test("follows the clock across milliseconds", () => {
+      const a = generateOrderedUuid(base + 2000);
+      const b = generateOrderedUuid(base + 2001);
+      const c = generateOrderedUuid(base + 90_000);
+      expect([a, b, c].sort()).toEqual([a, b, c]);
+    });
+
+    test("never goes backwards when the clock does", () => {
+      const a = generateOrderedUuid(base + 200_000);
+      const b = generateOrderedUuid(base + 100_000);
+      expect(a < b).toBe(true);
+    });
+
+    test("without an argument it uses the current time", () => {
+      const before = Date.now();
+      const uuid = generateOrderedUuid();
+      const stamp = parseInt(uuid.replace(/-/g, "").slice(0, 12), 16);
+      expect(stamp).toBeGreaterThanOrEqual(before);
     });
   });
 

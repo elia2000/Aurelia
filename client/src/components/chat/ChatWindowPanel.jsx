@@ -34,6 +34,9 @@ import ContextMenuSurface from "../context-menu/ContextMenuSurface.jsx";
 import { useReactionSlots } from "../../hooks/chat/useReactionSlots.js";
 import { useBatchSelection } from "../../hooks/chat/useBatchSelection.js";
 import SelectionBar from "./selection/SelectionBar.jsx";
+import PinnedMessageBar, { PINNED_BAR_HEIGHT_PX } from "./pins/PinnedMessageBar.jsx";
+import { useChatMessagePins } from "../../hooks/chat/useMessagePins.js";
+import { jumpToLoadedMessage } from "../../utils/messageJump.js";
 import { getMessageKey } from "../../utils/batchSelection.js";
 import { isCallMessage } from "../../utils/callEntry.js";
 import { CACHE_STORES } from "../../utils/cacheDb.js";
@@ -133,6 +136,12 @@ export default function ChatWindowPanel({
   // (messages) => void: the ticked messages, oldest first, to forward / delete.
   onForwardMessages = null,
   onDeleteMessages = null,
+  // Pinned messages: the bar under the header, and the jump to a message that
+  // may first have to be loaded ((messageId) => Promise<boolean>).
+  canManagePins = false,
+  onUnpinMessage = null,
+  onUnpinAllMessages = null,
+  jumpToMessage = null,
 }) {
   const MEDIA_CACHE_VERSION = 1;
   const MEDIA_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -148,6 +157,16 @@ export default function ChatWindowPanel({
       : false,
   );
   const headerActions = useHeaderActions(activeHeaderPeer);
+  const { pins: messagePins } = useChatMessagePins(activeChatId);
+  const hasPinnedBar = Boolean(activeChatId) && messagePins.length > 0;
+  // Stable: a message row keeps the first one it was given.
+  const handleJumpToMessage = useCallback(
+    (messageId) => {
+      if (jumpToMessage) return jumpToMessage(messageId);
+      return jumpToLoadedMessage(messageId, chatScrollRef?.current || null);
+    },
+    [jumpToMessage, chatScrollRef],
+  );
   const showCallButtons = activeChat?.type === "dm" && headerActions.count > 0;
   const activePeerColor =
     activeHeaderPeer?.color ||
@@ -1116,43 +1135,7 @@ export default function ChatWindowPanel({
       mentionRefreshToken={mentionRefreshToken}
       onOpenContextMenu={onOpenContextMenu}
       visibilityRef={registerMessageRef ? registerMessageRef(msg) : null}
-      onJumpToMessage={(messageId) => {
-        const target = document.getElementById(`message-${messageId}`);
-        if (target && typeof target.scrollIntoView === "function") {
-          target.scrollIntoView({ block: "center", behavior: "smooth" });
-        }
-        const bubble = target?.querySelector?.("[data-message-bubble]");
-        if (!bubble) return;
-        let flashed = false;
-        const playFlash = () => {
-          if (flashed) return;
-          flashed = true;
-          bubble.classList.remove("reply-flash");
-          void bubble.offsetWidth;
-          bubble.classList.add("reply-flash");
-          window.setTimeout(() => {
-            bubble.classList.remove("reply-flash");
-          }, 700);
-        };
-        const scrollRoot = chatScrollRef?.current || null;
-        if (!("IntersectionObserver" in window)) {
-          window.setTimeout(playFlash, 360);
-          return;
-        }
-        const observer = new IntersectionObserver(
-          (entries) => {
-            if (!entries.some((entry) => entry.isIntersecting)) return;
-            observer.disconnect();
-            playFlash();
-          },
-          { root: scrollRoot, threshold: 0.5 },
-        );
-        observer.observe(target);
-        window.setTimeout(() => {
-          observer.disconnect();
-          playFlash();
-        }, 900);
-      }}
+      onJumpToMessage={handleJumpToMessage}
     />
   );
 
@@ -1449,6 +1432,20 @@ export default function ChatWindowPanel({
               </ContextMenuSurface>
             )}
             </div>
+            {hasPinnedBar ? (
+              <div inert={batch.active}>
+                <PinnedMessageBar
+                  key={activeChatId}
+                  pins={messagePins}
+                  canManage={canManagePins}
+                  offline={isOffline || sseConnected === false}
+                  onJump={handleJumpToMessage}
+                  onUnpin={onUnpinMessage}
+                  onUnpinAll={onUnpinAllMessages}
+                  onOpenContextMenu={onOpenContextMenu}
+                />
+              </div>
+            ) : null}
           </div>
         </>
       ) : null}
@@ -1458,7 +1455,7 @@ export default function ChatWindowPanel({
           <div
             className="absolute left-1/2 z-3 -translate-x-1/2"
             style={{
-              top: "84px",
+              top: hasPinnedBar ? `${84 + PINNED_BAR_HEIGHT_PX}px` : "84px",
               // Keep the chip in the DOM at all times so floatingChipRef always
               // has a valid layout position for updateFloatingDayFromScroll.
               visibility: showFloatingLabel ? "visible" : "hidden",

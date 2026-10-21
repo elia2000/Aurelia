@@ -560,14 +560,28 @@ describe("MessageItem - round video container", () => {
 });
 
 describe("MessageItem - room for batch selection and reactions", () => {
-  test("has a leading gutter slot and a slot under the bubble", async () => {
+  test("has a slot under the bubble; the leading gutter is drawn only when given something", async () => {
     render(<MessageItem {...BASE_PROPS} msg={makeMsg()} />);
     await expect.element(page.getByText("Hello world from Bob")).toBeInTheDocument();
-    const leading = rowEl().querySelector('[data-slot="leading"]');
     const reactions = rowEl().querySelector('[data-slot="reactions"]');
-    expect(leading).not.toBeNull();
     expect(reactions).not.toBeNull();
     expect(reactions.previousElementSibling).toBe(bubbleEl());
+    // The selection checkbox floats over the row's edge and takes no room of its
+    // own, so with nothing to show there is no gutter.
+    expect(rowEl().querySelector('[data-slot="leading"]')).toBeNull();
+  });
+
+  test("the leading gutter comes before the bubble", async () => {
+    render(
+      <MessageItem
+        {...BASE_PROPS}
+        msg={makeMsg()}
+        leadingSlot={<input type="checkbox" aria-label="Select message" />}
+      />,
+    );
+    await expect.element(page.getByText("Hello world from Bob")).toBeInTheDocument();
+    const leading = rowEl().querySelector('[data-slot="leading"]');
+    expect(leading).not.toBeNull();
     expect(leading.compareDocumentPosition(bubbleEl()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 

@@ -19,8 +19,6 @@ export const emptySelection = () => ({ keys: [], anchor: null });
 export const getMessageKey = (msg) =>
   String(msg?._clientId ?? msg?._serverId ?? msg?.id ?? "");
 
-export const isKeySelected = (state, key) => state.keys.includes(key);
-
 export const selectOnlyKey = (key) =>
   key ? { keys: [key], anchor: key } : emptySelection();
 

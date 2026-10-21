@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import QuickReactionBar from "../chat/reactions/QuickReactionBar.jsx";
 
@@ -29,7 +29,20 @@ export default function AppContextMenu({ menu, onClose }) {
   const menuRef = useRef(null);
   const [desktopPosition, setDesktopPosition] = useState({ x: 0, y: 0 });
   const [verticalPlacement, setVerticalPlacement] = useState("below");
-  const [focusedIndex, setFocusedIndex] = useState(-1);
+  // The focused item belongs to the menu it was set for: a menu that opens
+  // after another one starts on its first item, not on the item number the
+  // last menu ended on (a stale index would focus, and Enter would pick, an
+  // item the person never moved to).
+  const [focusState, setFocusState] = useState({ menu: null, index: 0 });
+  const focusedIndex = menu && focusState.menu === menu ? focusState.index : 0;
+  const setFocusedIndex = useCallback(
+    (next) =>
+      setFocusState((prev) => {
+        const base = prev.menu === menu ? prev.index : 0;
+        return { menu, index: typeof next === "function" ? next(base) : next };
+      }),
+    [menu],
+  );
   // The reaction bar's "+" opens the emoji picker over the menu.
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
   // The finger that opened the menu with a long press can still produce a click
@@ -41,8 +54,6 @@ export default function AppContextMenu({ menu, onClose }) {
     if (!menu) return undefined;
     backdropPressedRef.current = false;
     setReactionPickerOpen(false);
-    // Reset focused index and move focus into the menu
-    setFocusedIndex(0);
     // When the menu goes away, give focus back to what had it (a message row
     // opened from the keyboard), unless that was a text field (a phone would
     // pop its keyboard up) or the chosen action already moved focus elsewhere.
@@ -142,7 +153,7 @@ export default function AppContextMenu({ menu, onClose }) {
     // Capture phase, so this runs before the page's own key handlers.
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [menu, onClose]);
+  }, [menu, onClose, setFocusedIndex]);
 
   useEffect(() => {
     const targetEl = menu?.targetEl;

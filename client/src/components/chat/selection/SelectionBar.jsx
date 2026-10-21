@@ -9,9 +9,10 @@ const dangerClass = `${actionClass} border-rose-200 bg-rose-50 text-rose-600 hov
 /**
  * The bar that takes the place of the chat header while messages are ticked:
  * how many, and what can be done with them (copy, forward, delete), and a
- * button to end selection mode. It stays in the page, hidden and out of the
- * tab order, while nothing is ticked, so the spoken "N selected" is a live
- * region that was already there when the count changes.
+ * button to end selection mode. It covers exactly the header (72px): anything
+ * else in the header's wrapper stays visible under it. It stays in the page,
+ * hidden and out of the tab order, while nothing is ticked, so the spoken
+ * "N selected" is a live region that was already there when the count changes.
  */
 export default function SelectionBar({
   active,
@@ -29,7 +30,7 @@ export default function SelectionBar({
       data-selection-bar
       data-selection-count={active ? count : undefined}
       inert={!active}
-      className={`absolute inset-0 z-10 flex items-center gap-2 border-b border-slate-300/80 bg-white px-3 transition duration-150 dark:border-emerald-500/20 dark:bg-slate-900 md:gap-3 md:px-6 ${
+      className={`absolute inset-x-0 top-0 z-10 flex h-[72px] items-center gap-2 border-b border-slate-300/80 bg-white px-3 transition duration-150 dark:border-emerald-500/20 dark:bg-slate-900 md:gap-3 md:px-6 ${
         active ? "opacity-100" : "pointer-events-none opacity-0"
       }`}
     >

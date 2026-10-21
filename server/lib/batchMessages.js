@@ -1,7 +1,7 @@
 // Pure helpers for the multi-select requests (forward / delete many messages at
 // once). No I/O, so every rule here is unit tested without a database.
 
-import { generateUuid, isValidUuid } from "./uuidUtils.js";
+import { generateOrderedUuid, isValidUuid } from "./uuidUtils.js";
 
 /** The most messages one multi-select request may name. */
 export const BATCH_MESSAGE_LIMIT = 100;
@@ -91,7 +91,7 @@ export function sortChronologically(rows) {
  * one batch ascending ids, in the order they are written, keeps them in that
  * order for everybody.
  */
-export function allocateAscendingIds(count, generate = generateUuid) {
+export function allocateAscendingIds(count, generate = generateOrderedUuid) {
   const ids = Array.from({ length: Math.max(0, Math.trunc(Number(count)) || 0) }, () => generate());
   return ids.sort();
 }

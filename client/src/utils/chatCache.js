@@ -418,6 +418,7 @@ export const sanitizeMessageForCache = (message) => {
     _delivery,
     _uploadType,
     _uploadProgress,
+    _savedGifId,
     _awaitingServerEcho,
     _processingPending,
     _serverId,

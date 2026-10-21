@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from "react";
+import { orderChatsWithPins } from "../../utils/chatPins.js";
 
 export function useActiveChatState({
   chats,
@@ -18,7 +19,9 @@ export function useActiveChatState({
     const query = String(chatsSearchQuery || "")
       .trim()
       .toLowerCase();
-    if (!query) return chats;
+    // Pinned chats stay on top; while the list is filtered by a search the
+    // matches come in the usual order (the pinned section is hidden).
+    if (!query) return orderChatsWithPins(chats);
     return chats.filter((chat) => {
       const members = Array.isArray(chat?.members) ? chat.members : [];
       const chatType = String(chat?.type || "").toLowerCase();

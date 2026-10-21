@@ -37,7 +37,9 @@ export default function ToastHost() {
   if (!toasts.length) return null;
   return (
     <div
-      className="pointer-events-none fixed inset-x-0 z-330 flex flex-col items-center gap-2 px-4"
+      // On a wide screen the chat list takes the left 35% (ChatSidebar); the
+      // toasts belong to the chat beside it, so they centre over that part.
+      className="pointer-events-none fixed inset-x-0 z-330 flex flex-col items-center gap-2 px-4 md:left-[35%]"
       style={{ bottom: "calc(5.5rem + env(safe-area-inset-bottom))" }}
     >
       {toasts.map((toast) => (

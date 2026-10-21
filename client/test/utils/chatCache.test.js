@@ -259,6 +259,13 @@ describe("sanitizeMessageForCache", () => {
     expect(result).not.toHaveProperty("_timeLabel");
   });
 
+  test("does not keep which saved GIF a message was sent from", () => {
+    // A GIF sent from the person's own collection carries the collection's id
+    // until the server answers; that id must not end up in the message cache.
+    const msg = { id: 1, body: "", _savedGifId: "6a4fcae7-791c-452f-a58f-7adb04a9c568", files: [] };
+    expect(sanitizeMessageForCache(msg)).not.toHaveProperty("_savedGifId");
+  });
+
   test("preserves non-internal fields", () => {
     const msg = { id: 1, body: "hello", username: "alice" };
     const result = sanitizeMessageForCache(msg);

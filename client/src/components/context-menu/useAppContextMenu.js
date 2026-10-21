@@ -1,14 +1,19 @@
 import { useCallback, useState } from "react";
 import {
+  ArrowDown,
+  ArrowUp,
   Ban,
   Chat,
   CheckCheck,
+  ChevronRight,
   CircleCheck,
   Copy,
   Download,
   Forward,
   GifIcon,
   Pencil,
+  Pin,
+  PinOff,
   Reply,
   Trash,
   User,
@@ -26,6 +31,8 @@ import {
 import { getReactionList } from "../../utils/reactionStore.js";
 import { isCallMessage } from "../../utils/callEntry.js";
 import { isMessageSelectable } from "../../utils/batchMessages.js";
+import { getChatPinActions } from "../../utils/chatPins.js";
+import { getMaxPinnedChats } from "../../utils/pinLimits.js";
 
 export function useAppContextMenu({
   activeChatId,
@@ -46,6 +53,17 @@ export function useAppContextMenu({
   // (message) -> starts selection mode with that message ticked (several
   // messages to forward, delete or copy). Left out, the item is hidden.
   onSelectMessage = null,
+  // Pinned messages. canPinMessage(message) says whether Pin / Unpin is offered
+  // at all (the person may pin in this chat, the message can be pinned);
+  // isMessagePinned(message) picks the label. Left out, the items are hidden.
+  canPinMessage = null,
+  isMessagePinned = null,
+  onPinMessage = null,
+  onUnpinMessage = null,
+  // Pinned chats in the chat list: (chat) -> pins it to the top or lets it go,
+  // (chat, -1 | 1) -> moves a pinned chat up or down. Left out, hidden.
+  onToggleChatPin = null,
+  onMoveChatPin = null,
   onOpenOrCreateDm,
   onOpenProfile,
   onRemoveGroupMember,
@@ -118,6 +136,8 @@ export function useAppContextMenu({
             sseConnected === false ||
             (typeof navigator !== "undefined" && navigator.onLine === false));
         const hasText = hasMessageText(message);
+        const pinnable = Boolean(canPinMessage?.(message));
+        const pinned = pinnable && Boolean(isMessagePinned?.(message));
         const linkTarget = findContextMenuLinkTarget(event?.target, targetEl);
         const files = getMessageFiles(message);
         // The GIF the person pointed at (else the first one), for "Save GIF".
@@ -167,39 +187,15 @@ export function useAppContextMenu({
                 },
               ]
             : []),
-          ...(hasText && canEditMessage?.(message)
+          ...(pinnable
             ? [
                 {
-                  id: "edit",
-                  label: "Edit",
-                  icon: Pencil,
+                  id: pinned ? "unpin" : "pin",
+                  label: pinned ? "Unpin" : "Pin",
+                  icon: pinned ? PinOff : Pin,
                   disabled: Boolean(offline),
-                  onSelect: () => onEditMessage?.(message),
-                },
-              ]
-            : []),
-          // An encrypted video message is one opaque file: saving it would
-          // download ciphertext, and the server refuses to forward it (the key
-          // is wrapped only for the devices that were in the chat).
-          ...(files.length && !message?.e2ee
-            ? [
-                {
-                  id: "save",
-                  label: "Save",
-                  icon: Download,
-                  onSelect: () => onSaveMessageFiles?.(message),
-                },
-              ]
-            : []),
-          ...(gifFile
-            ? [
-                {
-                  id: "save-gif",
-                  label: "Save GIF",
-                  icon: GifIcon,
-                  // The server must know the message and the file first.
-                  disabled: Boolean(offline) || !resolveSaveGifTarget(message, gifFile),
-                  onSelect: () => onSaveGif?.(message, gifFile),
+                  onSelect: () =>
+                    pinned ? onUnpinMessage?.(message) : onPinMessage?.(message),
                 },
               ]
             : []),
@@ -220,6 +216,42 @@ export function useAppContextMenu({
                   label: "Select",
                   icon: CircleCheck,
                   onSelect: () => onSelectMessage(message),
+                },
+              ]
+            : []),
+          ...(gifFile
+            ? [
+                {
+                  id: "save-gif",
+                  label: "Save GIF",
+                  icon: GifIcon,
+                  // The server must know the message and the file first.
+                  disabled: Boolean(offline) || !resolveSaveGifTarget(message, gifFile),
+                  onSelect: () => onSaveGif?.(message, gifFile),
+                },
+              ]
+            : []),
+          // An encrypted video message is one opaque file: saving it would
+          // download ciphertext, and the server refuses to forward it (the key
+          // is wrapped only for the devices that were in the chat).
+          ...(files.length && !message?.e2ee
+            ? [
+                {
+                  id: "save",
+                  label: "Save",
+                  icon: Download,
+                  onSelect: () => onSaveMessageFiles?.(message),
+                },
+              ]
+            : []),
+          ...(hasText && canEditMessage?.(message)
+            ? [
+                {
+                  id: "edit",
+                  label: "Edit",
+                  icon: Pencil,
+                  disabled: Boolean(offline),
+                  onSelect: () => onEditMessage?.(message),
                 },
               ]
             : []),
@@ -250,14 +282,11 @@ export function useAppContextMenu({
         const deleteAt = items.findIndex((item) => item.id === "delete");
         items.splice(deleteAt < 0 ? items.length : deleteAt, 0, ...reactionParts.items);
         // A call entry can only be removed from the person's own view: no
-        // reply, copy, forward, reaction or pin (the server refuses them). It
-        // can still be selected, to be deleted together with other messages.
+        // reply, copy, forward, reaction or pin (the server refuses them), so
+        // its menu is Delete alone. (Once selection mode is on, it can still be
+        // ticked and deleted together with other messages.)
         if (isCallMessage(message)) {
-          items.splice(
-            0,
-            items.length,
-            ...items.filter((item) => item.id === "delete" || item.id === "select"),
-          );
+          items.splice(0, items.length, ...items.filter((item) => item.id === "delete"));
         }
       }
 
@@ -305,9 +334,68 @@ export function useAppContextMenu({
         }
       }
 
+      if (kind === "pinbar") {
+        // The bar under the chat header: go to the shown pin, unpin it, or all.
+        const count = Number(data?.count || 0);
+        items.push({
+          id: "go-to",
+          label: "Go to message",
+          icon: ChevronRight,
+          onSelect: () => data?.onGoTo?.(),
+        });
+        if (data?.canManage) {
+          items.push({
+            id: "unpin-this",
+            label: "Unpin message",
+            icon: PinOff,
+            disabled: Boolean(data?.offline),
+            onSelect: () => data?.onUnpin?.(),
+          });
+          if (count > 1) {
+            items.push({
+              id: "unpin-all",
+              label: `Unpin all ${count} messages`,
+              icon: PinOff,
+              danger: true,
+              disabled: Boolean(data?.offline),
+              onSelect: () => data?.onUnpinAll?.(),
+            });
+          }
+        }
+      }
+
       if (kind === "chat") {
         const chat = data?.chat || null;
         const unreadCount = Number(chat?.unread_count || 0);
+        if (onToggleChatPin && chat?.id) {
+          const pin = getChatPinActions(chat, chats, { max: getMaxPinnedChats() });
+          const offline = Boolean(isOfflineProp) || sseConnected === false;
+          items.push({
+            id: pin.pinned ? "unpin-chat" : "pin-chat",
+            label: pin.pinned ? "Unpin" : "Pin to top",
+            icon: pin.pinned ? PinOff : Pin,
+            disabled: offline,
+            onSelect: () => onToggleChatPin(chat),
+          });
+          if (pin.canMoveUp) {
+            items.push({
+              id: "move-pin-up",
+              label: "Move up",
+              icon: ArrowUp,
+              disabled: offline,
+              onSelect: () => onMoveChatPin?.(chat, -1),
+            });
+          }
+          if (pin.canMoveDown) {
+            items.push({
+              id: "move-pin-down",
+              label: "Move down",
+              icon: ArrowDown,
+              disabled: offline,
+              onSelect: () => onMoveChatPin?.(chat, 1),
+            });
+          }
+        }
         if (unreadCount > 0) {
           items.push({
             id: "seen",
@@ -363,6 +451,12 @@ export function useAppContextMenu({
       onSaveMessageFiles,
       onSaveGif,
       onSelectMessage,
+      canPinMessage,
+      isMessagePinned,
+      onPinMessage,
+      onUnpinMessage,
+      onToggleChatPin,
+      onMoveChatPin,
       onOpenOrCreateDm,
       onOpenProfile,
       onRemoveGroupMember,

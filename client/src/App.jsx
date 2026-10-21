@@ -5,6 +5,7 @@ import { BRAND } from './brand.js'
 import { APP_CONFIG, setMessageMaxChars } from './settings/appConfig.js'
 import { fetchAppInfo } from './api/appMetaApi.js'
 import { setMaxReactionsPerUser } from './utils/reactionStore.js'
+import { setPinLimits } from './utils/pinLimits.js'
 import { setNameLimits } from './utils/nameLimits.js'
 import { setChatPageConfig } from './settings/chatPageConfig.js'
 import InstallBar from './components/pwa/InstallBar.jsx'
@@ -736,6 +737,7 @@ export default function App() {
         })
         setMessageMaxChars(data?.messageMaxChars)
         setMaxReactionsPerUser(data?.maxReactionsPerUser)
+        setPinLimits({ messages: data?.maxPinnedMessages, chats: data?.maxPinnedChats })
         setThemePalette(data?.themePalette)
         setThemeDefault(data?.themeDefault)
         setChatPageConfig({

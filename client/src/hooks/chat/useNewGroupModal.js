@@ -18,6 +18,7 @@ export function useNewGroupModal({
     groupColor: "#10b981",
     visibility: "public",
     allowMemberInvites: true,
+    allowMemberPins: false,
     remoteChannelEnabled: false,
     remoteChannelProvider: "songbird",
     remoteChannelSource: "",

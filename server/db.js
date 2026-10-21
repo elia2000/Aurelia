@@ -9,7 +9,7 @@ import { dbKnex } from "./db/knex.js";
 import { normalizeSqlForPostgres } from "./lib/sqlNormalizer.js";
 import { migrations } from "./migrations/index.js";
 import { setUserColor } from "./settings/colors.js";
-import { generateUuid, isValidUuid } from "./lib/uuidUtils.js";
+import { generateOrderedUuid, generateUuid, isValidUuid } from "./lib/uuidUtils.js";
 import { storageEncryption } from "./lib/storageEncryption.js";
 import { ensureSystemSecrets } from "./lib/secrets.js";
 import { REACTION_USERS_CAP, planReactionChange } from "./lib/reactions.js";
@@ -2535,10 +2535,11 @@ export function createMessage(
   clientRequestId = null,
   { allowPlaintextSystemMessage = false, id: requestedId = null } = {},
 ) {
-  // A caller that writes several messages at once (multi-select forward) hands
-  // in ascending ids so that messages created in the same second keep their
-  // order: a chat sorts equal times by id.
-  const id = isValidUuid(requestedId) ? String(requestedId).trim() : generateUuid();
+  // created_at has a resolution of one second and a chat sorts equal times by
+  // id, so ids grow with time: messages written within the same second keep the
+  // order they were written in. A caller that writes several messages at once
+  // (multi-select forward) hands in its own ascending ids.
+  const id = isValidUuid(requestedId) ? String(requestedId).trim() : generateOrderedUuid();
   const storedBody = storageEncryption.encryptText(body, {
     allowPlaintextSystemMessage,
   });

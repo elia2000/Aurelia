@@ -25,6 +25,10 @@ features:
     title: Telegram-style chat
     details: Compact message bubbles you can select and copy with the mouse, a right-click menu (long-press on a phone) anywhere along a message row, a one-row message box where a single button records voice and round video messages, and a click on a video to hide its buttons.
     link: /Calls-and-Video-Messages
+  - icon: 📌
+    title: Reactions, pins, GIFs and selection
+    details: React to a message with one tap or a double-click, pin messages and chats, keep your own collection of GIFs, and tick many messages to forward, copy or delete them together. Calls show up in the chat as entries with a call-back button.
+    link: /Reactions
   - icon: 🚀
     title: Easy Install
     details: One-line deployment script handles dependencies, build, Nginx, and SSL for you.

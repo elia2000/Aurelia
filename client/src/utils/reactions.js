@@ -11,7 +11,8 @@
 // A list ([{ emoji, count, reacted }]) is the same thing in the shape the
 // message list and the chips use.
 
-import { normalizeUuid } from "./uuidUtils.js";
+import { isCallMessage } from "./callEntry.js";
+import { getServerMessageId, isServiceMessage } from "./messageKind.js";
 
 /** The seven reactions offered first, like Telegram's quick reaction bar. */
 export const QUICK_REACTIONS = Object.freeze([
@@ -234,16 +235,11 @@ export function revertToggle(entry, plan) {
 /** True for the messages that cannot be reacted to (system lines, call entries). */
 export function isNonReactableMessage(msg) {
   if (!msg || typeof msg !== "object") return true;
-  if (msg._systemEvent) return true;
-  if (msg.messageType === "call" || msg.type === "call" || msg.call) return true;
-  return /^\[\[system:/i.test(String(msg.body ?? ""));
+  return isCallMessage(msg) || isServiceMessage(msg);
 }
 
 /** The id the server knows the message by, or null while it is only local. */
-export function getReactionMessageId(msg) {
-  if (!msg || typeof msg !== "object") return null;
-  return normalizeUuid(msg._serverId) || normalizeUuid(msg.id) || null;
-}
+export const getReactionMessageId = getServerMessageId;
 
 /** Can this message take a reaction right now? */
 export function canReactToMessage(msg) {

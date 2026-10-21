@@ -1,4 +1,5 @@
 import { isCallMessage } from "./callEntry.js";
+import { normalizeUuid } from "./uuidUtils.js";
 
 // Message types this client draws itself. The server sends messageType "call"
 // for a call history entry and "text" for everything else.
@@ -19,3 +20,13 @@ export function isUnsupportedMessage(msg) {
   const files = Array.isArray(msg.files) ? msg.files : [];
   return !body && files.length === 0;
 }
+
+/** The id the server knows a message by, or null while it only exists on this device. */
+export function getServerMessageId(msg) {
+  if (!msg || typeof msg !== "object") return null;
+  return normalizeUuid(msg._serverId) || normalizeUuid(msg.id) || null;
+}
+
+/** "X joined the group" and the like: lines the chat adds, not things a person wrote. */
+export const isServiceMessage = (msg) =>
+  Boolean(msg?._systemEvent) || /^\[\[system:/i.test(String(msg?.body ?? ""));

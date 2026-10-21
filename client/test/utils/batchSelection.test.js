@@ -4,7 +4,6 @@ import {
   emptySelection,
   extendToKey,
   getMessageKey,
-  isKeySelected,
   orderedSelection,
   pruneKeys,
   selectOnlyKey,
@@ -151,7 +150,7 @@ describe("pruneKeys", () => {
   });
 });
 
-describe("orderedSelection and isKeySelected", () => {
+describe("orderedSelection", () => {
   test("lists the selected keys in chat order, whatever order they were clicked in", () => {
     let state = emptySelection();
     ["m5", "m2", "m9", "m1"].forEach((key) => {
@@ -163,11 +162,5 @@ describe("orderedSelection and isKeySelected", () => {
   test("leaves out keys that are not in the list", () => {
     const state = { keys: ["m2", "ghost"], anchor: "m2" };
     expect(orderedSelection(state, keys(3))).toEqual(["m2"]);
-  });
-
-  test("isKeySelected", () => {
-    const state = selectOnlyKey("m2");
-    expect(isKeySelected(state, "m2")).toBe(true);
-    expect(isKeySelected(state, "m3")).toBe(false);
   });
 });

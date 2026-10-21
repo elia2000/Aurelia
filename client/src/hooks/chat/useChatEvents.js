@@ -11,6 +11,14 @@ import {
   getReactionsForCache,
 } from "../../utils/reactionStore.js";
 import { savedGifs } from "../../gifs/savedGifsStore.js";
+import { applyPinnedList } from "../../utils/chatPins.js";
+import { isPinServiceMessage } from "../../utils/messagePins.js";
+import {
+  PIN_EVENT_TYPES,
+  applyRealtimePinEvent,
+  bindPinStoreToUser,
+  refreshPinnedMessagePreview,
+} from "../../utils/pinStore.js";
 import { eventCountsAsUnread, getChatPatchFromMessageEvent } from "../../utils/callEntry.js";
 import { REALTIME_OPEN_EVENT } from "../../calls/callContext.js";
 
@@ -138,6 +146,7 @@ export function useChatEvents({
   useEffect(() => {
     userIdRef.current = userId;
     bindReactionStoreToUser(userId);
+    bindPinStoreToUser(userId);
   }, [userId]);
 
   useEffect(() => {
@@ -239,8 +248,22 @@ export function useChatEvents({
           payload.type !== "remote_channel_queue" &&
           payload.type !== "saved_gif_added" &&
           payload.type !== "saved_gif_removed" &&
+          payload.type !== "chat_pins_changed" &&
+          !PIN_EVENT_TYPES.has(payload.type) &&
           !CALL_EVENT_TYPES.has(payload.type)
         ) {
+          return;
+        }
+        // Pinned messages of a chat (a chat member sees these).
+        if (PIN_EVENT_TYPES.has(payload.type)) {
+          applyRealtimePinEvent(payload);
+          return;
+        }
+        // The person's own pinned chats, on every device: the full list replaces ours.
+        if (payload.type === "chat_pins_changed") {
+          if (Array.isArray(payload.pinned)) {
+            setChats((prev) => applyPinnedList(prev, payload.pinned));
+          }
           return;
         }
         // The person's own GIF collection (these events never go to anybody else).
@@ -311,6 +334,10 @@ export function useChatEvents({
           payload.type === "chat_message" && !isOwnEvent;
         const isDeleteEvent = payload.type === "chat_message_deleted";
         const isUpdateEvent = payload.type === "chat_message_updated";
+        // "X pinned a message" is a line in the timeline, not a new last
+        // message: the server leaves it out of the chat list and the unread counts.
+        const isPinServiceEvent =
+          payload.type === "chat_message" && isPinServiceMessage(payload);
         const isSelectedChat =
           Boolean(currentActiveId) && Boolean(payloadChatId) &&
           String(payloadChatId).toLowerCase() === String(currentActiveId).toLowerCase();
@@ -318,7 +345,7 @@ export function useChatEvents({
           isSelectedChat &&
           isDocumentActive() &&
           canMarkReadInCurrentViewRef.current;
-        if (payload.type === "chat_message" && payloadChatId) {
+        if (payload.type === "chat_message" && payloadChatId && !isPinServiceEvent) {
           const eventTime = new Date().toISOString();
           const previewBody = String(
             payload?.summaryText || payload?.body || "",
@@ -387,6 +414,8 @@ export function useChatEvents({
         if (isUpdateEvent) {
           scheduleLoadChats();
           const payloadMsgId = normalizeUuid(payload?.messageId) || null;
+          // The bar under the header shows a preview of each pinned message.
+          refreshPinnedMessagePreview(payloadChatId, payloadMsgId);
           const previewBody = String(
             payload?.summaryText || payload?.body || "",
           ).trim();
@@ -445,7 +474,9 @@ export function useChatEvents({
               // The chat may be selected in a hidden/background tab. Keep it
               // unread and avoid pretending the user saw the message.
             } else if (userScrolledUpRef.current && !isAtBottomRef.current) {
-              setUnreadInChat((prev) => prev + (eventCountsAsUnread(payload) ? 1 : 0));
+              setUnreadInChat(
+                (prev) => prev + (eventCountsAsUnread(payload) && !isPinServiceEvent ? 1 : 0),
+              );
             } else {
               // Only scroll to bottom if no unread anchor is active
               const anchorActive =

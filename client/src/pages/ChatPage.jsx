@@ -6,6 +6,10 @@ import AppContextMenu from "../components/context-menu/AppContextMenu.jsx";
 import { useAppContextMenu } from "../components/context-menu/useAppContextMenu.js";
 import SavedGifsHost from "../components/chat/gifs/SavedGifsHost.jsx";
 import ToastHost from "../components/common/ToastHost.jsx";
+import { useChatPins } from "../hooks/chat/useChatPins.js";
+import { useJumpToMessage } from "../hooks/chat/useJumpToMessage.js";
+import { useMessagePinActions } from "../hooks/chat/useMessagePins.js";
+import { isChatPinned } from "../utils/chatPins.js";
 import BatchActionModals from "../components/chat/selection/BatchActionModals.jsx";
 import { useBatchMessageActions } from "../hooks/chat/useBatchMessageActions.js";
 import { buildSavedGifPreviewFile, resolveSaveGifTarget } from "../gifs/gifMessageActions.js";
@@ -6115,6 +6119,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       groupColor: activeChat.group_color || "#10b981",
       visibility: activeChat.group_visibility || "public",
       allowMemberInvites: Boolean(Number(activeChat.allow_member_invites || 0)),
+      allowMemberPins: Boolean(Number(activeChat.allow_member_pins || 0)),
       remoteChannelEnabled: false,
       remoteChannelProvider: appInfo?.remoteChannels?.telegramConfigured ? "telegram" : "songbird",
       remoteChannelSource: "",
@@ -6393,6 +6398,8 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
             groupUsername: payload.username,
             visibility: payload.visibility,
             allowMemberInvites: payload.allowMemberInvites,
+            // "Members can pin" belongs to groups; a channel has one pinner.
+            ...(isChannel ? {} : { allowMemberPins: newGroupForm.allowMemberPins === true }),
             members: payload.members,
           })
         : await (isChannel ? createChannelChat : createGroupChat)(payload);
@@ -6581,6 +6588,19 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     isOffline,
   });
 
+  // Pinned messages of the open chat, and the person's pinned chats.
+  const messagePins = useMessagePinActions({ activeChatId, activeChat, user, isOffline });
+  const chatPins = useChatPins({ chats, setChats, isOffline });
+  const { setPinned: setChatPinnedState, move: moveChatPinState } = chatPins;
+  const toggleChatPin = useCallback(
+    (chat) => setChatPinnedState(chat?.id, !isChatPinned(chat)),
+    [setChatPinnedState],
+  );
+  const moveChatPin = useCallback(
+    (chat, delta) => moveChatPinState(chat?.id, delta),
+    [moveChatPinState],
+  );
+
   const { contextMenu, closeContextMenu, openContextMenu } = useAppContextMenu({
     activeChatId,
     chats,
@@ -6597,6 +6617,12 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     // The server refuses to store GIFs while uploads are off.
     onSaveGif: CHAT_PAGE_CONFIG.fileUploadEnabled ? handleSaveGif : null,
     onSelectMessage: batchActions.selectMessage,
+    canPinMessage: messagePins.canPinMessage,
+    isMessagePinned: messagePins.isMessagePinned,
+    onPinMessage: messagePins.pinMessage,
+    onUnpinMessage: messagePins.unpinMessage,
+    onToggleChatPin: toggleChatPin,
+    onMoveChatPin: moveChatPin,
     onOpenOrCreateDm: openOrCreateDmFromMember,
     onOpenProfile: openMemberProfileFromList,
     onRemoveGroupMember: handleRemoveGroupMember,
@@ -6766,6 +6792,17 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     setUserScrolledUp,
     userScrolledUpRef,
   ]);
+  // Takes the person to a message of the open chat (a pin, a reply, the line
+  // "X pinned a message"), loading older messages first when it is not there.
+  const jumpToMessage = useJumpToMessage({
+    activeChatIdRef,
+    messages,
+    hasOlderMessages,
+    loadMessages,
+    chatScrollRef,
+    pageSize: CHAT_PAGE_CONFIG.messagePageSize,
+    onJump: handleFloatingDayNavigate,
+  });
   const shouldPromptNotifications =
     notificationsSupported &&
     notificationPermission === "default" &&
@@ -6874,6 +6911,8 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         onOpenUserProfileContext={openMemberProfileFromList}
         onOpenUserContextMenu={openContextMenu}
         onOpenChatContextMenu={openContextMenu}
+        onReorderPinnedChats={chatPins.reorder}
+        onCloseContextMenu={closeContextMenu}
         showSettings={showSettings}
         settingsMenuRef={settingsMenuRef}
         setSettingsPanel={setSettingsPanel}
@@ -7014,6 +7053,10 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         onOpenContextMenu={openContextMenu}
         onUserScrollIntent={handleUserScrollIntent}
         onFloatingDayNavigate={handleFloatingDayNavigate}
+        canManagePins={messagePins.canManagePins}
+        onUnpinMessage={messagePins.unpinMessage}
+        onUnpinAllMessages={messagePins.unpinAllMessages}
+        jumpToMessage={jumpToMessage}
         canSwipeReply={canSwipeReply}
         fileUploadEnabled={CHAT_PAGE_CONFIG.fileUploadEnabled}
         fileUploadInProgress={fileUploadInProgress || activeUploadProgress !== null}
@@ -7183,6 +7226,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
             hideSelectedMemberChips={false}
             fileUploadEnabled={CHAT_PAGE_CONFIG.fileUploadEnabled}
             showInviteManagement={showGroupInviteManagement}
+            showMemberPinsSetting={Boolean(editingGroup && groupModalType === "group")}
             currentInviteLink={displayedGroupInviteLink}
             regeneratingInviteLink={regeneratingGroupInviteLink}
             onRegenerateInvite={editingGroup ? handleRegenerateGroupInvite : null}

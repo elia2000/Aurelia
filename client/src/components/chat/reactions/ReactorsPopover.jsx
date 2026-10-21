@@ -56,13 +56,15 @@ function ReactorRow({ row }) {
         color={row.color || "#10b981"}
         className="h-9 w-9 shrink-0 text-xs font-semibold text-white"
       />
-      <span
-        dir="auto"
-        className={`min-w-0 flex-1 truncate text-sm font-medium text-slate-800 dark:text-slate-100 ${
-          persian ? "font-fa" : ""
-        }`}
-      >
-        {row.name}
+      {/* The name sits next to the picture whatever its script: an inline box
+          as wide as the name, not a block that pushes it to the far side. */}
+      <span className="min-w-0 flex-1 text-sm font-medium text-slate-800 dark:text-slate-100">
+        <span
+          dir="auto"
+          className={`inline-block max-w-full truncate align-top ${persian ? "font-fa" : ""}`}
+        >
+          {row.name}
+        </span>
       </span>
       <span className="flex shrink-0 items-center gap-1" aria-label={`Reacted ${row.emojis.join(" ")}`}>
         {row.emojis.map((emoji) => (

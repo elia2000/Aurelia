@@ -4,6 +4,7 @@ import {
   isMessageFromOtherUser,
 } from "../../utils/messageOwnership.js";
 import { syncReactionsFromServer } from "../../utils/reactionStore.js";
+import { buildPinSystemEvent } from "../../utils/messagePins.js";
 
 const SILENT_FETCH_TRACK_MAX_CHATS = 40;
 const SILENT_FETCH_MIN_INTERVAL_MS = 320;
@@ -304,7 +305,10 @@ export function useMessagesLoader({
                   name: shortTargetName || "A member",
                   suffix: systemSuffix,
                 }
-              : null,
+              : // "X pinned a message": a chip that jumps to the pinned message.
+                allowSystemEvents
+                ? buildPinSystemEvent(msg, { isOwn: isMessageAuthoredByUser(msg, user) })
+                : null,
         };
       });
       const replyIconByMessageId = new Map(

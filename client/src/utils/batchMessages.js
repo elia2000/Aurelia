@@ -6,7 +6,9 @@ import { isCallMessage } from "./callEntry.js";
 import { parseServerDate } from "./chatFormat.js";
 import { extractMessageBodyText, hasMessageText } from "./messageContent.js";
 import { MAX_BATCH_MESSAGES } from "./batchSelection.js";
-import { normalizeUuid } from "./uuidUtils.js";
+import { getServerMessageId, isServiceMessage } from "./messageKind.js";
+
+export { getServerMessageId, isServiceMessage };
 
 // The server takes at most this many chats, and messages x chats, in one forward request.
 const FORWARD_MAX_TARGETS = 20;
@@ -15,16 +17,6 @@ const FORWARD_MAX_PAIRS = 500;
 export const SELECTION_LIMIT_HINT = `You can select up to ${MAX_BATCH_MESSAGES} messages at once.`;
 
 export const messagesLabel = (count) => `${count} ${count === 1 ? "message" : "messages"}`;
-
-/** The id the server knows a message by, or null while it only exists here. */
-export function getServerMessageId(msg) {
-  if (!msg || typeof msg !== "object") return null;
-  return normalizeUuid(msg._serverId) || normalizeUuid(msg.id) || null;
-}
-
-/** "X joined the group" and the like: lines the chat adds, not things a person wrote. */
-export const isServiceMessage = (msg) =>
-  Boolean(msg?._systemEvent) || /^\[\[system:/i.test(String(msg?.body ?? ""));
 
 /** A message that is stored on the server can be selected (calls and service lines too: they can be deleted). */
 export function isMessageSelectable(msg) {

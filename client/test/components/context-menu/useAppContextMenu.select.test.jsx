@@ -67,12 +67,12 @@ describe("message menu - Select", () => {
     expect(ids(items)).not.toContain("select");
   });
 
-  test("a call entry offers Select and Delete only (to delete it together with others)", async () => {
+  test("a call entry offers Delete only, even when selection is available", async () => {
     const items = await openFor(
       { id: MESSAGE_ID, username: "bob", body: "", messageType: "call", call: { kind: "audio", outcome: "missed" } },
       { onSelectMessage: vi.fn() },
     );
-    expect(ids(items)).toEqual(["select", "delete"]);
+    expect(ids(items)).toEqual(["delete"]);
   });
 
   test("an encrypted message can be selected too (to delete it)", async () => {

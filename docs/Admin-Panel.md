@@ -143,6 +143,12 @@ Configure runtime settings through the UI (replaces most `.env` variables):
 - Max message length (characters)
 - Max username length
 - Max nickname length
+- Reactions per person per message (`MAX_REACTIONS_PER_USER`, 1-3)
+- Pinned messages per chat (`MAX_PINNED_MESSAGES`, 1-100)
+- Pinned chats per person (`MAX_PINNED_CHATS`, 1-30)
+- Saved GIFs per person (`MAX_SAVED_GIFS`, 1-200)
+
+These four apply without a restart. See [Reactions](./Reactions.md), [Pinned Messages and Chats](./Pinned-Messages-and-Chats.md) and [GIFs](./Saved-GIFs.md) for what each one changes for people.
 
 #### Client Behavior
 

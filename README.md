@@ -19,6 +19,7 @@ Aurelle is a fork of [Songbird](https://github.com/bllackbull/Songbird) (MIT) th
 - 🔋 **Light on battery and data**: Opus DTX at 24 kbps, hardware-friendly codecs, adaptive video that falls back to audio-only, camera released in the background
 - 🛡️ **High-security option**: route every call through your own relay so peers never learn each other's IP address
 - 💬 **Chat types**: Direct messages, groups, and channels
+- 😀 **Telegram-style messaging**: emoji reactions, pinned messages and chats, selecting many messages to forward, copy or delete, a private collection of saved GIFs, and call entries with a call-back button
 - 📁 **Media Support**: File uploads, voice messages, video transcoding
 - 🔔 **Push Notifications**: Web push with VAPID (also for incoming calls)
 - 📡 **Remote Channels**: Mirror Telegram or Aurelle channels
@@ -82,6 +83,7 @@ For calls between different networks, enable the bundled relay: `docker compose 
 The documentation lives in [`docs/`](docs/) (VitePress, English and Persian). Run `npm run docs:dev` to browse it locally.
 
 - [Calls & Video Messages](docs/Calls-and-Video-Messages.md)
+- [Message Menu](docs/Message-Menu.md), [Reactions](docs/Reactions.md), [Selecting Messages](docs/Selecting-Messages.md), [Pinned Messages and Chats](docs/Pinned-Messages-and-Chats.md), [GIFs](docs/Saved-GIFs.md)
 - [End-to-End Encryption Protocol](docs/E2EE-Protocol.md) (for native app developers)
 - [Deployment Script](docs/Deployment-Script.md)
 - [Install via Docker](docs/Installation-Docker.md)
