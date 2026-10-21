@@ -14,7 +14,9 @@ export default function SavedGifsHost({ ownerKey, store = savedGifs }) {
   if (!notice) return null;
   return (
     <div
-      className="pointer-events-none fixed inset-x-0 z-340 flex justify-center px-4"
+      // Like the toasts (ToastHost): on a wide screen it centres over the chat,
+      // not over the whole window including the chat list.
+      className="pointer-events-none fixed inset-x-0 z-340 flex justify-center px-4 md:left-[35%]"
       style={{ bottom: "calc(8.5rem + env(safe-area-inset-bottom))" }}
     >
       {/* A new alert element for every removal, so it is read out again. */}

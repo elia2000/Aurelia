@@ -90,7 +90,8 @@ describe("Dual Database Driver Regression Tests (SQLite & Postgres)", () => {
 
       const result = await createMessage("cccccccc-cccc-4ccc-8ccc-cccccccccccc", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "hello");
       expect(typeof result).toBe("string");
-      expect(result).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      // message ids are time-ordered (version 7 layout), see generateOrderedUuid
+      expect(result).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
       expect(capturedSql).not.toMatch(/RETURNING/i);
       expect(raw).toHaveBeenCalledTimes(1);
     });

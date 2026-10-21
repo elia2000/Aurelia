@@ -156,7 +156,8 @@ describe("allocateAscendingIds", () => {
     expect(ids).toEqual([...ids].sort());
     expect(new Set(ids).size).toBe(50);
     for (const entry of ids) {
-      expect(entry).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+      // time-ordered ids (version 7 layout), see generateOrderedUuid
+      expect(entry).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     }
   });
 
