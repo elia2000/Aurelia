@@ -137,6 +137,68 @@ describe("ContextMenuSurface - touch and pen long press", () => {
   });
 });
 
+describe("ContextMenuSurface - the lift after a long press", () => {
+  function RowWithMenuUnderTheFinger({ onItemClick }) {
+    return (
+      <>
+        <Row onOpen={() => {}} isMobile />
+        <button type="button" data-testid="menu-item" onClick={onItemClick}>
+          menu item
+        </button>
+      </>
+    );
+  }
+
+  test("the click the browser sends to the menu when the finger lifts does not choose an item", async () => {
+    const onItemClick = vi.fn();
+    render(<RowWithMenuUnderTheFinger onItemClick={onItemClick} />);
+    await expect.element(page.getByTestId("row")).toBeInTheDocument();
+    fire(getEl("text"), "pointerdown", { pointerType: "touch", pointerId: 20, clientX: 5, clientY: 5 });
+    await wait(80); // the menu is open, the finger is still down
+    fire(getEl("menu-item"), "pointerup", { pointerType: "touch", pointerId: 20 });
+    getEl("menu-item").click();
+    expect(onItemClick).not.toHaveBeenCalled();
+    // a later, deliberate tap works
+    getEl("menu-item").click();
+    expect(onItemClick).toHaveBeenCalledTimes(1);
+  });
+
+  test("a deliberate tap after the guard window is not swallowed", async () => {
+    const onItemClick = vi.fn();
+    render(<RowWithMenuUnderTheFinger onItemClick={onItemClick} />);
+    await expect.element(page.getByTestId("row")).toBeInTheDocument();
+    fire(getEl("text"), "pointerdown", { pointerType: "touch", pointerId: 21, clientX: 5, clientY: 5 });
+    await wait(80);
+    fire(getEl("menu-item"), "pointerup", { pointerType: "touch", pointerId: 21 });
+    await wait(650); // the finger lifted long ago and no click came
+    getEl("menu-item").click();
+    expect(onItemClick).toHaveBeenCalledTimes(1);
+  });
+
+  test("a control marked data-menu-passthrough still lets a long press open the menu", async () => {
+    const onOpen = vi.fn();
+    render(
+      <ContextMenuSurface
+        as="div"
+        data-testid="row"
+        contextMenu={{ onOpen, isMobile: true, holdDelayMs: 25 }}
+      >
+        <button type="button" data-testid="plain">plain</button>
+        <button type="button" data-testid="picture" data-menu-passthrough="">
+          picture
+        </button>
+      </ContextMenuSurface>,
+    );
+    await expect.element(page.getByTestId("row")).toBeInTheDocument();
+    fire(getEl("plain"), "pointerdown", { pointerType: "touch", pointerId: 22, clientX: 5, clientY: 5 });
+    await wait(80);
+    expect(onOpen).not.toHaveBeenCalled();
+    fire(getEl("picture"), "pointerdown", { pointerType: "touch", pointerId: 23, clientX: 5, clientY: 5 });
+    await wait(80);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("ContextMenuSurface - keyboard", () => {
   test("the ContextMenu key opens the menu from a focused row", async () => {
     const onOpen = vi.fn();

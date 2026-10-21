@@ -31,6 +31,11 @@ import {
   useFloatingDayChip,
 } from "./index.js";
 import ContextMenuSurface from "../context-menu/ContextMenuSurface.jsx";
+import { useReactionSlots } from "../../hooks/chat/useReactionSlots.js";
+import { useBatchSelection } from "../../hooks/chat/useBatchSelection.js";
+import SelectionBar from "./selection/SelectionBar.jsx";
+import { getMessageKey } from "../../utils/batchSelection.js";
+import { isCallMessage } from "../../utils/callEntry.js";
 import { CACHE_STORES } from "../../utils/cacheDb.js";
 import {
   MEDIA_POSTER_CACHE_KEY,
@@ -121,9 +126,13 @@ export default function ChatWindowPanel({
   microphonePermissionStatus = "unknown",
   onRequestMicrophonePermission = null,
   onSendVideoNote = null,
+  onSendSavedGif = null,
   copyToastVisible = false,
   registerMessageRef = null,
   showFloatingLabel = false,
+  // (messages) => void: the ticked messages, oldest first, to forward / delete.
+  onForwardMessages = null,
+  onDeleteMessages = null,
 }) {
   const MEDIA_CACHE_VERSION = 1;
   const MEDIA_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -1012,9 +1021,38 @@ export default function ChatWindowPanel({
     setComposerFocused(Boolean(nextFocused));
   }, []);
 
+  // The reaction chips under the bubbles (and the reactions that came with the messages).
+  const getReactionsSlot = useReactionSlots({
+    messages,
+    chatId: activeChatId,
+    chatType: activeChat?.type,
+    user,
+    members: activeChat?.members,
+    isOwn: (msg) => !isChannelChat && msg?.username === user?.username,
+  });
+
+  // Selection mode: several messages ticked to forward, delete or copy.
+  const batch = useBatchSelection({
+    chatId: activeChatId,
+    messages,
+    loadingMessages,
+    scrollRef: chatScrollRef,
+    hoverable: isDesktop && !isMobileTouchDevice,
+    channelName: isChannelChat ? activeFallbackTitle : "",
+    offline: isOffline || sseConnected === false,
+    onForward: onForwardMessages,
+    onDelete: onDeleteMessages,
+  });
+
   const renderMessageItem = (msg, options = {}) => (
     <MessageItem
       msg={msg}
+      reactionsSlot={getReactionsSlot(msg)}
+      leadingSlot={batch.getLeadingSlot(msg)}
+      selectionMode={batch.active}
+      isSelected={batch.isSelected(getMessageKey(msg))}
+      isSelectionTabStop={batch.tabStopKey === getMessageKey(msg)}
+      onToggleSelect={batch.toggle}
       isOffline={isOffline}
       sseConnected={sseConnected}
       isFirstInGroup={options.isFirstInGroup}
@@ -1035,6 +1073,7 @@ export default function ChatWindowPanel({
       chatId={activeChatId}
       chatName={activeFallbackTitle}
       chatColor={groupAvatarColor}
+      callPeer={isCallMessage(msg) ? activeHeaderPeer : null}
       seenCount={
         isChannelChat
           ? (channelSeenCounts?.[msg?._serverId || msg?.id] ??
@@ -1137,7 +1176,18 @@ export default function ChatWindowPanel({
       {activeChatId ? (
         <>
           <div className="sticky top-0 z-30 shrink-0">
+            <SelectionBar
+              active={batch.active}
+              count={batch.count}
+              canForward={batch.forwardableCount > 0}
+              offline={isOffline || sseConnected === false}
+              onClose={batch.exit}
+              onCopy={batch.copy}
+              onForward={batch.forward}
+              onDelete={batch.remove}
+            />
             <div
+              inert={batch.active}
               className="flex h-[72px] items-center justify-between gap-3 border-b border-slate-300/80 bg-white px-6 py-4 dark:border-emerald-500/20 dark:bg-slate-900"
               style={{
                 position: "relative",
@@ -1465,6 +1515,8 @@ export default function ChatWindowPanel({
       </div>
 
       {showComposer ? (
+        // Hidden, not removed, while messages are ticked: the draft stays.
+        <div className={batch.active ? "hidden" : "contents"} inert={batch.active}>
           <MessageComposer
             activeChatId={activeChatId}
             isDesktop={isDesktop}
@@ -1502,8 +1554,10 @@ export default function ChatWindowPanel({
             microphonePermissionStatus={microphonePermissionStatus}
             onRequestMicrophonePermission={onRequestMicrophonePermission}
             onSendVideoNote={onSendVideoNote}
+            onSendSavedGif={onSendSavedGif}
             selfUser={user}
           />
+        </div>
       ) : null}
 
       {activeChatId ? (

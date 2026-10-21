@@ -1,0 +1,78 @@
+/* Message reactions: the chips under a bubble, the quick bar of the message
+   menu and the heart that pops when a message is double clicked. */
+
+/* A chip appears, or its count changes: a short pop. */
+@keyframes sb-reaction-pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.4;
+  }
+  60% {
+    transform: scale(1.16);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.sb-reaction-pop {
+  animation: sb-reaction-pop 280ms cubic-bezier(0.2, 0.9, 0.3, 1.25) 1 both;
+}
+
+/* The heart over a bubble after a double click / double tap. */
+@keyframes sb-heart-burst {
+  0% {
+    transform: translate(-50%, -50%) scale(0.2);
+    opacity: 0;
+  }
+  25% {
+    transform: translate(-50%, -50%) scale(1.15);
+    opacity: 1;
+  }
+  45% {
+    transform: translate(-50%, -50%) scale(0.95);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, -78%) scale(1.05);
+    opacity: 0;
+  }
+}
+
+.sb-heart-burst {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 5;
+  pointer-events: none;
+  animation: sb-heart-burst 760ms ease-out 1 both;
+}
+
+/* The quick bar slides in with the menu. */
+@keyframes sb-reaction-bar-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.sb-reaction-bar {
+  animation: sb-reaction-bar-in 170ms ease-out 1 both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sb-reaction-pop,
+  .sb-heart-burst,
+  .sb-reaction-bar {
+    animation: none;
+  }
+  .sb-heart-burst {
+    opacity: 0;
+  }
+}

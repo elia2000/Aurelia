@@ -4,11 +4,19 @@ import ChatWindowPanel from "../components/chat/ChatWindowPanel.jsx";
 import { ChatSidebar } from "../components/sidebar/index.js";
 import AppContextMenu from "../components/context-menu/AppContextMenu.jsx";
 import { useAppContextMenu } from "../components/context-menu/useAppContextMenu.js";
+import SavedGifsHost from "../components/chat/gifs/SavedGifsHost.jsx";
+import ToastHost from "../components/common/ToastHost.jsx";
+import BatchActionModals from "../components/chat/selection/BatchActionModals.jsx";
+import { useBatchMessageActions } from "../hooks/chat/useBatchMessageActions.js";
+import { buildSavedGifPreviewFile, resolveSaveGifTarget } from "../gifs/gifMessageActions.js";
+import { savedGifs } from "../gifs/savedGifsStore.js";
+import { showToast } from "../utils/toast.js";
 import { CHAT_PAGE_CONFIG } from "../settings/chatPageConfig.js";
 import { getAvatarInitials } from "../utils/avatarInitials.js";
 import { getRandomAvatarColor } from "../utils/avatarColor.js";
 import { NICKNAME_MAX, USERNAME_MAX, USERNAME_REGEX } from "../utils/nameLimits.js";
 import { resolveReplyPreview, summarizeFiles, truncateText } from "../utils/messagePreview.js";
+import { isCallMessage } from "../utils/callEntry.js";
 import {
   formatBytesAsMb,
   formatChatCardTimestamp,
@@ -1040,6 +1048,13 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     downloadMessageFiles(files);
   }, []);
 
+  // "Save GIF": keeps a GIF of a message in the person's own collection.
+  const handleSaveGif = useCallback((message, file) => {
+    const target = resolveSaveGifTarget(message, file);
+    if (!target) return;
+    void savedGifs.saveFromMessage(target);
+  }, []);
+
   const handleOpenForwardOrigin = async (target) => {
     if (!target) return;
     if (target.kind === "self") {
@@ -1254,6 +1269,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
             : null,
           url: file?.url || file?._localUrl || null,
           processing: Boolean(file?.processing),
+          ...(file?.isAnimated || file?.gif ? { isAnimated: true, gif: true } : {}),
         }))
       : [];
     setChats((prev) => {
@@ -1265,6 +1281,8 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
             Number(messageId || 0) || chat?.last_message_id || null,
           last_message: previewBody || chat?.last_message || "",
           last_message_files: previewFiles,
+          last_message_type: "message",
+          last_call: null,
           last_time: previewTime,
           last_sender_username: user.username,
           last_sender_nickname: user.nickname || user.username,
@@ -2877,6 +2895,8 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   const canDeleteMessageForEveryone = useCallback(
     (message) => {
       if (String(activeChat?.type || "").toLowerCase() === "saved") return false;
+      // A call entry belongs to both people: each can only hide it for themselves.
+      if (isCallMessage(message)) return false;
       if (isActiveChannelChat && !canCurrentUserEditGroup) return false;
       const messageAuthor = String(message?.username || "").toLowerCase();
       const currentUsername = String(user?.username || "").toLowerCase();
@@ -3499,6 +3519,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
 
   useChatEvents({
     username: user?.username,
+    userId: user?.id,
     getSseStreamUrl,
     sseReconnectDelayMs: CHAT_PAGE_CONFIG.sseReconnectDelayMs,
     setSseConnected,
@@ -3527,6 +3548,9 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         clearTypingExpiryTimer(payloadChatId, sender);
         removeTypingUser(payloadChatId, sender);
       }
+      // A call entry is not a message to announce: the call screen and the
+      // missed-call push already told the person.
+      if (isCallMessage(payload)) return;
       if (typeof window === "undefined" || !("Notification" in window)) return;
       if (!notificationsActive) return;
       const rawBody = normalizeMessageBody(meta?.body ?? payload?.body).trim();
@@ -4025,6 +4049,10 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
               chatId: targetChatId,
               replyToMessageId: pendingMessage.replyTo?.id || null,
               clientRequestId: String(clientId),
+              // A GIF from the person's own collection: the server copies it.
+              ...(pendingMessage._savedGifId
+                ? { savedGifId: pendingMessage._savedGifId }
+                : {}),
             });
         data = await res.json();
         if (!res.ok) {
@@ -4669,6 +4697,8 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
               last_message_read_at:
                 previous.last_message_read_at ?? chat.last_message_read_at ?? null,
               last_message_files: previous.last_message_files || [],
+              last_message_type: previous.last_message_type,
+              last_call: previous.last_call,
               unread_count: resolveUnread(chat?.unread_count, previous),
               _muted: muted,
             };
@@ -5492,6 +5522,75 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       replyTo: replyPayload,
     };
     await sendPendingMessage(pendingMessage);
+  }
+
+  // Sends a GIF from the person's own collection. The server copies it into the
+  // chat, so nothing is uploaded again.
+  const canSendSavedGif =
+    CHAT_PAGE_CONFIG.fileUploadEnabled && canSendInActiveChat && !editTarget;
+
+  async function handleSendSavedGif(gif) {
+    if (!canSendSavedGif || !activeChatId || !gif?.id) return;
+    stopTypingIndicator(activeChatId);
+    userScrolledUpRef.current = false;
+    setUserScrolledUp(false);
+    isAtBottomRef.current = true;
+    setIsAtBottom(true);
+    shouldAutoMarkReadRef.current = true;
+    setUnreadMarkerId(null);
+    unreadMarkerIdRef.current = null;
+
+    const isSavedChat = isActiveSavedChat;
+    const tempId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const createdAt = new Date().toISOString();
+    const pendingDate = parseServerDate(createdAt);
+    const previewFile = buildSavedGifPreviewFile(gif);
+    const row = {
+      id: tempId,
+      username: user.username,
+      body: "",
+      created_at: createdAt,
+      read_at: isSavedChat ? createdAt : null,
+      read_by_user_id: isSavedChat ? user?.id || null : null,
+      _clientId: tempId,
+      client_request_id: tempId,
+      _chatId: activeChatId,
+      _queuedAt: Date.now(),
+      _delivery: "sending",
+      _dayKey: `${pendingDate.getFullYear()}-${pendingDate.getMonth()}-${pendingDate.getDate()}`,
+      _dayLabel: formatDayLabel(createdAt),
+      _timeLabel: formatTime(createdAt),
+      _uploadType: "media",
+      _savedGifId: gif.id,
+      _files: [],
+      _awaitingServerEcho: false,
+      replyTo: replyTarget
+        ? {
+            id: replyTarget.id,
+            username: replyTarget.username,
+            nickname: replyTarget.nickname,
+            body: replyTarget.body,
+            icon: replyTarget.icon || null,
+            displayName: replyTarget.displayName,
+            color: replyTarget.color || null,
+          }
+        : null,
+      files: [previewFile],
+    };
+    setMessages((prev) => [...prev, row]);
+    pendingScrollToBottomRef.current = true;
+    setReplyTarget(null);
+    updateOwnLatestChatPreview({
+      chatId: activeChatId,
+      body: "",
+      files: [previewFile],
+      createdAt,
+    });
+    if (!isConnected) return;
+    const delivered = await sendPendingMessage(row);
+    if (delivered === false && lastSendErrorRef.current) {
+      showToast(lastSendErrorRef.current);
+    }
   }
 
   async function startDirectMessage() {
@@ -6470,6 +6569,18 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     !sseConnected ||
     (typeof navigator !== "undefined" && navigator.onLine === false);
 
+  // Selection mode: several messages to forward or delete together.
+  const batchActions = useBatchMessageActions({
+    user,
+    activeChatId,
+    chats,
+    loadChats,
+    setMessages,
+    pruneDeletedMessagesFromCache,
+    canDeleteMessageForEveryone,
+    isOffline,
+  });
+
   const { contextMenu, closeContextMenu, openContextMenu } = useAppContextMenu({
     activeChatId,
     chats,
@@ -6483,6 +6594,9 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     onDeleteMessage: handleDeleteMessageRequest,
     onForwardMessage: handleOpenForwardModal,
     onSaveMessageFiles: handleSaveMessageFiles,
+    // The server refuses to store GIFs while uploads are off.
+    onSaveGif: CHAT_PAGE_CONFIG.fileUploadEnabled ? handleSaveGif : null,
+    onSelectMessage: batchActions.selectMessage,
     onOpenOrCreateDm: openOrCreateDmFromMember,
     onOpenProfile: openMemberProfileFromList,
     onRemoveGroupMember: handleRemoveGroupMember,
@@ -6915,8 +7029,11 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         microphonePermissionStatus={microphonePermission}
         onRequestMicrophonePermission={requestMicrophonePermission}
         onSendVideoNote={canRecordVideoNote ? handleVideoNoteSend : null}
+        onSendSavedGif={canSendSavedGif ? handleSendSavedGif : null}
         registerMessageRef={registerMessageRef}
         showFloatingLabel={showFloatingLabel}
+        onForwardMessages={batchActions.forwardSelected}
+        onDeleteMessages={batchActions.deleteSelected}
       />
 
       <MobileTabMenu
@@ -7003,6 +7120,8 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
           />
         </Suspense>
       ) : null}
+
+      <BatchActionModals {...batchActions.modalProps} />
 
       {confirmLeaveOpen ? (
         <Suspense fallback={null}>
@@ -7211,6 +7330,8 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       ) : null}
 
       <AppContextMenu menu={contextMenu} onClose={closeContextMenu} />
+      <ToastHost />
+      <SavedGifsHost ownerKey={user?.id || user?.username || null} />
     </div>
   );
 }

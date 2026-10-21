@@ -54,24 +54,32 @@ Calls are one-to-one and happen in direct chats. You can minimise the call scree
 
 ### Call history in the chat
 
-When a call ends, the direct chat gets **one line about it**, the same for both of you, in order with the messages:
+When a call ends, the direct chat gets **one entry about it**, the same for both of you, in order with the messages. It is a small bubble like the others: yours on the right, theirs on the left. From left to right it shows:
 
-| Line | What happened |
+- an **arrow** for the direction: up and to the right for a call you made, down and to the left for one you received. It turns **red** when nobody talked (missed, declined, busy, failed);
+- a **title** that says what happened, and under it the **length** (*0:23*, *2:05*, *1:02:03*) or, when there was no conversation, the **reason** (*Not answered*, *They declined*, *You hung up first*, *Couldn't connect*);
+- the **time**, at the bottom corner;
+- a round **call-back button**: a **phone** on a voice call, a **camera** on a video call.
+
+| Title | What happened |
 |---|---|
-| *Outgoing call 0:23* / *Incoming call 0:23* | The call was answered and connected. The time counts from the moment it connected. |
+| *Outgoing call* / *Incoming call* with the length | The call was answered and connected. The time counts from the moment it connected. |
 | *Missed call* (for the caller: *No answer*) | Nobody picked up before the ring ended. |
 | *Declined call* | The other person refused it. |
 | *Cancelled call* | The caller hung up before it was answered. |
 | *Busy* | The other person was already in a call. |
 | *Call failed* | It was answered, but the connection never worked. |
 
-Video calls say *video call*. Good to know:
+Video calls say *video call* (*Outgoing video call*, *Missed video call*). Good to know:
 
-- There is **one line per call**, however it ends: both of you hanging up at once, or the call timing out, still leaves one.
-- Only a **missed call** counts as unread for the person who did not answer; it clears when they open the chat. The other lines are already read, so they never add to the unread count.
-- Call lines cannot be edited, forwarded, replied to, reacted to or pinned, and they are not searched. Either of you can remove one from your own view with *Delete for me*; it cannot be deleted for both.
+- **Calling back:** press the round button to place a new call of the **same kind** to the same person, like the phone and camera buttons in the chat header. It works from the keyboard too (Tab to it, then Enter). It is greyed out while you are in another call and when calls are not available (the server or the browser does not support them, or the other person's account is gone).
+- There is **one entry per call**, however it ends: both of you hanging up at once, or the call timing out, still leaves one.
+- The **chat list** shows the same line as the last message (*Outgoing call*, *Missed video call*, ...) with the arrow, without *You:* and without read ticks. Only a **missed call** counts as unread for the person who did not answer; it clears when they open the chat. The other entries are already read, so they never add to the unread count, and a call entry never pops up a notification of its own.
+- Call entries cannot be edited, forwarded, replied to, reacted to, copied or pinned, and they are not searched. The menu of an entry (right click, or a long press on a phone) offers only **Delete**, which removes it from your own view; it cannot be deleted for both. In selection mode an entry can be ticked and deleted together with other messages.
+- A call entry stands on its own: it ends the run of bubbles before it, like a service line.
 - They expire with the other messages (`MESSAGE_TEXT_RETENTION`) and go with the chat when it is deleted.
-- A call line sends no push notification of its own; the call's own notification is the only one.
+- A call entry sends no push notification of its own; the call's own notification is the only one.
+- When the server sends a message of a kind this version of the app does not know, a small *not supported* note stands in its place instead of an empty bubble.
 
 ### Video calls and the camera
 

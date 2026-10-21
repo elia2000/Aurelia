@@ -22,6 +22,8 @@ describe("FILE_SUMMARY_PATTERN", () => {
     "Sent 2 documents",
     "Sent 10 media files",
     "Sent 4 voice messages",
+    "Sent a GIF",
+    "Sent 3 GIFs",
     // case-insensitive
     "sent a photo",
     "SENT A VIDEO",
@@ -37,6 +39,7 @@ describe("FILE_SUMMARY_PATTERN", () => {
     "Sent a photo of my cat",
     "I sent a photo",
     "Sent photos",
+    "Sent a GIF of my cat",
     // "Sent 0 photos" intentionally excluded — \d+ matches "0" so it
     // technically matches, but the server never generates such strings.
   ];

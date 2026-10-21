@@ -36,6 +36,50 @@ const findScrollableAncestor = (node) => {
   return document.scrollingElement || document.documentElement || null;
 };
 
+// A finger that is still down when the menu opens lifts over the menu, and the
+// browser then clicks whatever is under it: an item would be chosen by the same
+// touch that opened the menu. The first click outside `surface` that comes
+// with the lift (up to half a second after it) is dropped. (A click on the
+// surface itself is dropped by its own click guard.)
+const RELEASE_CLICK_WINDOW_MS = 500;
+const RELEASE_CLICK_MAX_WAIT_MS = 15000;
+
+// Only one finger opens a menu at a time, so one guard is enough.
+let stopActiveReleaseGuard = null;
+
+function swallowReleaseClick(surface) {
+  if (typeof window === "undefined") return;
+  stopActiveReleaseGuard?.();
+  let expiresAt = Infinity;
+  let timer = null;
+  const stop = () => {
+    if (stopActiveReleaseGuard === stop) stopActiveReleaseGuard = null;
+    window.clearTimeout(timer);
+    window.removeEventListener("click", onClick, true);
+    window.removeEventListener("pointerup", onLift, true);
+    window.removeEventListener("pointercancel", onLift, true);
+  };
+  function onClick(event) {
+    const inside = surface instanceof Element && event.target instanceof Node && surface.contains(event.target);
+    if (!inside && Date.now() <= expiresAt) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+    }
+    stop();
+  }
+  function onLift() {
+    expiresAt = Date.now() + RELEASE_CLICK_WINDOW_MS;
+    window.clearTimeout(timer);
+    timer = window.setTimeout(stop, RELEASE_CLICK_WINDOW_MS + 100);
+  }
+  stopActiveReleaseGuard = stop;
+  window.addEventListener("click", onClick, true);
+  window.addEventListener("pointerup", onLift, true);
+  window.addEventListener("pointercancel", onLift, true);
+  timer = window.setTimeout(stop, RELEASE_CLICK_MAX_WAIT_MS);
+}
+
 export function useContextMenuTrigger({
   disabled = false,
   isMobile = false,
@@ -116,7 +160,14 @@ export function useContextMenuTrigger({
       const surface = event.currentTarget instanceof Element ? event.currentTarget : null;
       if (target && surface && target !== surface) {
         const interactive = target.closest("button, a, input, textarea, select, [role='button']");
-        if (interactive && surface.contains(interactive) && interactive !== surface) {
+        // A control that carries data-menu-passthrough (a picture or GIF that
+        // opens the viewer on tap) still lets a long press open the menu.
+        if (
+          interactive &&
+          surface.contains(interactive) &&
+          interactive !== surface &&
+          !interactive.hasAttribute("data-menu-passthrough")
+        ) {
           return;
         }
       }
@@ -134,6 +185,7 @@ export function useContextMenuTrigger({
       holdTimerRef.current = window.setTimeout(() => {
         suppressClickRef.current = true;
         pointerRef.current.active = false;
+        swallowReleaseClick(surface);
         openMenu(event, "mobile");
       }, holdDelayMs);
     };

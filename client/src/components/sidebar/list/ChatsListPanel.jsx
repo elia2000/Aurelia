@@ -20,6 +20,8 @@ import { hasPersian } from "../../../utils/fontUtils.js";
 import { getAvatarInitials } from "../../../utils/avatarInitials.js";
 import { renderMarkdownInlinePlain } from "../../../utils/markdown.js";
 import { summarizeFiles } from "../../../utils/messagePreview.js";
+import { getChatCallPreview } from "../../../utils/callEntry.js";
+import CallDirectionIcon from "../../common/CallDirectionIcon.jsx";
 import { isMessageAuthoredByUser } from "../../../utils/messageOwnership.js";
 import { formatCompactCount } from "../../../utils/chatFormat.js";
 import Avatar from "../../common/Avatar.jsx";
@@ -81,6 +83,10 @@ export default function ChatsListPanel({
     return str === "[object Object]" ? "" : str;
   };
   const formatLastMessagePreview = (conv) => {
+    // A call entry: the line the viewer sees ("Outgoing call", "Missed call")
+    // with its arrow, never an empty line.
+    const callView = getChatCallPreview(conv, user);
+    if (callView) return { icon: null, text: callView.text, callView };
     const files = Array.isArray(conv.last_message_files)
       ? conv.last_message_files
       : [];
@@ -99,7 +105,7 @@ export default function ChatsListPanel({
       ? "voice"
       : /^Sent (a video|\d+ videos)$/i.test(summaryText)
         ? "video"
-        : /^Sent (a photo|\d+ photos|a media file|\d+ media files)$/i.test(
+        : /^Sent (a photo|\d+ photos|a GIF|\d+ GIFs|a media file|\d+ media files)$/i.test(
               summaryText,
             )
           ? "image"
@@ -563,6 +569,8 @@ export default function ChatsListPanel({
           const isOwnLastMessage =
             (Boolean(conv.last_message) ||
               Boolean(conv.last_message_files?.length)) &&
+            // A call entry belongs to both people: no "You:" and no ticks.
+            conv.last_message_type !== "call" &&
             isMessageAuthoredByUser(
               {
                 username: conv.last_sender_username,
@@ -652,6 +660,7 @@ export default function ChatsListPanel({
                     style={{ unicodeBidi: "isolate" }}
                   >
                     {conv.last_message ||
+                    conv.last_message_type === "call" ||
                     (conv.last_message_files || []).length ? (
                       isOwnLastMessage && !isChannelOwner ? (
                         <span
@@ -747,6 +756,15 @@ export default function ChatsListPanel({
                             <ImageIcon
                               size={14}
                               className="translate-y-[3px] shrink-0 text-slate-500 dark:text-slate-400"
+                            />
+                          ) : lastPreview.callView ? (
+                            <CallDirectionIcon
+                              direction={lastPreview.callView.direction}
+                              className={`translate-y-[3px] ${
+                                lastPreview.callView.tone === "bad"
+                                  ? "text-rose-500 dark:text-rose-400"
+                                  : "text-emerald-600 dark:text-emerald-400"
+                              }`}
                             />
                           ) : lastPreview.icon === "document" ? (
                             <File

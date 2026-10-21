@@ -15,6 +15,13 @@ import { formatCompactCount, formatDayLabel } from "../../../utils/chatFormat.js
 import ContextMenuSurface from "../../context-menu/ContextMenuSurface.jsx";
 import { MessageFiles } from "../media/MessageFiles.jsx";
 import { MessageMeta } from "./MessageMeta.jsx";
+import CallEntry from "./CallEntry.jsx";
+import UnsupportedMessage from "./UnsupportedMessage.jsx";
+import { describeCall, isCallMessage } from "../../../utils/callEntry.js";
+import { isUnsupportedMessage } from "../../../utils/messageKind.js";
+import HeartBurst from "../reactions/HeartBurst.jsx";
+import { useHeartReaction } from "../../../hooks/chat/useHeartReaction.js";
+import { isMessageSelectable } from "../../../utils/batchMessages.js";
 
 // Encrypted round video messages pull in the decryption code, so they load on demand.
 const VideoNoteBubble = lazy(() => import("../videoNote/VideoNoteBubble.jsx"));
@@ -181,16 +188,31 @@ export const MessageItem = memo(function MessageItem({
   forwardedUser = null,
   forwardedUserStatus = null,
   mentionRefreshToken: _mentionRefreshToken = 0,
-  onReply,
+  onReply: onReplyProp,
   onForwardMessage,
   onJumpToMessage,
-  canSwipeReply = true,
+  canSwipeReply: canSwipeReplyProp = true,
   onOpenContextMenu,
   visibilityRef = null,
   sseConnected = true,
   isOffline = false,
+  // The other person of a direct chat: who a call entry's button calls back.
+  callPeer = null,
+  // Selection mode (several messages to forward, delete or copy): the whole
+  // row is one checkbox, and nothing inside it acts on its own.
+  selectionMode = false,
+  isSelected = false,
+  isSelectionTabStop = false,
+  // (msg, { shiftKey, ctrlKey }) => void
+  onToggleSelect = null,
 }) {
   const isOwn = !isChannelChat && msg.username === user.username;
+  // A call history entry is a service line: the server refuses a reply to it,
+  // so it has no swipe and no double click reply.
+  const isCallEntry = isCallMessage(msg);
+  const isUnsupported = isUnsupportedMessage(msg);
+  const onReply = isCallEntry ? null : onReplyProp;
+  const canSwipeReply = canSwipeReplyProp && !isCallEntry && !selectionMode;
   const isRead = Boolean(msg.read_at) || isSavedChat;
   const isEdited = Boolean(Number(msg?.edited || 0) || msg?._edited);
   const deletedForwardOriginColor = "#94a3b8";
@@ -688,7 +710,7 @@ export const MessageItem = memo(function MessageItem({
     role: "",
   };
   const senderContextMenu = {
-    disabled: !canOpenSenderProfile || !onOpenContextMenu,
+    disabled: !canOpenSenderProfile || !onOpenContextMenu || selectionMode,
     isMobile: contextMenuMobileEnabled,
     onOpen: ({ event, targetEl, isMobile }) =>
       onOpenContextMenu?.({
@@ -710,11 +732,17 @@ export const MessageItem = memo(function MessageItem({
     isOffline ||
     sseConnected === false ||
     (typeof navigator !== "undefined" && navigator.onLine === false);
+  // Double click / double tap puts a heart on the message (or takes it off).
+  const heartReaction = useHeartReaction({
+    msg,
+    chatId: chatId || msg?.chat_id || null,
+    enabled: !computedIsOffline && !selectionMode,
+  });
 
   // The whole message row is the context menu surface, not only the bubble, so
   // a right click on the empty space beside a bubble (or on the gutter) works.
   const messageContextMenu = {
-    disabled: !onOpenContextMenu,
+    disabled: !onOpenContextMenu || selectionMode,
     isMobile: contextMenuMobileEnabled,
     holdDelayMs:
       contextMenuMobileEnabled && canSwipeReply ? 650 : undefined,
@@ -923,7 +951,8 @@ export const MessageItem = memo(function MessageItem({
   // ---- time, edited and delivery status: drawn once, placed by MessageMeta ----
   const timeLabel = msg._timeLabel || formatTime(msg.created_at);
   const showDeliveryStatus = isOwn || isChannelChat;
-  const metaStatus = !showDeliveryStatus
+  // A call entry has no ticks: it is not "sent" or "read" like a message.
+  const metaStatus = !showDeliveryStatus || isCallEntry
     ? null
     : isSending
       ? "sending"
@@ -935,7 +964,7 @@ export const MessageItem = memo(function MessageItem({
             ? "read"
             : "sent";
   const viewsLabel = isChannelChat ? formatSeenCount(seenCount) : "";
-  const showBody = !shouldHideGeneratedFileBody;
+  const showBody = !isCallEntry && !isUnsupported && !shouldHideGeneratedFileBody;
   const lastFile = messageFiles[messageFiles.length - 1];
   const lastFileIsMedia = Boolean(
     lastFile &&
@@ -946,13 +975,16 @@ export const MessageItem = memo(function MessageItem({
   // Under a caption (or plain text) the time sits at the end of the last line.
   // A picture without a caption gets it as a chip over its corner; a file or
   // voice message gets its own row.
-  const metaVariant = isVideoNote
+  const bodyMetaVariant = isVideoNote
     ? "overlay"
     : showBody || !hasFiles
       ? "inline"
       : hasMediaFiles && lastFileIsMedia
         ? "overlay"
         : "row";
+  // A call entry (or a note about a message this app cannot show) puts the
+  // time on its own line under its content.
+  const metaVariant = isCallEntry || isUnsupported ? "row" : bodyMetaVariant;
   const bodyDirection = getTextDirection(bodyText);
   const metaSide = metaVariant === "inline" && bodyDirection === "rtl" ? "left" : "right";
   const metaSpacer = getMetaSpacer({
@@ -1014,7 +1046,9 @@ export const MessageItem = memo(function MessageItem({
     ? "overflow-hidden p-0"
     : isBareBubble
       ? "w-fit p-0"
-      : `w-fit px-2.5 py-1.5 ${hasMarkdownCodeBlock ? "min-w-36" : "min-w-0"}`;
+      : isCallEntry
+        ? "w-fit min-w-56 px-3 pb-1.5 pt-2"
+        : `w-fit px-2.5 py-1.5 ${hasMarkdownCodeBlock ? "min-w-36" : "min-w-0"}`;
 
   const renderSenderAvatar = () => (
     <ContextMenuSurface
@@ -1169,6 +1203,92 @@ export const MessageItem = memo(function MessageItem({
     </>
   ) : null;
 
+  // ---- selection mode: the whole row is one checkbox ----
+  const canBeSelected = selectionMode && isMessageSelectable(msg);
+  const isTicked = canBeSelected && isSelected;
+  const selectionDownRef = useRef(null);
+  const selectionPreview = msg?._systemEvent
+    ? `${msg._systemEvent.name || "A member"} ${msg._systemEvent.suffix || ""}`.trim()
+    : isCallEntry
+      ? describeCall(msg?.call, { outgoing: isOwn }).spoken
+      : (shouldHideGeneratedFileBody
+          ? generatedSummaryText || "Attachment"
+          : normalizedBodyText
+        ).slice(0, 120);
+  const selectionLabel = [
+    msg?._systemEvent ? "" : isOwn ? "You" : senderName,
+    timeLabel,
+    selectionPreview,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  const selectionRowProps = selectionMode
+    ? {
+        role: "checkbox",
+        "aria-checked": isTicked,
+        "aria-disabled": canBeSelected ? undefined : true,
+        "aria-label": selectionLabel,
+        "data-selected": isTicked ? "true" : undefined,
+        tabIndex: canBeSelected && isSelectionTabStop ? 0 : -1,
+        // A drag that selects text is not a click, and a shift or double
+        // click must not also select a range of text under the tick.
+        onMouseDownCapture: (event) => {
+          selectionDownRef.current =
+            event.button === 0 ? { x: event.clientX, y: event.clientY } : null;
+          if (event.button === 0 && (event.shiftKey || event.detail > 1)) {
+            event.preventDefault();
+          }
+        },
+        // Nothing inside the row (link, picture, name, button) acts in
+        // selection mode: a click only ticks the row.
+        onClickCapture: (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const down = selectionDownRef.current;
+          selectionDownRef.current = null;
+          if (!canBeSelected) return;
+          if (
+            isDragSelectionClick({
+              down,
+              clientX: event.clientX,
+              clientY: event.clientY,
+              selectionText:
+                typeof window !== "undefined"
+                  ? window.getSelection?.()?.toString() || ""
+                  : "",
+            })
+          ) {
+            return;
+          }
+          onToggleSelect?.(msg, {
+            shiftKey: event.shiftKey,
+            ctrlKey: event.ctrlKey || event.metaKey,
+          });
+        },
+        onKeyDown: (event) => {
+          if (event.target !== event.currentTarget) return;
+          if (event.key !== " " && event.key !== "Enter") return;
+          event.preventDefault();
+          if (canBeSelected) onToggleSelect?.(msg, { shiftKey: event.shiftKey, ctrlKey: false });
+        },
+        onContextMenu: (event) => event.preventDefault(),
+      }
+    : null;
+  const selectionRowClass = selectionMode
+    ? `cursor-pointer transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-400 ${
+        isTicked ? "bg-emerald-500/15 dark:bg-emerald-400/15" : ""
+      }`
+    : "";
+  // The checkbox sits over the left edge of the row and takes no room of its own.
+  const leadingGutter = leadingSlot ? (
+    <div
+      data-slot="leading"
+      className="pointer-events-none absolute inset-y-0 left-0 z-10 flex items-center"
+    >
+      {leadingSlot}
+    </div>
+  ) : null;
+
   return (
     <div
       id={`message-${msg.id}`}
@@ -1193,7 +1313,15 @@ export const MessageItem = memo(function MessageItem({
         </div>
       ) : null}
       {msg?._systemEvent ? (
-        <div data-no-select className="flex justify-center px-3 py-1">
+        <div
+          data-no-select
+          data-message-key={messageIdentity}
+          className={`group/row relative flex justify-center py-1 outline-none ${
+            selectionMode ? "ps-12 pe-3" : "px-3"
+          } ${selectionRowClass}`}
+          {...selectionRowProps}
+        >
+          {leadingGutter}
           <span
             className="inline-flex max-w-full items-center justify-center rounded-full border border-emerald-200/60 bg-white/90 px-2.5 py-0.5 text-center text-[11px] font-semibold text-emerald-700 dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-200"
             style={{ lineHeight: 1.35 }}
@@ -1222,15 +1350,20 @@ export const MessageItem = memo(function MessageItem({
         <ContextMenuSurface
           as="div"
           data-message-row
+          data-message-key={messageIdentity}
           tabIndex={-1}
-          className={`relative flex w-full max-w-full items-end gap-2 px-2 outline-none md:px-4 ${
+          className={`group/row relative flex w-full max-w-full items-end gap-2 outline-none ${
+            selectionMode ? "ps-12 pe-2 md:pe-4" : "px-2 md:px-4"
+          } ${
             isOwn ? "justify-end" : "justify-start"
-          } ${isRunStart ? "pt-[7px]" : "pt-px"} pb-px`}
+          } ${isRunStart ? "pt-[7px]" : "pt-px"} pb-px ${selectionRowClass}`}
           style={{
             touchAction: "pan-y",
             userSelect: isSwiping ? "none" : undefined,
           }}
           contextMenu={messageContextMenu}
+          {...heartReaction.pointerHandlers}
+          {...selectionRowProps}
           onPointerDownCapture={(event) => {
             if (isDesktop || !isMobileTouchDevice || !onReply) return;
             if (!canSwipeReply) return;
@@ -1332,10 +1465,8 @@ export const MessageItem = memo(function MessageItem({
               </div>
             </div>
           ) : null}
-          {/* Leading gutter: room for a selection checkbox. */}
-          <div data-slot="leading" className="flex shrink-0 items-center empty:hidden">
-            {leadingSlot}
-          </div>
+          {/* Leading gutter: the selection checkbox. */}
+          {leadingGutter}
           {showAvatarGutter
             ? isRunEnd
               ? renderSenderAvatar()
@@ -1365,7 +1496,10 @@ export const MessageItem = memo(function MessageItem({
                     }
                   : null),
               }}
-              onDoubleClick={() => {
+              onDoubleClick={(event) => {
+                if (selectionMode) return;
+                // A message that takes reactions gets a heart; the others reply.
+                if (heartReaction.onDoubleClick(event)) return;
                 if (!isDesktop || !onReply) return;
                 // A double click on text selects a word; only a double click
                 // that selected nothing (padding, a picture) replies.
@@ -1414,11 +1548,22 @@ export const MessageItem = memo(function MessageItem({
                 }
               }}
             >
+              <HeartBurst burst={heartReaction.burst} />
               {hasBubbleHeader && !isVideoNote ? (
                 <div className={hasMediaBubble ? "px-2.5 pt-1.5" : undefined}>
                   {bubbleHeader}
                 </div>
               ) : null}
+              {isCallEntry ? (
+                <CallEntry
+                  msg={msg}
+                  isOwn={isOwn}
+                  chatId={chatId || msg?.chat_id || null}
+                  peer={callPeer}
+                  inert={selectionMode}
+                />
+              ) : null}
+              {isUnsupported ? <UnsupportedMessage /> : null}
               {isVideoNote ? (
                 <Suspense fallback={<div className="h-56 w-56 max-w-[62vw] animate-pulse rounded-full bg-slate-200/60 dark:bg-slate-700/40" />}>
                   <VideoNoteBubble msg={msg} user={user} header={bubbleHeader} />
@@ -1492,7 +1637,12 @@ export const MessageItem = memo(function MessageItem({
   if (prev.isRunStart !== next.isRunStart) return false;
   if (prev.isRunEnd !== next.isRunEnd) return false;
   if (prev.leadingSlot !== next.leadingSlot) return false;
+  if (prev.selectionMode !== next.selectionMode) return false;
+  if (prev.isSelected !== next.isSelected) return false;
+  if (prev.isSelectionTabStop !== next.isSelectionTabStop) return false;
+  if (prev.onToggleSelect !== next.onToggleSelect) return false;
   if (prev.reactionsSlot !== next.reactionsSlot) return false;
+  if (prev.callPeer !== next.callPeer) return false;
   if (prev.isDesktop !== next.isDesktop) return false;
   if (prev.isMobileTouchDevice !== next.isMobileTouchDevice) return false;
   if (prev.isGroupChat !== next.isGroupChat) return false;

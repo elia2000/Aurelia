@@ -3,6 +3,7 @@ import {
   isMessageAuthoredByUser,
   isMessageFromOtherUser,
 } from "../../utils/messageOwnership.js";
+import { syncReactionsFromServer } from "../../utils/reactionStore.js";
 
 const SILENT_FETCH_TRACK_MAX_CHATS = 40;
 const SILENT_FETCH_MIN_INTERVAL_MS = 320;
@@ -187,6 +188,7 @@ export function useMessagesLoader({
       if (options.afterCreatedAt) {
         query.set("afterCreatedAt", String(options.afterCreatedAt));
       }
+      const requestStartedAt = Date.now();
       const res = await listMessagesByQuery(
         Object.fromEntries(query.entries()),
         { cache: "no-store", signal: controller.signal },
@@ -201,6 +203,9 @@ export function useMessagesLoader({
       if (!res.ok) {
         throw new Error(data?.error || "Failed to load messages.");
       }
+      // The reactions that came with the messages are the server's truth as
+      // of the moment the request left (see reactionStore).
+      syncReactionsFromServer(data?.messages, { startedAt: requestStartedAt });
       if (String(activeChatIdRef.current || "") !== requestChatId) {
         return;
       }

@@ -3,7 +3,10 @@ import {
   parseWaveformSamples,
   extractMediaPreprocessMetadata,
   extractAudioWaveform,
+  decideImageHandling,
 } from "../../src/utils/mediaPreprocess.js";
+import { inspectImageHead } from "../../src/utils/animatedImage.js";
+import { makeGifBytes, makeJpegBytes, makePngBytes, makeWebpBytes } from "./gifFixtures.js";
 
 describe("mediaPreprocess", () => {
   describe("parseWaveformSamples", () => {
@@ -95,6 +98,37 @@ describe("mediaPreprocess", () => {
       });
       expect(result.waveform).toHaveLength(40);
       expect(result.waveform.every((v) => v === 0.05)).toBe(true);
+    });
+  });
+  describe("decideImageHandling", () => {
+    it("sends GIFs, animated WebP and APNG untouched: no redrawing, no still thumbnail", () => {
+      for (const bytes of [
+        makeGifBytes({ frames: 4 }),
+        makeGifBytes({ frames: 1 }),
+        makeWebpBytes({ animated: true }),
+        makePngBytes({ animated: true }),
+      ]) {
+        expect(decideImageHandling(inspectImageHead(bytes))).toEqual({
+          untouched: true,
+          thumbnail: false,
+        });
+      }
+    });
+
+    it("still processes every other picture", () => {
+      for (const bytes of [makePngBytes(), makeWebpBytes(), makeJpegBytes()]) {
+        expect(decideImageHandling(inspectImageHead(bytes))).toEqual({
+          untouched: false,
+          thumbnail: true,
+        });
+      }
+    });
+
+    it("processes a picture whose bytes are not recognised unless it claims to be a GIF", () => {
+      expect(decideImageHandling(inspectImageHead(new Uint8Array(32)))).toEqual({
+        untouched: false,
+        thumbnail: true,
+      });
     });
   });
 });

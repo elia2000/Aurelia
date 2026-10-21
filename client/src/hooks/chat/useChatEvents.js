@@ -5,6 +5,13 @@ import {
   isRemoteChannelMessage,
 } from "../../utils/messageOwnership.js";
 import { normalizeUuid } from "../../utils/uuidUtils.js";
+import {
+  applyRealtimeReaction,
+  bindReactionStoreToUser,
+  getReactionsForCache,
+} from "../../utils/reactionStore.js";
+import { savedGifs } from "../../gifs/savedGifsStore.js";
+import { eventCountsAsUnread, getChatPatchFromMessageEvent } from "../../utils/callEntry.js";
 import { REALTIME_OPEN_EVENT } from "../../calls/callContext.js";
 
 const CALL_EVENT_TYPES = new Set([
@@ -47,6 +54,8 @@ const isDocumentActive = () => {
 
 export function useChatEvents({
   username,
+  // The signed-in person's id: tells their own reactions (from any device) apart.
+  userId = null,
   getSseStreamUrl,
   sseReconnectDelayMs,
   setSseConnected,
@@ -86,6 +95,7 @@ export function useChatEvents({
   const onChatListChangedRef = useRef(onChatListChanged);
   const onSessionRevokedRef = useRef(onSessionRevoked);
   const canMarkReadInCurrentViewRef = useRef(canMarkReadInCurrentView);
+  const userIdRef = useRef(userId);
   const loadChatsTimerRef = useRef(null);
   const loadChatsFirstScheduledAtRef = useRef(0);
 
@@ -126,12 +136,18 @@ export function useChatEvents({
   }, [canMarkReadInCurrentView]);
 
   useEffect(() => {
+    userIdRef.current = userId;
+    bindReactionStoreToUser(userId);
+  }, [userId]);
+
+  useEffect(() => {
     if (!username) return;
     let source = null;
     let isMounted = true;
     let reconnectAttempts = 0;
     let useWebSocket = typeof WebSocket !== "undefined";
     let wsOpened = false;
+    let hasBeenConnected = false;
 
     // Trailing debounce for chat-list reloads. Each event pushes the flush out
     // by LOAD_CHATS_DEBOUNCE_MS so a burst (e.g. bulk deletes, rapid list
@@ -187,6 +203,15 @@ export function useChatEvents({
         }
         setSseConnected(true);
         reconnectAttempts = 0;
+        // Events sent while the connection was down are gone (a reaction, a
+        // new message): read the open chat again to catch up.
+        if (hasBeenConnected && activeChatIdRef.current) {
+          scheduleMessageRefreshRef.current?.(activeChatIdRef.current, {
+            delayMs: 150,
+            preserveHistory: true,
+          });
+        }
+        hasBeenConnected = true;
         // Events sent while the connection was down are gone (a call invite
         // cannot be replayed), so let interested parts of the app catch up.
         window.dispatchEvent(new Event(REALTIME_OPEN_EVENT));
@@ -209,10 +234,18 @@ export function useChatEvents({
           payload.type !== "presence_update" &&
           payload.type !== "profile_updated" &&
           payload.type !== "chat_typing" &&
+          payload.type !== "message_reactions" &&
           payload.type !== "session_revoked" &&
           payload.type !== "remote_channel_queue" &&
+          payload.type !== "saved_gif_added" &&
+          payload.type !== "saved_gif_removed" &&
           !CALL_EVENT_TYPES.has(payload.type)
         ) {
+          return;
+        }
+        // The person's own GIF collection (these events never go to anybody else).
+        if (payload.type === "saved_gif_added" || payload.type === "saved_gif_removed") {
+          savedGifs.handleRealtimeEvent(payload);
           return;
         }
         if (CALL_EVENT_TYPES.has(payload.type)) {
@@ -239,6 +272,28 @@ export function useChatEvents({
         }
         if (payload.type === "chat_typing") {
           onTypingUpdateRef.current?.(payload);
+          return;
+        }
+        if (payload.type === "message_reactions") {
+          // The numbers under a message changed. The reaction store is
+          // keyed by message, so this also works for a message that is not
+          // on screen; the open chat's message list is kept in step for the cache.
+          applyRealtimeReaction(payload, userIdRef.current);
+          const reactedId = normalizeUuid(payload?.messageId);
+          if (reactedId && normalizeUuid(payload?.chatId) === normalizeUuid(activeChatIdRef.current)) {
+            const reactions = getReactionsForCache(reactedId);
+            if (reactions) {
+              setMessages((prev) => {
+                let changed = false;
+                const next = prev.map((msg) => {
+                  if (normalizeUuid(msg?._serverId || msg?.id) !== reactedId) return msg;
+                  changed = true;
+                  return { ...msg, reactions };
+                });
+                return changed ? next : prev;
+              });
+            }
+          }
           return;
         }
         const payloadChatId = normalizeUuid(payload.chatId) || null;
@@ -284,13 +339,19 @@ export function useChatEvents({
                   Boolean(payloadMsgId) &&
                   Boolean(currentLastMsgId) &&
                   payloadMsgId === currentLastMsgId;
+                // Only a missed call entry adds to the unread count.
                 const shouldIncrementUnread =
-                  !isOwnEvent && !isDuplicateMsgEvent;
+                  !isOwnEvent &&
+                  !isDuplicateMsgEvent &&
+                  eventCountsAsUnread(payload);
                 return {
                   ...chat,
                   last_message_id:
                     payloadMsgId || chat?.last_message_id || null,
                   last_message: previewBody || chat?.last_message || "",
+                  // A call entry sets the line the viewer sees ("Missed call");
+                  // any other message clears the call fields of the row.
+                  ...getChatPatchFromMessageEvent(payload, { outgoing: isOwnEvent }),
                   last_time: eventTime,
                   last_message_client_request_id: clientRequestId || null,
                   last_sender_username:
@@ -384,7 +445,7 @@ export function useChatEvents({
               // The chat may be selected in a hidden/background tab. Keep it
               // unread and avoid pretending the user saw the message.
             } else if (userScrolledUpRef.current && !isAtBottomRef.current) {
-              setUnreadInChat((prev) => prev + 1);
+              setUnreadInChat((prev) => prev + (eventCountsAsUnread(payload) ? 1 : 0));
             } else {
               // Only scroll to bottom if no unread anchor is active
               const anchorActive =

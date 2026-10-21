@@ -148,11 +148,15 @@ self.addEventListener("push", (event) => {
     event.waitUntil(handleCallEnded(payload, data));
     return;
   }
+  // A reaction gets a tag of its own, so it does not replace the chat's
+  // notification about unread messages.
   const tag = isCall
     ? `call-${data.callId}`
-    : data.chatId
-      ? `chat-${data.chatId}`
-      : "songbird";
+    : data.type === "reaction" && data.messageId
+      ? `reaction-${data.messageId}`
+      : data.chatId
+        ? `chat-${data.chatId}`
+        : "songbird";
   const options = {
     body,
     data,

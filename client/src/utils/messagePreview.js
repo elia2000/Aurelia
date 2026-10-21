@@ -1,3 +1,5 @@
+import { isGifFile } from "./animatedImage.js";
+import { callPreviewText, isCallMessage } from "./callEntry.js";
 import { normalizeMessageBody } from "./chatCache.js";
 
 export const truncateText = (text, maxChars) => {
@@ -23,6 +25,14 @@ const isDocumentModeFiles = (files = [], uploadMode = "") => {
 
 const getFileSummaryMeta = (files = [], uploadMode = "") => {
   if (!Array.isArray(files) || files.length === 0) return "";
+  // Animated pictures only: the server words these the same way.
+  const gifCount = files.filter((file) => isGifFile(file)).length;
+  if (gifCount === files.length) {
+    return {
+      text: gifCount === 1 ? "Sent a GIF" : `Sent ${gifCount} GIFs`,
+      icon: "image",
+    };
+  }
   const videoCount = files.filter((file) =>
     String(file?.mimeType || "")
       .toLowerCase()
@@ -117,6 +127,8 @@ export const summarizeFiles = (files = [], uploadMode = "") => {
 
 export const resolveReplyPreview = (msg) => {
   if (!msg) return { text: "", icon: null };
+  // A call entry has no body: say what it was instead of an empty "Message".
+  if (isCallMessage(msg)) return { text: callPreviewText(msg.call), icon: null };
   const rawBody = normalizeMessageBody(msg.body).trim();
   const files = Array.isArray(msg.files)
     ? msg.files

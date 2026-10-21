@@ -934,6 +934,54 @@ describe("connection recovery", () => {
   });
 });
 
+describe("call length for the chat's call entry", () => {
+  test("hanging up a connected call tells the server how long it ran", async () => {
+    const { alice } = await connectedCall();
+    const callId = alice.manager.getState().callId;
+    await alice.manager.hangup();
+    expect(alice.api.endCall).toHaveBeenCalledTimes(1);
+    const [id, reason, durationMs] = alice.api.endCall.mock.calls[0];
+    expect(id).toBe(callId);
+    expect(reason).toBeUndefined();
+    expect(durationMs).toBeTypeOf("number");
+    expect(durationMs).toBeGreaterThanOrEqual(0);
+    expect(Number.isInteger(durationMs)).toBe(true);
+  });
+
+  test("the length counts from the moment the media connected", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-01-01T10:00:00Z"));
+    const { alice } = await connectedCall();
+    vi.setSystemTime(new Date(Date.now() + 125_000));
+    await alice.manager.hangup();
+    const durationMs = alice.api.endCall.mock.calls[0][2];
+    expect(durationMs).toBeGreaterThanOrEqual(125_000);
+    expect(durationMs).toBeLessThan(130_000);
+  });
+
+  test("a call that never connected sends no length", async () => {
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    await alice.manager.startCall({ chatId: "c", peer: { userId: bob.user.id, username: "bob" } });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(bob));
+    await alice.manager.hangup();
+    expect(alice.api.endCall).toHaveBeenCalledTimes(1);
+    expect(alice.api.endCall.mock.calls[0]).toHaveLength(2);
+    await bob.manager.decline();
+  });
+
+  test("the callee who declines sends no length either", async () => {
+    const server = new FakeServer();
+    const alice = await server.addUser("alice");
+    const bob = await server.addUser("bob");
+    await alice.manager.startCall({ chatId: "c", peer: { userId: bob.user.id, username: "bob" } });
+    await waitFor(() => phase(CALL_PHASE.INCOMING)(bob));
+    await bob.manager.decline();
+    expect(bob.api.endCall).toHaveBeenCalledWith(alice.manager.getState().callId, "declined");
+  });
+});
+
 describe("page unload", () => {
   test("hangupOnUnload fires the beacon once and tears down", async () => {
     const { alice } = await connectedCall();
@@ -942,7 +990,8 @@ describe("page unload", () => {
     alice.manager.hangupOnUnload(beacon);
     alice.manager.hangupOnUnload(beacon);
     expect(beacon).toHaveBeenCalledTimes(1);
-    expect(beacon).toHaveBeenCalledWith(callId);
+    // The beacon also carries how long the connected call ran (for the chat's call entry).
+    expect(beacon).toHaveBeenCalledWith(callId, expect.any(Number));
     expect(alice.manager.isBusy).toBe(false);
   });
 });

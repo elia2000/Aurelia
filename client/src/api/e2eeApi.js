@@ -89,17 +89,24 @@ export const markCallRinging = (callId) =>
 export const markCallConnected = (callId) =>
   post(`/api/calls/${encodeURIComponent(callId)}/connected`, {});
 
-export const endCall = (callId, reason) =>
-  post(`/api/calls/${encodeURIComponent(callId)}/end`, { reason });
+/**
+ * `durationMs`: how long the media was connected, as this device measured it.
+ * The server writes it into the chat's call entry (it only trusts it as a hint).
+ */
+export const endCall = (callId, reason, durationMs) =>
+  post(`/api/calls/${encodeURIComponent(callId)}/end`, { reason, ...durationField(durationMs) });
+
+const durationField = (durationMs) =>
+  Number.isFinite(durationMs) && durationMs >= 0 ? { durationMs: Math.round(durationMs) } : {};
 
 /**
  * Best-effort hang-up for page unload, where a normal fetch may be cancelled.
  * `sendBeacon` cannot set headers; a JSON Blob keeps the content type.
  */
-export function endCallBeacon(callId) {
+export function endCallBeacon(callId, durationMs) {
   try {
     if (typeof navigator === "undefined" || !navigator.sendBeacon) return false;
-    const body = new Blob([JSON.stringify({ reason: "hangup" })], {
+    const body = new Blob([JSON.stringify({ reason: "hangup", ...durationField(durationMs) })], {
       type: "application/json",
     });
     return navigator.sendBeacon(`/api/calls/${encodeURIComponent(callId)}/end`, body);

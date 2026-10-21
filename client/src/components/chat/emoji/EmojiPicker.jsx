@@ -9,8 +9,19 @@ import {
   searchEmoji,
 } from "../../../emoji/emojiData.js";
 import { EMOJI_IMAGE_BASE } from "../../../emoji/emojiImages.js";
+import GifsPanel from "../gifs/GifsPanel.jsx";
+import PickerTabs from "../gifs/PickerTabs.jsx";
 
 const TONE_KEY = "aurelle-emoji-skin-tone";
+const TAB_KEY = "aurelle-picker-tab";
+
+const loadTab = () => {
+  try {
+    return localStorage.getItem(TAB_KEY) === "gifs" ? "gifs" : "emoji";
+  } catch (_) {
+    return "emoji";
+  }
+};
 
 const loadTone = () => {
   try {
@@ -48,16 +59,46 @@ function EmojiButton({ emoji, onPick }) {
  * Emoji picker like Telegram's: frequently used, categories, search and skin
  * tones, with Apple-style pictures. The (large) emoji data is only fetched when
  * the picker is opened.
+ *
+ * With `onSendGif` it gets an "Emoji | GIFs" switch; the GIFs tab shows the
+ * person's own saved GIFs and sends the one that is tapped.
  */
-export default function EmojiPicker({ onSelect, onClose, autoFocusSearch = false }) {
+export default function EmojiPicker({ onSelect, onClose, autoFocusSearch = false, onSendGif = null }) {
   const [index, setIndex] = useState(null);
   const [failed, setFailed] = useState(false);
   const [query, setQuery] = useState("");
   const [tone, setTone] = useState(loadTone);
   const [toneMenu, setToneMenu] = useState(false);
   const [recent, setRecent] = useState(() => loadRecent());
+  const [savedTab, setSavedTab] = useState(loadTab);
   const scrollRef = useRef(null);
   const rootRef = useRef(null);
+  // The menu of a GIF handles Escape itself while it is open.
+  const gifMenuOpenRef = useRef(false);
+
+  const gifsEnabled = typeof onSendGif === "function";
+  const tab = gifsEnabled && savedTab === "gifs" ? "gifs" : "emoji";
+
+  const chooseTab = useCallback((id) => {
+    setSavedTab(id);
+    try {
+      localStorage.setItem(TAB_KEY, id);
+    } catch (_) {
+      // not remembered: it still applies until the picker closes
+    }
+  }, []);
+
+  const sendGif = useCallback(
+    (gif) => {
+      onSendGif?.(gif);
+      onClose?.();
+    },
+    [onSendGif, onClose],
+  );
+
+  const onGifMenuOpenChange = useCallback((open) => {
+    gifMenuOpenRef.current = open;
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -78,6 +119,7 @@ export default function EmojiPicker({ onSelect, onClose, autoFocusSearch = false
     // else, in particular not the open chat.
     const onKey = (event) => {
       if (event.key !== "Escape") return;
+      if (gifMenuOpenRef.current) return; // closes the GIF menu first
       event.stopImmediatePropagation();
       event.preventDefault();
       onClose?.();
@@ -135,9 +177,24 @@ export default function EmojiPicker({ onSelect, onClose, autoFocusSearch = false
     <div
       ref={rootRef}
       role="dialog"
-      aria-label="Emoji"
-      className="flex h-[22rem] w-[min(21rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-2xl border border-emerald-200 bg-white text-slate-700 shadow-xl shadow-emerald-950/10 dark:border-emerald-500/30 dark:bg-slate-900 dark:text-slate-100"
+      aria-label={gifsEnabled ? "Emoji and GIFs" : "Emoji"}
+      className={`flex w-[min(21rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-2xl border border-emerald-200 bg-white text-slate-700 shadow-xl shadow-emerald-950/10 dark:border-emerald-500/30 dark:bg-slate-900 dark:text-slate-100 ${
+        gifsEnabled ? "h-[24rem]" : "h-[22rem]"
+      }`}
     >
+      {gifsEnabled ? <PickerTabs value={tab} onChange={chooseTab} /> : null}
+
+      {tab === "gifs" ? (
+        <div
+          role="tabpanel"
+          id="picker-panel-gifs"
+          aria-labelledby="picker-tab-gifs"
+          className="flex min-h-0 flex-1 flex-col"
+        >
+          <GifsPanel onSend={sendGif} onMenuOpenChange={onGifMenuOpenChange} />
+        </div>
+      ) : (
+      <>
       <div className="flex items-center gap-2 border-b border-emerald-100 p-2 dark:border-emerald-500/20">
         <input
           type="search"
@@ -265,6 +322,8 @@ export default function EmojiPicker({ onSelect, onClose, autoFocusSearch = false
           );
         })}
       </div>
+      </>
+      )}
     </div>
   );
 }

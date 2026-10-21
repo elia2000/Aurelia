@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import QuickReactionBar from "../chat/reactions/QuickReactionBar.jsx";
 
 const SCREEN_GAP = 12;
 
@@ -29,6 +30,8 @@ export default function AppContextMenu({ menu, onClose }) {
   const [desktopPosition, setDesktopPosition] = useState({ x: 0, y: 0 });
   const [verticalPlacement, setVerticalPlacement] = useState("below");
   const [focusedIndex, setFocusedIndex] = useState(-1);
+  // The reaction bar's "+" opens the emoji picker over the menu.
+  const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
   // The finger that opened the menu with a long press can still produce a click
   // when it lifts, and that click lands on the backdrop. Only a press that
   // started on the backdrop (or a keyboard activation) closes the menu.
@@ -37,6 +40,7 @@ export default function AppContextMenu({ menu, onClose }) {
   useEffect(() => {
     if (!menu) return undefined;
     backdropPressedRef.current = false;
+    setReactionPickerOpen(false);
     // Reset focused index and move focus into the menu
     setFocusedIndex(0);
     // When the menu goes away, give focus back to what had it (a message row
@@ -75,10 +79,33 @@ export default function AppContextMenu({ menu, onClose }) {
     }
   }, [focusedIndex, menu]);
 
+  // Moves keyboard focus between the menu items and the reaction bar.
+  const leaveMenuTo = (target) => {
+    const root = menuRef.current?.parentElement;
+    const items = menuRef.current?.querySelectorAll('[role="menuitem"]') || [];
+    const node =
+      target === "bar"
+        ? root?.querySelector("[data-reaction-bar] button")
+        : target === "last"
+          ? items[items.length - 1]
+          : items[0];
+    node?.focus({ preventScroll: true });
+  };
+
   useEffect(() => {
     if (!menu) return undefined;
     const items = menu.items || [];
+    const hasReactionBar = Boolean(menu.reactions);
     const handleKeyDown = (event) => {
+      // Keys typed in the reaction bar or its emoji picker are theirs; only
+      // Escape still closes the whole menu.
+      if (
+        event.key !== "Escape" &&
+        event.target instanceof Element &&
+        event.target.closest("[data-reaction-bar], [data-reaction-picker]")
+      ) {
+        return;
+      }
       if (event.key === "Escape") {
         // Only close the menu: the page also closes the open chat on Escape.
         event.stopPropagation();
@@ -93,6 +120,12 @@ export default function AppContextMenu({ menu, onClose }) {
       }
       if (event.key === "ArrowUp") {
         event.preventDefault();
+        // Up from the first item goes to the reaction bar above the menu.
+        const firstItem = menuRef.current?.querySelector('[role="menuitem"]');
+        if (hasReactionBar && firstItem && document.activeElement === firstItem) {
+          leaveMenuTo("bar");
+          return;
+        }
         setFocusedIndex((prev) => (prev - 1 + items.length) % items.length);
         return;
       }
@@ -154,7 +187,10 @@ export default function AppContextMenu({ menu, onClose }) {
       className="fixed inset-0 z-200"
       onContextMenu={(event) => {
         event.preventDefault();
-        if (event.target instanceof Element && event.target.closest('[role="menu"]')) {
+        if (
+          event.target instanceof Element &&
+          event.target.closest('[role="menu"], [data-reaction-bar], [data-reaction-picker]')
+        ) {
           return;
         }
         onClose?.();
@@ -174,6 +210,7 @@ export default function AppContextMenu({ menu, onClose }) {
         }}
       />
 
+
       <div
         ref={menuRef}
         role="menu"
@@ -188,6 +225,7 @@ export default function AppContextMenu({ menu, onClose }) {
           left: `${desktopPosition.x}px`,
           minWidth: "220px",
           maxWidth: "280px",
+          visibility: reactionPickerOpen ? "hidden" : undefined,
           transformOrigin:
             verticalPlacement === "below" ? "top left" : "bottom left",
         }}
@@ -228,6 +266,20 @@ export default function AppContextMenu({ menu, onClose }) {
           })}
         </div>
       </div>
+
+      {menu.reactions ? (
+        <QuickReactionBar
+          key={menu.reactions.messageId}
+          chatId={menu.reactions.chatId}
+          messageId={menu.reactions.messageId}
+          anchorRef={menuRef}
+          anchorPos={desktopPosition}
+          measureKey={menu}
+          onDone={onClose}
+          onPickerChange={setReactionPickerOpen}
+          onLeave={(direction) => leaveMenuTo(direction === "up" ? "last" : "first")}
+        />
+      ) : null}
     </div>,
     document.body,
   );

@@ -78,6 +78,9 @@ export function MessageComposer({
   microphonePermissionStatus = "unknown",
   onRequestMicrophonePermission,
   onSendVideoNote = null,
+  // (gif) -> sends a GIF from the person's own collection; with no function the
+  // picker has no GIFs tab.
+  onSendSavedGif = null,
   selfUser = null,
 }) {
   const composerRef = useRef(null);
@@ -102,6 +105,8 @@ export function MessageComposer({
   useEffect(() => {
     if (!showEmoji) return undefined;
     const onPointerDown = (event) => {
+      // The "GIF collection is full" notice may be answered without losing the picker.
+      if (event.target instanceof Element && event.target.closest("[data-keeps-picker-open]")) return;
       if (emojiRef.current && !emojiRef.current.contains(event.target)) setShowEmoji(false);
     };
     document.addEventListener("pointerdown", onPointerDown);
@@ -577,6 +582,7 @@ export function MessageComposer({
                         focusKeeper.restore();
                       }}
                       autoFocusSearch={isDesktop}
+                      onSendGif={onSendSavedGif}
                     />
                   </Suspense>
                 </div>

@@ -3,14 +3,10 @@ import { createPortal } from "react-dom";
 import { useRef } from "react";
 import { LoaderCircle } from "../../icons/lucide.js";
 import { useFocusTrap } from "../../hooks/useFocusTrap.js";
-
-const DELETE_FOR_EVERYONE_PREFERENCE_KEY =
-  "songbird-delete-message-for-everyone";
-
-const readDeleteForEveryonePreference = () => {
-  if (typeof window === "undefined") return false;
-  return window.localStorage.getItem(DELETE_FOR_EVERYONE_PREFERENCE_KEY) === "1";
-};
+import {
+  readDeleteForEveryonePreference,
+  writeDeleteForEveryonePreference,
+} from "../../utils/deletePreference.js";
 
 export default function DeleteMessageScopeModal({
   open,
@@ -35,11 +31,7 @@ export default function DeleteMessageScopeModal({
   const handleDeleteForEveryoneChange = (nextValue) => {
     if (offline) return;
     setDeleteForEveryone(nextValue);
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(
-      DELETE_FOR_EVERYONE_PREFERENCE_KEY,
-      nextValue ? "1" : "0",
-    );
+    writeDeleteForEveryonePreference(nextValue);
   };
 
   const handleConfirm = async () => {

@@ -1,5 +1,5 @@
 export const FILE_SUMMARY_PATTERN =
-  /^Sent (a media file|a file|a photo|a video message|a video|a document|a voice message|\d+ (files|photos|videos|documents|media files|voice messages))$/i;
+  /^Sent (a media file|a file|a photo|a GIF|a video message|a video|a document|a voice message|\d+ (files|photos|GIFs|videos|documents|media files|voice messages))$/i;
 
 export const extractMessageBodyText = (value) => {
   if (typeof value === "string") {

@@ -1,3 +1,4 @@
+import { isCallMessage } from "./callEntry.js";
 import { parseServerDate } from "./chatFormat.js";
 
 // Consecutive messages from one sender that are close in time form a "run".
@@ -18,10 +19,11 @@ const timeOf = (msg) => {
 };
 
 // True when `next` cannot share a run with `prev` (different sender, a system
-// line, too far apart in time, or a missing neighbour).
+// line or a call entry, too far apart in time, or a missing neighbour).
 export const isRunBreak = (prev, next, gapMs = RUN_GAP_MS) => {
   if (!prev || !next) return true;
   if (prev._systemEvent || next._systemEvent) return true;
+  if (isCallMessage(prev) || isCallMessage(next)) return true;
   const a = senderKey(prev);
   const b = senderKey(next);
   if (!a || a !== b) return true;

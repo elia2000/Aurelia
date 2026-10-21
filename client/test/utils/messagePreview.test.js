@@ -142,11 +142,64 @@ describe("summarizeFiles", () => {
   });
 });
 
+describe("summarizeFiles - GIFs", () => {
+  test("one animated picture is 'Sent a GIF', whatever the upload mode", () => {
+    const gif = { mimeType: "image/gif", isAnimated: true, gif: true };
+    expect(summarizeFiles([gif])).toBe("Sent a GIF");
+    expect(summarizeFiles([gif], "document")).toBe("Sent a GIF");
+  });
+
+  test("an animated WebP counts too, and several are 'Sent N GIFs'", () => {
+    const webp = { mimeType: "image/webp", isAnimated: true };
+    expect(summarizeFiles([webp])).toBe("Sent a GIF");
+    expect(summarizeFiles([webp, { mimeType: "image/gif", gif: true }])).toBe("Sent 2 GIFs");
+  });
+
+  test("an older row without the flag is a GIF when it is an image/gif", () => {
+    expect(summarizeFiles([{ mimeType: "image/gif" }])).toBe("Sent a GIF");
+  });
+
+  test("a GIF among photos or videos is not 'Sent a GIF'", () => {
+    const gif = { mimeType: "image/gif", isAnimated: true };
+    expect(summarizeFiles([gif, { mimeType: "image/jpeg" }])).toBe("Sent 2 photos");
+    expect(summarizeFiles([gif, { mimeType: "video/mp4" }])).toBe("Sent 2 media files");
+  });
+
+  test("a still PNG or WebP stays a photo", () => {
+    expect(summarizeFiles([{ mimeType: "image/png" }])).toBe("Sent a photo");
+    expect(summarizeFiles([{ mimeType: "image/webp", isAnimated: false }])).toBe("Sent a photo");
+  });
+
+  test("a reply to a GIF is previewed as 'Sent a GIF' with the picture icon", () => {
+    const preview = resolveReplyPreview({
+      body: "Sent a media file",
+      files: [{ mimeType: "image/gif", isAnimated: true }],
+    });
+    expect(preview).toEqual({ text: "Sent a GIF", icon: "image" });
+  });
+});
+
 // ─── resolveReplyPreview ──────────────────────────────────────────────────────
 
 describe("resolveReplyPreview", () => {
   test("returns empty text for null message", () => {
     expect(resolveReplyPreview(null)).toEqual({ text: "", icon: null });
+  });
+
+  test("a call entry is described, never an empty \"Message\"", () => {
+    const entry = (call) => ({ body: "", messageType: "call", call, files: [] });
+    expect(resolveReplyPreview(entry({ kind: "audio", outcome: "completed", durationSec: 5 }))).toEqual({
+      text: "Call",
+      icon: null,
+    });
+    expect(resolveReplyPreview(entry({ kind: "video", outcome: "missed", durationSec: null })).text).toBe(
+      "Missed video call",
+    );
+    expect(resolveReplyPreview(entry({ kind: "audio", outcome: "declined", durationSec: null })).text).toBe(
+      "Declined call",
+    );
+    // A call entry the client cannot read is still a line, not blank.
+    expect(resolveReplyPreview({ body: "", messageType: "call", call: null }).text).toBe("Call");
   });
 
   test("returns plain body text for a text-only message", () => {

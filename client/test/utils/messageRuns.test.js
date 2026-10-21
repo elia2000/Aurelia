@@ -40,6 +40,13 @@ describe("isRunBreak", () => {
     expect(isRunBreak({ id: 1 }, { id: 2 })).toBe(true);
   });
 
+  test("a call entry breaks the run on both sides, like a service line", () => {
+    const call = msg("a", 1, { messageType: "call", call: { kind: "audio", outcome: "completed" } });
+    expect(isRunBreak(msg("a", 0), call)).toBe(true);
+    expect(isRunBreak(call, msg("a", 2))).toBe(true);
+    expect(isRunBreak(call, msg("a", 1, { messageType: "call", call: {} }))).toBe(true);
+  });
+
   test("a message without a date does not break a run by itself", () => {
     expect(isRunBreak(msg("a", 0), { id: 2, username: "a" })).toBe(false);
   });
@@ -52,6 +59,19 @@ describe("isRunBreak", () => {
 });
 
 describe("computeMessageRuns", () => {
+  test("a call entry between two bubbles of one sender splits them into two runs", () => {
+    const runs = computeMessageRuns([
+      msg("a", 0),
+      msg("a", 1, { messageType: "call", call: { kind: "video", outcome: "missed" } }),
+      msg("a", 2),
+    ]);
+    expect(runs).toEqual([
+      { isRunStart: true, isRunEnd: true },
+      { isRunStart: true, isRunEnd: true },
+      { isRunStart: true, isRunEnd: true },
+    ]);
+  });
+
   test("marks first and last bubble of each run", () => {
     const runs = computeMessageRuns([
       msg("a", 0),

@@ -551,7 +551,9 @@ export class CallManager {
     // by the next page load, so it is dropped locally without telling the server.
     const committed = call.direction === "outgoing" || call.acceptPosted;
     if (committed) {
-      beacon?.(call.id);
+      const connectedMs = this.#connectedMs();
+      if (connectedMs === null) beacon?.(call.id);
+      else beacon?.(call.id, connectedMs);
       this.#finish(call, "local_hangup", { notifyServer: false });
     } else {
       this.#silentReset(call);
@@ -1600,6 +1602,13 @@ export class CallManager {
     return call.done || this.#call !== call;
   }
 
+  /** Milliseconds since the media connected, or null when it never did. */
+  #connectedMs() {
+    const { phase, connectedAt } = this.#state;
+    if (phase !== CALL_PHASE.CONNECTED || !Number.isFinite(connectedAt)) return null;
+    return Math.max(0, Math.round(Date.now() - connectedAt));
+  }
+
   #teardown(call) {
     call.done = true;
     [call.ringTimer, call.iceTimer, call.disconnectTimer, call.failTimer, call.connectWatchdog, call.slowTimer, ...(call.pairTimers || [])].forEach(clearTimeout);
@@ -1625,12 +1634,17 @@ export class CallManager {
   #finish(call, reason, { notifyServer = false, serverReason } = {}) {
     if (call.done) return;
     const connectionDetails = CONNECTION_FAILURES.has(reason) ? this.#describeConnection(call) : null;
+    const connectedMs = this.#connectedMs();
     this.#teardown(call);
     if (notifyServer) {
       const toServer =
         serverReason ??
         (CONNECTION_FAILURES.has(reason) ? "connect_failed" : FAILURE_REASONS.has(reason) ? "failed" : undefined);
-      this.#api.endCall(call.id, toServer).catch(() => {});
+      // The length goes along so the chat's call entry shows it even if the
+      // "connected" report never reached the server.
+      const sent =
+        connectedMs === null ? this.#api.endCall(call.id, toServer) : this.#api.endCall(call.id, toServer, connectedMs);
+      sent.catch(() => {});
     }
     this.#set({
       phase: CALL_PHASE.ENDED,

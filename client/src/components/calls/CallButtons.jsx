@@ -2,6 +2,7 @@ import { lazy, Suspense, useState } from "react";
 import { Phone, ShieldCheck, Video } from "../../icons/lucide.js";
 import { useCalls } from "../../calls/callContext.js";
 import { useHeaderActions } from "../../calls/useHeaderActions.js";
+import { toCallPeer } from "../../calls/callPeer.js";
 
 // The safety-number screen pulls in the crypto code, so it loads on demand.
 const SafetyNumberModal = lazy(() => import("./SafetyNumberModal.jsx"));
@@ -20,18 +21,7 @@ export default function CallButtons({ chatId, peer, user }) {
   const [safetyOpen, setSafetyOpen] = useState(false);
   if (!actions.count) return null;
 
-  const start = (kind) =>
-    startCall({
-      chatId,
-      kind,
-      peer: {
-        userId: peer.id,
-        username: peer.username,
-        nickname: peer.nickname,
-        avatarUrl: peer.avatar_url,
-        color: peer.color,
-      },
-    });
+  const start = (kind) => startCall({ chatId, kind, peer: toCallPeer(peer) });
 
   return (
     <div className="flex shrink-0 items-center gap-1.5">

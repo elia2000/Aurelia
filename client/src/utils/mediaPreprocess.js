@@ -1,3 +1,9 @@
+import {
+  inspectImageFile,
+  looksAnimated,
+  shouldKeepImageUntouched,
+} from "./animatedImage.js";
+
 /**
  * Parses PCM audio samples and generates a normalized waveform array of `samplesCount` elements.
  *
@@ -207,10 +213,27 @@ export async function extractVideoMetadataAndThumbnail(file) {
 }
 
 /**
- * Asynchronously extracts width, height, and WebP thumbnail from image file.
+ * What happens to a picture before it is uploaded. Animated pictures (every GIF,
+ * animated WebP, APNG) are never redrawn: a canvas would keep only the first
+ * frame, and the server stores and flags the original bytes. Only their size is
+ * read. Other pictures get a small still thumbnail.
+ *
+ * @param {{ kind: string | null, animated: boolean | null } | null} info - from inspectImageFile
+ * @returns {{ untouched: boolean, thumbnail: boolean }}
+ */
+export function decideImageHandling(info) {
+  const untouched = shouldKeepImageUntouched(info);
+  return { untouched, thumbnail: !untouched };
+}
+
+/**
+ * Asynchronously extracts width and height from an image file, plus a small
+ * WebP thumbnail for still pictures. An animated picture (see
+ * `decideImageHandling`) is only measured: no canvas, no thumbnail, and
+ * `isAnimated` is returned as a hint for the interface (the server decides).
  *
  * @param {File | Blob} file
- * @returns {Promise<{ width?: number, height?: number, thumbnail?: string }>}
+ * @returns {Promise<{ width?: number, height?: number, thumbnail?: string, isAnimated?: boolean }>}
  */
 export async function extractImageMetadataAndThumbnail(file) {
   if (
@@ -219,6 +242,15 @@ export async function extractImageMetadataAndThumbnail(file) {
     typeof document === "undefined"
   ) {
     return {};
+  }
+
+  const info = await inspectImageFile(file);
+  const handling = decideImageHandling(info);
+  const isAnimated = looksAnimated(info);
+
+  // The size is in the header of a GIF, animated WebP or APNG: nothing to decode.
+  if (handling.untouched && info.width > 0 && info.height > 0) {
+    return { width: info.width, height: info.height, isAnimated };
   }
 
   return new Promise((resolve) => {
@@ -252,6 +284,11 @@ export async function extractImageMetadataAndThumbnail(file) {
         if (!width || !height) {
           cleanUp();
           return resolve({});
+        }
+
+        if (handling.untouched) {
+          cleanUp();
+          return resolve({ width, height, isAnimated });
         }
 
         const maxDim = 320;

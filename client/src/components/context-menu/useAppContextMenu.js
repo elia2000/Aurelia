@@ -3,9 +3,11 @@ import {
   Ban,
   Chat,
   CheckCheck,
+  CircleCheck,
   Copy,
   Download,
   Forward,
+  GifIcon,
   Pencil,
   Reply,
   Trash,
@@ -13,12 +15,17 @@ import {
   Volume2,
   VolumeX,
 } from "../../icons/lucide.js";
+import { findGifFile, resolveSaveGifTarget } from "../../gifs/gifMessageActions.js";
+import { buildReactionMenuParts } from "../chat/reactions/reactionMenu.js";
 import { copyTextToClipboard } from "../../utils/clipboard.js";
 import {
   extractMessageBodyText,
   getMessageFiles,
   hasMessageText,
 } from "../../utils/messageContent.js";
+import { getReactionList } from "../../utils/reactionStore.js";
+import { isCallMessage } from "../../utils/callEntry.js";
+import { isMessageSelectable } from "../../utils/batchMessages.js";
 
 export function useAppContextMenu({
   activeChatId,
@@ -33,6 +40,12 @@ export function useAppContextMenu({
   onDeleteMessage,
   onForwardMessage,
   onSaveMessageFiles,
+  // (message, file) -> keeps that GIF in the person's own collection. Left out
+  // when the server takes no uploads, which hides the item.
+  onSaveGif = null,
+  // (message) -> starts selection mode with that message ticked (several
+  // messages to forward, delete or copy). Left out, the item is hidden.
+  onSelectMessage = null,
   onOpenOrCreateDm,
   onOpenProfile,
   onRemoveGroupMember,
@@ -95,6 +108,7 @@ export function useAppContextMenu({
         y: Number(event?.clientY || rect?.bottom || rect?.top || 0),
       };
       const items = [];
+      let reactionParts = null;
 
       if (kind === "message") {
         const message = data?.message || null;
@@ -106,6 +120,17 @@ export function useAppContextMenu({
         const hasText = hasMessageText(message);
         const linkTarget = findContextMenuLinkTarget(event?.target, targetEl);
         const files = getMessageFiles(message);
+        // The GIF the person pointed at (else the first one), for "Save GIF".
+        const gifFile =
+          onSaveGif && !message?.e2ee
+            ? findGifFile(
+                message,
+                (event?.target instanceof Element
+                  ? event.target.closest("[data-file-id]")
+                  : null
+                )?.getAttribute("data-file-id"),
+              )
+            : null;
         // Text the user selected with the mouse inside (or across) this message.
         const selectedText = String(data?.selectedText || "");
         items.push(
@@ -166,6 +191,18 @@ export function useAppContextMenu({
                 },
               ]
             : []),
+          ...(gifFile
+            ? [
+                {
+                  id: "save-gif",
+                  label: "Save GIF",
+                  icon: GifIcon,
+                  // The server must know the message and the file first.
+                  disabled: Boolean(offline) || !resolveSaveGifTarget(message, gifFile),
+                  onSelect: () => onSaveGif?.(message, gifFile),
+                },
+              ]
+            : []),
           ...(message?.e2ee
             ? []
             : [
@@ -176,6 +213,16 @@ export function useAppContextMenu({
                   onSelect: () => onForwardMessage?.(message),
                 },
               ]),
+          ...(onSelectMessage && isMessageSelectable(message)
+            ? [
+                {
+                  id: "select",
+                  label: "Select",
+                  icon: CircleCheck,
+                  onSelect: () => onSelectMessage(message),
+                },
+              ]
+            : []),
           {
             id: "delete",
             label: "Delete",
@@ -189,6 +236,29 @@ export function useAppContextMenu({
               }),
           },
         );
+        // Reactions: the quick bar above the menu and a "Reacted by" item
+        // (placed before Delete).
+        const reactionChatId = activeChatId || message?.chat_id || null;
+        reactionParts = buildReactionMenuParts({
+          message,
+          chatId: reactionChatId,
+          chatType: chats.find((chat) => String(chat?.id) === String(reactionChatId))?.type,
+          isOwner: canCurrentUserEditGroup,
+          offline,
+          hasReactions: getReactionList(message?._serverId || message?.id).length > 0,
+        });
+        const deleteAt = items.findIndex((item) => item.id === "delete");
+        items.splice(deleteAt < 0 ? items.length : deleteAt, 0, ...reactionParts.items);
+        // A call entry can only be removed from the person's own view: no
+        // reply, copy, forward, reaction or pin (the server refuses them). It
+        // can still be selected, to be deleted together with other messages.
+        if (isCallMessage(message)) {
+          items.splice(
+            0,
+            items.length,
+            ...items.filter((item) => item.id === "delete" || item.id === "select"),
+          );
+        }
       }
 
       if (kind === "user") {
@@ -269,6 +339,7 @@ export function useAppContextMenu({
         kind,
         point,
         items,
+        reactions: reactionParts?.reactions || null,
         targetEl: targetEl || null,
         targetChatId: activeChatId || null,
         targetMessageKey: message
@@ -278,6 +349,7 @@ export function useAppContextMenu({
     },
     [
       activeChatId,
+      chats,
       canReplyToMessage,
       canCurrentUserEditGroup,
       currentUsername,
@@ -289,6 +361,8 @@ export function useAppContextMenu({
       onEditMessage,
       onForwardMessage,
       onSaveMessageFiles,
+      onSaveGif,
+      onSelectMessage,
       onOpenOrCreateDm,
       onOpenProfile,
       onRemoveGroupMember,

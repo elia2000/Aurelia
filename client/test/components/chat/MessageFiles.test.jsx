@@ -209,6 +209,97 @@ describe("MessageFiles — image", () => {
   });
 });
 
+// ─── GIF rendering ────────────────────────────────────────────────────────────
+
+describe("MessageFiles — GIF", () => {
+  const gifFile = (overrides = {}) =>
+    makeFile({
+      id: 7,
+      name: "fun.gif",
+      mimeType: "image/gif",
+      url: VALID_IMG,
+      width: 320,
+      height: 200,
+      isAnimated: true,
+      gif: true,
+      ...overrides,
+    });
+
+  const badge = () => document.querySelector('[data-testid="gif-badge"]');
+
+  test("a GIF shows the GIF itself with a small 'GIF' badge", async () => {
+    render(<MessageFiles {...BASE_PROPS} files={[gifFile()]} />);
+    const img = page.getByRole("img");
+    await expect.element(img).toHaveAttribute("src", VALID_IMG);
+    expect(badge()).not.toBeNull();
+    expect(badge().textContent).toBe("GIF");
+    expect(badge().getAttribute("aria-hidden")).toBe("true");
+    expect(document.querySelector('button[data-gif="true"]')).not.toBeNull();
+  });
+
+  test("an older row without the flag is still a GIF when it is an image/gif", async () => {
+    render(<MessageFiles {...BASE_PROPS} files={[gifFile({ isAnimated: undefined, gif: undefined })]} />);
+    await expect.element(page.getByRole("img")).toBeInTheDocument();
+    expect(badge()).not.toBeNull();
+  });
+
+  test("an animated WebP gets the badge too", async () => {
+    render(
+      <MessageFiles {...BASE_PROPS} files={[gifFile({ name: "a.webp", mimeType: "image/webp" })]} />,
+    );
+    await expect.element(page.getByRole("img")).toBeInTheDocument();
+    expect(badge()).not.toBeNull();
+  });
+
+  test("a still photo has no badge", async () => {
+    render(
+      <MessageFiles
+        {...BASE_PROPS}
+        files={[makeFile({ id: 8, name: "p.png", mimeType: "image/png", url: VALID_IMG })]}
+      />,
+    );
+    await expect.element(page.getByRole("img")).toBeInTheDocument();
+    expect(badge()).toBeNull();
+    expect(document.querySelector('button[data-gif="true"]')).toBeNull();
+  });
+
+  test("a poster (thumbUrl) never stands in for a GIF: the bubble is the GIF", async () => {
+    render(
+      <MessageFiles
+        {...BASE_PROPS}
+        files={[gifFile({ thumbUrl: "/poster-that-must-not-be-used.webp" })]}
+      />,
+    );
+    const img = page.getByRole("img");
+    await expect.element(img).toHaveAttribute("src", VALID_IMG);
+    expect(document.querySelector("img").getAttribute("src")).not.toContain("poster");
+  });
+
+  test("opening a GIF hands the viewer an image (not a video) and says it is a GIF", async () => {
+    const openFocusMedia = vi.fn();
+    render(<MessageFiles {...BASE_PROPS} openFocusMedia={openFocusMedia} files={[gifFile()]} />);
+    await page.getByRole("button").click();
+    expect(openFocusMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "image", url: VALID_IMG, isGif: true }),
+    );
+    expect(document.querySelector("video")).toBeNull();
+  });
+
+  test("the GIF button names the file so a menu can tell which GIF was meant, and lets a long press through", async () => {
+    render(<MessageFiles {...BASE_PROPS} files={[gifFile({ id: 42 })]} />);
+    await expect.element(page.getByRole("img")).toBeInTheDocument();
+    const button = document.querySelector('button[data-gif="true"]');
+    expect(button.getAttribute("data-file-id")).toBe("42");
+    expect(button.hasAttribute("data-menu-passthrough")).toBe(true);
+  });
+
+  test("the badge does not take clicks", async () => {
+    render(<MessageFiles {...BASE_PROPS} files={[gifFile()]} />);
+    await expect.element(page.getByRole("img")).toBeInTheDocument();
+    expect(badge().className).toContain("pointer-events-none");
+  });
+});
+
 // ─── Video rendering ──────────────────────────────────────────────────────────
 
 describe("MessageFiles — video", () => {

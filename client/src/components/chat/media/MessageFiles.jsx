@@ -1,6 +1,8 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Download, File, Pause, Play, WifiOff } from "../../../icons/lucide.js";
+import GifBadge from "../gifs/GifBadge.jsx";
 import { CHAT_PAGE_CONFIG } from "../../../settings/chatPageConfig.js";
+import { isGifFile } from "../../../utils/animatedImage.js";
 import { CACHE_STORES } from "../../../utils/cacheDb.js";
 import { canUseIdb, readIdbCache, writeIdbCache } from "../../../utils/chatCache.js";
 import { isCrossOriginUrl, saveMedia } from "../../../utils/fileDownload.js";
@@ -1136,6 +1138,9 @@ export function MessageFiles({
         const isImage = renderType === "image";
         const isVideo = renderType === "video";
         const isAudio = renderType === "audio";
+        // A GIF (also an animated WebP or APNG) is shown as the picture itself:
+        // it plays on its own, so a still poster must never stand in for it.
+        const isGif = isImage && isGifFile(file);
         const videoUrl = String(file?.url || "");
         const isTranscodedOutput = videoUrl.includes("-h264-");
         const isProcessingVideo =
@@ -1150,11 +1155,12 @@ export function MessageFiles({
           (file?.url ? String(file.url).split("?")[0].split("/").pop() : "") ||
           "media";
         const thumbKey = `thumb-${key}`;
-        const cachedPoster =
-          (isVideo && file.url ? videoPosterByUrl[file.url] : "") ||
-          file?.thumbUrl ||
-          file?.posterUrl ||
-          "";
+        const cachedPoster = isGif
+          ? ""
+          : (isVideo && file.url ? videoPosterByUrl[file.url] : "") ||
+            file?.thumbUrl ||
+            file?.posterUrl ||
+            "";
         const thumbLoaded =
           loadedMediaThumbs.has(thumbKey) || Boolean(cachedPoster);
         const mediaAspectRatio = getMediaAspectRatio(file);
@@ -1232,17 +1238,21 @@ export function MessageFiles({
                   downloadUrl: `${file.url}${file.url.includes("?") ? "&" : "?"}download=1`,
                   name: mediaDownloadName,
                   type: "image",
+                  isGif,
                   width: file.width,
                   height: file.height,
                   expiresAt: file.expiresAt || null,
                 })
               }
-              className="relative block w-full overflow-hidden bg-white/70 dark:bg-slate-900/50"
+              className="relative block w-full overflow-hidden bg-white/70 [-webkit-touch-callout:none] dark:bg-slate-900/50"
+              data-gif={isGif ? "true" : undefined}
+              data-menu-passthrough=""
+              data-file-id={isGif && file.id !== undefined && file.id !== null ? String(file.id) : undefined}
             >
               <div className={imageFrameClass} style={mediaFrameStyle}>
                 <img
                   src={file.url}
-                  alt={file.name || "image"}
+                  alt={file.name || (isGif ? "GIF" : "image")}
                   referrerPolicy="no-referrer"
                   onLoad={(event) => {
                     cacheMediaAspectRatio(
@@ -1269,6 +1279,7 @@ export function MessageFiles({
                     style={{ height: "180px" }}
                   />
                 ) : null}
+                {isGif ? <GifBadge /> : null}
               </div>
             </button>
           );
