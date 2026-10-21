@@ -19,8 +19,9 @@ export const FORWARD_MAX_CREATED_MESSAGES = 500;
  * How many forwarded messages one person may create in a minute (a request is
  * charged for the messages it creates, see the route). It is one largest
  * request a minute: a forward is a burst of messages every member of the
- * target chats receives, and an ordinary send is limited to a few dozen a
- * minute, so this bounds how fast one account can fill a chat.
+ * target chats receives, and an ordinary send has no limit of its own (only
+ * the per-address API limit, about 65 requests a minute on average), so this
+ * bounds how fast one account can fill a chat by forwarding.
  */
 export const FORWARD_MESSAGES_PER_MINUTE = FORWARD_MAX_CREATED_MESSAGES;
 

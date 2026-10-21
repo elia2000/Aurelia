@@ -14,3 +14,17 @@ export function catchUpLimit(loadedCount, pageSize) {
   const floor = Number.isFinite(page) && page > 0 ? Math.floor(page) : 0;
   return Math.min(CATCH_UP_MAX_MESSAGES, Math.max(floor, wanted));
 }
+
+/**
+ * Which kind of refresh to run. Only one refresh waits for its timer at a time
+ * and a new request replaces it, so a catch-up that is still waiting must not
+ * be lost to the plain "new message" refresh that arrives right after the
+ * connection did: that one reads only what came after the newest row.
+ *
+ * @param {{ coverLoaded?: boolean, tailDelta?: boolean }} wanted what this request asked for
+ * @param {boolean} catchUpWaiting a catch-up for the same chat is still waiting
+ */
+export function keepCatchUp({ coverLoaded = false, tailDelta = false } = {}, catchUpWaiting = false) {
+  const cover = Boolean(coverLoaded) || Boolean(catchUpWaiting);
+  return { coverLoaded: cover, tailDelta: cover ? false : Boolean(tailDelta) };
+}

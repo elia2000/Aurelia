@@ -226,6 +226,29 @@ describe("createSavedGifsStore", () => {
     expect(store.getState().count).toBe(1);
   });
 
+  it("a connection that comes back while the list is on its way makes it be read once more when it has arrived", async () => {
+    let answer;
+    const api = makeApi({
+      listSavedGifs: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      ),
+    });
+    const store = createSavedGifsStore({ api, notify });
+    store.bindOwner("u1");
+    const first = store.load();
+    // the first read left before the connection broke: it cannot know what happened since
+    store.invalidate();
+    api.listSavedGifs.mockImplementationOnce(async () => ok({ gifs: [gif(7), gif(2)], limit: 50, count: 2 }));
+    answer(ok({ gifs: [gif(2)], limit: 50, count: 1 }));
+    await first;
+    await vi.waitFor(() => expect(api.listSavedGifs).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(store.getState().gifs.map((g) => g.id)).toEqual(["gif-7", "gif-2"]));
+    expect(store.getState().stale).toBe(false);
+  });
+
   it("keeps an error and lets the person ask again", async () => {
     const api = makeApi({ listSavedGifs: vi.fn(async () => fail(500, { error: "boom" })) });
     const store = createSavedGifsStore({ api, notify });

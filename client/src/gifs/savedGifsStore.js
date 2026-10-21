@@ -382,7 +382,14 @@ export function createSavedGifsStore({ api = gifApi, notify = notifyWithToast } 
    * shown stays until it has been read again.
    */
   const invalidate = () =>
-    update((s) => (s.stale || (s.status !== "ready" && s.status !== "error") ? s : { ...s, stale: true }));
+    update((s) => {
+      // A read that is on its way left before the break and cannot know what
+      // happened in it: it is read once more when it has arrived (as for a
+      // change that comes in while loading).
+      if (s.loading) return s.dirty ? s : { ...s, dirty: true };
+      if (s.stale || (s.status !== "ready" && s.status !== "error")) return s;
+      return { ...s, stale: true };
+    });
 
   const dismissNotice = () => update((s) => (s.notice ? { ...s, notice: null } : s));
 

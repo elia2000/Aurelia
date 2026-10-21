@@ -84,7 +84,7 @@ import { normalizeUuid, isValidUuid } from "../utils/uuidUtils.js";
 import { serverIdOfMessage } from "../utils/messageIds.js";
 import { forgetPinnedMessages } from "../utils/pinStore.js";
 import { getPinnedChatListVersion, withNewestChatPins } from "../utils/chatPinsTracker.js";
-import { catchUpLimit } from "../utils/catchUpLimit.js";
+import { catchUpLimit, keepCatchUp } from "../utils/catchUpLimit.js";
 import {
   createDmChat,
   discoverUsersAndGroups,
@@ -419,6 +419,8 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   const activeUploadProgressHideTimerRef = useRef(null);
   const mediaLoadSnapTimerRef = useRef(null);
   const messageRefreshTimerRef = useRef(null);
+  // The chat whose catch-up read (after a break) waits for messageRefreshTimerRef.
+  const catchUpWaitingChatRef = useRef(null);
   const forwardedChatPreviewInFlightRef = useRef(new Set());
   const forwardedUserPreviewInFlightRef = useRef(new Set());
   const channelSeenQueueRef = useRef([]);
@@ -1315,10 +1317,19 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
 
   const scheduleMessageRefresh = (chatId, options = {}) => {
     if (!chatId) return;
+    // A catch-up read that is still waiting is not lost to the refresh that
+    // replaces it (see keepCatchUp).
+    const catchUpWaiting =
+      Boolean(messageRefreshTimerRef.current) && catchUpWaitingChatRef.current === chatId;
     if (messageRefreshTimerRef.current) {
       window.clearTimeout(messageRefreshTimerRef.current);
     }
-    const { delayMs, tailDelta, coverLoaded, ...loadOptions } = options;
+    const { delayMs, tailDelta: wantsTailDelta, coverLoaded: wantsCoverLoaded, ...loadOptions } = options;
+    const { coverLoaded, tailDelta } = keepCatchUp(
+      { coverLoaded: wantsCoverLoaded, tailDelta: wantsTailDelta },
+      catchUpWaiting,
+    );
+    catchUpWaitingChatRef.current = coverLoaded ? chatId : null;
     const refreshDelayMs = Number.isFinite(Number(delayMs))
       ? Math.max(0, Number(delayMs))
       : 280;
@@ -1359,6 +1370,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     }
     messageRefreshTimerRef.current = window.setTimeout(() => {
       messageRefreshTimerRef.current = null;
+      catchUpWaitingChatRef.current = null;
       void loadMessages(chatId, {
         silent: true,
         preserveHistory: true,
