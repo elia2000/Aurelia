@@ -1,6 +1,6 @@
 # Message Menu
 
-**Right-click** a message (on a phone: **press and hold** it) to open its menu. The menu opens from anywhere along the message row, not only on the bubble. From the keyboard, focus a message and press the **Menu** key (or **Shift+F10**).
+**Right-click** a message (on a phone: **press and hold** it) to open its menu. The menu opens from anywhere along the message row, not only on the bubble. From the keyboard, press **Tab** to reach the messages (the list stops on the newest one), move between messages with **Up**, **Down**, **Home** and **End**, and press the **Menu** key (or **Shift+F10**) on the one you want.
 
 The row of seven quick reactions sits above the menu (see [Reactions](./Reactions.md)). Below it, the items always come in this order, and only the ones that make sense for that message are shown:
 

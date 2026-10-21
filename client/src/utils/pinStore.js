@@ -215,11 +215,16 @@ function scheduleReload(chatId) {
 // A list read this recently needs no second read when the connection opens.
 const FRESH_MS = 4000;
 
-/** Marks every list as old (the connection dropped and came back). */
-export function invalidateAllPins() {
+/**
+ * Marks every list as old (the connection opened). The first connection opens
+ * right after a chat did, so a list read a moment ago is left alone, unless
+ * `force`: the connection came back after a break, and a pin made during it
+ * is not in a list however recently it was read.
+ */
+export function invalidateAllPins({ force = false } = {}) {
   const now = Date.now();
   for (const [id, record] of records) {
-    if (record.status === "ready" && now - record.loadedAt < FRESH_MS) continue;
+    if (!force && record.status === "ready" && now - record.loadedAt < FRESH_MS) continue;
     if (record.status === "ready" || record.status === "error") {
       record.status = "stale";
       notify(id);
@@ -327,6 +332,21 @@ export function applyRealtimePinEvent(payload) {
     record.version += 1;
     setPins(chatId, EMPTY, { status: "ready", bump: false });
   }
+}
+
+/**
+ * Messages the person just hid for themselves ("Delete for me") are no longer
+ * in their pin list on the server, but that sends no event, so they are taken
+ * out here. A read that was on its way may still list them: it is read again.
+ */
+export function forgetPinnedMessages(chatId, messageIds) {
+  const id = normalizeUuid(chatId);
+  const record = id ? records.get(id) : null;
+  if (!record || !Array.isArray(messageIds)) return;
+  const next = messageIds.reduce((pins, messageId) => removePin(pins, messageId), record.pins);
+  if (next === record.pins) return;
+  record.version += 1;
+  setPins(id, next, { status: record.status, bump: false });
 }
 
 /** A pinned message was edited: its preview is read again. */

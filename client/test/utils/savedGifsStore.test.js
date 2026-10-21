@@ -185,6 +185,47 @@ describe("createSavedGifsStore", () => {
     expect(api.listSavedGifs).toHaveBeenCalledTimes(2);
   });
 
+  it("a list that is marked old is read again by the next load, once", async () => {
+    const api = makeApi();
+    const store = createSavedGifsStore({ api, notify });
+    store.bindOwner("u1");
+    await store.load();
+    store.invalidate();
+    expect(store.getState().stale).toBe(true);
+    expect(store.getState().gifs).toHaveLength(2); // still shown while it is read again
+    api.listSavedGifs.mockResolvedValueOnce(ok({ gifs: [gif(5), gif(2), gif(1)], limit: 50, count: 3 }));
+    await Promise.all([store.load(), store.load()]);
+    expect(api.listSavedGifs).toHaveBeenCalledTimes(2);
+    expect(store.getState().stale).toBe(false);
+    expect(store.getState().gifs.map((g) => g.id)).toEqual(["gif-5", "gif-2", "gif-1"]);
+    await store.load();
+    expect(api.listSavedGifs).toHaveBeenCalledTimes(2);
+  });
+
+  it("a list nobody asked for yet is not made old, and a failed read is tried again", async () => {
+    const api = makeApi({ listSavedGifs: vi.fn(async () => fail(500, { error: "boom" })) });
+    const store = createSavedGifsStore({ api, notify });
+    store.bindOwner("u1");
+    store.invalidate();
+    expect(store.getState().stale).toBe(false);
+    await store.load();
+    expect(store.getState().status).toBe("error");
+    store.invalidate();
+    expect(store.getState().stale).toBe(true);
+  });
+
+  it("a GIF removed or evicted on another device while offline is gone after the next read", async () => {
+    const api = makeApi();
+    const store = createSavedGifsStore({ api, notify });
+    store.bindOwner("u1");
+    await store.load();
+    store.invalidate();
+    api.listSavedGifs.mockResolvedValueOnce(ok({ gifs: [gif(2)], limit: 50, count: 1 }));
+    await store.load();
+    expect(store.getState().gifs.map((g) => g.id)).toEqual(["gif-2"]);
+    expect(store.getState().count).toBe(1);
+  });
+
   it("keeps an error and lets the person ask again", async () => {
     const api = makeApi({ listSavedGifs: vi.fn(async () => fail(500, { error: "boom" })) });
     const store = createSavedGifsStore({ api, notify });

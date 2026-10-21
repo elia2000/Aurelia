@@ -27,7 +27,7 @@ If you try to select more than 100 messages, the app stops at 100 and says "You 
 
 ### Keyboard
 
-- Focus a message and press the **Menu** key (or **Shift+F10**), then choose **Select**.
+- Press **Tab** to reach the messages, move to one with **Up**/**Down**, press the **Menu** key (or **Shift+F10**), then choose **Select**.
 - In selection mode every message is a checkbox: **Up**/**Down** move between messages, **Space** or **Enter** ticks the focused one.
 - **Delete** asks to delete the selected messages, **Ctrl+C** (**Cmd+C**) copies them (unless you have selected text, which is copied as usual), **Esc** ends selection.
 - Screen readers hear "N selected" every time the count changes.
@@ -39,7 +39,7 @@ If you try to select more than 100 messages, the app stops at 100 and says "You 
 - The messages arrive **oldest first**, as separate messages, each with its own "Forwarded from" line (the author, or the channel for channel posts). Each is sent with its current text, edits included.
 - A success notice says "N messages forwarded". If some could not be forwarded, the notice says how many went and why (for example "Some messages were deleted or removed from your view"). If none went, the chooser stays open so you can try again.
 - **Call entries, service lines** ("Bob joined the group") **and end-to-end encrypted messages** (round video messages) cannot be forwarded. They are left out, and the app tells you how many.
-- Large forwards are split into several requests automatically: the server takes at most 100 messages, 20 chats and 500 message-chat pairs in one request. There is a limit of 30 forward requests per minute per person.
+- Large forwards are split into several requests automatically: the server takes at most 100 messages, 20 chats and 500 message-chat pairs in one request. There is a limit of 30 forward requests per minute per person, and a person can create at most 500 forwarded messages (messages × chats) per minute, because every forwarded message is delivered to everyone in the target chat. Over that, the app says "Too many messages forwarded in a short time"; wait a moment and try again.
 
 ## Delete
 

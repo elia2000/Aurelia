@@ -137,6 +137,23 @@ describe("AppContextMenu - quick reaction bar", () => {
     );
   });
 
+  test("a menu opened after the picker was used is not hidden, and starts on its first item", async () => {
+    const view = await render(<AppContextMenu menu={makeMenu()} onClose={vi.fn()} />);
+    await vi.waitFor(() => expect(bar().style.visibility).toBe("visible"));
+    await page.getByRole("button", { name: "More reactions" }).click();
+    await expect.element(page.getByRole("dialog", { name: "Emoji" })).toBeInTheDocument();
+    expect(document.querySelector('[role="menu"]').style.visibility).toBe("hidden");
+    // Escape closes the whole menu (the page sets it to null) with the picker still open
+    await view.rerender(<AppContextMenu menu={null} onClose={vi.fn()} />);
+    await view.rerender(<AppContextMenu menu={makeMenu()} onClose={vi.fn()} />);
+    await expect.element(page.getByRole("menu")).toBeInTheDocument();
+    expect(document.querySelector('[role="menu"]').style.visibility).not.toBe("hidden");
+    await vi.waitFor(() => expect(document.activeElement?.textContent).toContain("Reply"));
+    // so Up reaches the quick bar, as documented, and not the last item
+    await userEvent.keyboard("{ArrowUp}");
+    expect(activeQuick()).toBe(UP);
+  });
+
   test("a right click on the bar does not close and reopen the menu", async () => {
     const onClose = vi.fn();
     render(<AppContextMenu menu={makeMenu()} onClose={onClose} />);

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { getMessageElement, jumpToLoadedMessage } from "../../utils/messageJump.js";
+import { serverIdOfMessage as serverIdOf } from "../../utils/messageIds.js";
 import { normalizeUuid } from "../../utils/uuidUtils.js";
 import { showToast } from "../../utils/toast.js";
 
@@ -16,8 +17,6 @@ const nextFrame = () =>
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => resolve());
     else setTimeout(resolve, 16);
   });
-
-const serverIdOf = (msg) => normalizeUuid(msg?._serverId || msg?.id);
 
 /**
  * Returns `jumpToMessage(messageId)`: scrolls the open chat to that message and
@@ -91,7 +90,14 @@ export function useJumpToMessage({
       if (stale()) return false;
 
       if (!isOnPage()) {
-        showToast("That message is no longer available.", { tone: "error" });
+        // The rounds run out before the history does: the message may well
+        // still exist, so do not say it is gone.
+        showToast(
+          latest.current.hasOlderMessages
+            ? "That message is too far back to jump to."
+            : "That message is no longer available.",
+          { tone: "error" },
+        );
         return false;
       }
       latest.current.onJump?.();

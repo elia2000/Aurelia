@@ -194,7 +194,12 @@ export default function EmojiPicker({ onSelect, onClose, autoFocusSearch = false
           <GifsPanel onSend={sendGif} onMenuOpenChange={onGifMenuOpenChange} />
         </div>
       ) : (
-      <>
+      <div
+        {...(gifsEnabled
+          ? { role: "tabpanel", id: "picker-panel-emoji", "aria-labelledby": "picker-tab-emoji" }
+          : {})}
+        className="flex min-h-0 flex-1 flex-col"
+      >
       <div className="flex items-center gap-2 border-b border-emerald-100 p-2 dark:border-emerald-500/20">
         <input
           type="search"
@@ -322,7 +327,7 @@ export default function EmojiPicker({ onSelect, onClose, autoFocusSearch = false
           );
         })}
       </div>
-      </>
+      </div>
       )}
     </div>
   );

@@ -717,7 +717,9 @@ describe("MessageItem — forwarded header", () => {
 
 // ─── Double-click to reply (desktop) ─────────────────────────────────────────
 
-describe("MessageItem — double-click reply (desktop)", () => {
+// (BASE_PROPS has no chatId and the ids are not real: a message that cannot take a
+// reaction. For one that can, a double click is a heart: MessageItem.reactions.test.jsx.)
+describe("MessageItem — double-click reply (desktop, a message that cannot take a reaction)", () => {
   test("double-clicking the bubble on desktop calls onReply", async () => {
     const { userEvent } = await import("vitest/browser");
     const onReply = vi.fn();
@@ -822,5 +824,47 @@ describe("MessageItem — sender profile", () => {
     // Scope to the sender name element — a lingering hover from the previous
     // test could otherwise open a tooltip carrying the same text.
     await expect.element(page.getByText("Bob").first()).toBeInTheDocument();
+  });
+});
+
+// ─── Row id (the anchor for jumps) ────────────────────────────────────────────
+
+describe("MessageItem — row id", () => {
+  test("a row whose send was acknowledged is anchored by the server's id, not the temporary one", async () => {
+    const SERVER_ID = "55555555-5555-4555-a555-555555555555";
+    await render(
+      <MessageItem
+        {...BASE_PROPS}
+        msg={makeOwnMsg({ id: "pending-1700000000000-abc123", _clientId: "pending-1700000000000-abc123", _serverId: SERVER_ID })}
+      />,
+    );
+    expect(document.getElementById(`message-${SERVER_ID}`)).not.toBeNull();
+    expect(document.getElementById("message-pending-1700000000000-abc123")).toBeNull();
+  });
+
+  test("a row that has not been acknowledged yet keeps its own id", async () => {
+    await render(<MessageItem {...BASE_PROPS} msg={makeOwnMsg({ id: "pending-1700000000000-abc123" })} />);
+    expect(document.getElementById("message-pending-1700000000000-abc123")).not.toBeNull();
+  });
+});
+
+// ─── Keyboard access to the row ───────────────────────────────────────────────
+
+describe("MessageItem — keyboard access to the row", () => {
+  const rowEl = () => document.querySelector("[data-message-row]");
+
+  test("a row is focusable by script but not a tab stop by default", async () => {
+    await render(<MessageItem {...BASE_PROPS} msg={makeMsg()} />);
+    expect(rowEl().tabIndex).toBe(-1);
+  });
+
+  test("the row that is the list's tab stop can be reached with Tab", async () => {
+    await render(<MessageItem {...BASE_PROPS} msg={makeMsg()} isRowTabStop />);
+    expect(rowEl().tabIndex).toBe(0);
+  });
+
+  test("a focused row shows a ring for keyboard users", async () => {
+    await render(<MessageItem {...BASE_PROPS} msg={makeMsg()} isRowTabStop />);
+    expect(rowEl().className).toContain("focus-visible:ring-2");
   });
 });

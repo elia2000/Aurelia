@@ -81,6 +81,10 @@ import {
   isRemoteChannelMessage,
 } from "../utils/messageOwnership.js";
 import { normalizeUuid, isValidUuid } from "../utils/uuidUtils.js";
+import { serverIdOfMessage } from "../utils/messageIds.js";
+import { forgetPinnedMessages } from "../utils/pinStore.js";
+import { getPinnedChatListVersion, withNewestChatPins } from "../utils/chatPinsTracker.js";
+import { catchUpLimit } from "../utils/catchUpLimit.js";
 import {
   createDmChat,
   discoverUsersAndGroups,
@@ -965,7 +969,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
 
   const handleStartReply = (msg) => {
     if (!msg) return;
-    const targetId = msg.id || msg._serverId || null;
+    const targetId = msg._serverId || msg.id || null;
     if (!targetId) return;
     setEditTarget(null);
     // In channel chats, show the channel name instead of the message author's name
@@ -997,7 +1001,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
 
   const handleStartEdit = (msg) => {
     if (!msg) return;
-    const targetId = msg.id || msg._serverId || null;
+    const targetId = msg._serverId || msg.id || null;
     if (!targetId) return;
     setReplyTarget(null);
     setEditTarget({
@@ -1314,7 +1318,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     if (messageRefreshTimerRef.current) {
       window.clearTimeout(messageRefreshTimerRef.current);
     }
-    const { delayMs, tailDelta, ...loadOptions } = options;
+    const { delayMs, tailDelta, coverLoaded, ...loadOptions } = options;
     const refreshDelayMs = Number.isFinite(Number(delayMs))
       ? Math.max(0, Number(delayMs))
       : 280;
@@ -1358,6 +1362,16 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       void loadMessages(chatId, {
         silent: true,
         preserveHistory: true,
+        // After a break: read as far back as the chat is loaded, so a reaction
+        // or an edit on an old row is caught up too.
+        ...(coverLoaded && !loadOptions.limit
+          ? {
+              limit: catchUpLimit(
+                messagesRef.current?.length,
+                CHAT_PAGE_CONFIG.messageFetchLimit,
+              ),
+            }
+          : {}),
         ...loadOptions,
         ...(deltaOptions || {}),
       });
@@ -3479,7 +3493,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   );
 
   async function performDeleteMessage(message, scope = "self") {
-    const messageId = normalizeUuid(message?.id || message?._serverId) || null;
+    const messageId = serverIdOfMessage(message);
     if (!activeChatId || !messageId || !user?.username) return;
     setMessageDeleteScopeOpen(false);
     setPendingDeleteMessage(null);
@@ -3511,6 +3525,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       if (!res.ok) {
         throw new Error(data?.error || "Unable to delete message.");
       }
+      forgetPinnedMessages(activeChatId, [messageId]);
       await loadChats({ silent: true });
     } catch (error) {
       // Restore the optimistically removed message on failure
@@ -4517,6 +4532,8 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       setIsUpdatingChats(true);
     }
     try {
+      // The pins in the answer are those of the moment the server read them.
+      const pinsVersionAtRequest = getPinnedChatListVersion();
       const res = await listChatsForUser(user.username, {
         cache: "no-store",
         signal: controller.signal,
@@ -4601,7 +4618,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         return bTime - aTime;
       });
       const normalizeFetchedChats = (prevChats = []) =>
-        merged
+        withNewestChatPins(merged, pinsVersionAtRequest)
           .map((chat) => {
             const isActiveChat =
               activeChatIdRef.current && chat?.id &&

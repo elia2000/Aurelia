@@ -18,12 +18,20 @@ export function createThrottle({ windowMs, max, now = () => Date.now() }) {
   };
 
   return {
-    /** Records one attempt. Returns false (and records nothing) when over the limit. */
-    take(key) {
+    /**
+     * Records one attempt, or `cost` of them for work that is worth more than
+     * one (a request that creates many messages). Returns false, and records
+     * nothing, when the whole cost does not fit in what is left.
+     */
+    take(key, cost = 1) {
+      let units = Number(cost);
+      if (!Number.isFinite(units) || units < 0) units = 1;
+      units = Math.ceil(units);
+      if (units === 0) return true;
       const at = now();
       const fresh = prune(key, at);
-      if (fresh.length >= max) return false;
-      fresh.push(at);
+      if (fresh.length + units > max) return false;
+      for (let i = 0; i < units; i += 1) fresh.push(at);
       hits.set(key, fresh);
       if (hits.size > 10_000) {
         for (const other of hits.keys()) prune(other, at);

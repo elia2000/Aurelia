@@ -11,6 +11,11 @@ vi.mock("../../../src/utils/toast.js", () => ({ showToast: vi.fn() }));
 import { reorderPinnedChats, setChatPinned } from "../../../src/api/pinsApi.js";
 import { useChatPins } from "../../../src/hooks/chat/useChatPins.js";
 import { getPinnedChatIds } from "../../../src/utils/chatPins.js";
+import {
+  getPinnedChatListVersion,
+  resetPinnedChatListTracker,
+  withNewestChatPins,
+} from "../../../src/utils/chatPinsTracker.js";
 import { setPinLimits } from "../../../src/utils/pinLimits.js";
 import { showToast } from "../../../src/utils/toast.js";
 
@@ -31,6 +36,7 @@ const order = (hook) => getPinnedChatIds(hook.result.current.chats);
 const expectOrder = (hook, ids) => vi.waitFor(() => expect(order(hook)).toEqual(ids));
 
 beforeEach(() => {
+  resetPinnedChatListTracker();
   vi.mocked(setChatPinned).mockReset();
   vi.mocked(reorderPinnedChats).mockReset();
   vi.mocked(showToast).mockReset();
@@ -103,6 +109,40 @@ describe("useChatPins - pin and unpin", () => {
     expect(setChatPinned).not.toHaveBeenCalled();
     await expectOrder(hook, []);
     expect(showToast).toHaveBeenCalledWith(expect.stringMatching(/offline/i));
+  });
+});
+
+describe("useChatPins - a slower answer of the chat list", () => {
+  // GET /api/chats read the pins before the person pinned: it must not undo the pin.
+  const staleAnswer = () => [chat(1), chat(2), chat(3)];
+
+  test("a pin made after a chat-list request left survives its answer", async () => {
+    vi.mocked(setChatPinned).mockResolvedValue(reply(200, { pins: list(3) }));
+    const hook = await harness([chat(1), chat(2), chat(3)]);
+    const requestLeft = getPinnedChatListVersion();
+    await hook.result.current.setPinned(id(3), true);
+    await expectOrder(hook, [id(3)]);
+    const arrived = withNewestChatPins(staleAnswer(), requestLeft);
+    expect(getPinnedChatIds(arrived)).toEqual([id(3)]);
+  });
+
+  test("the optimistic list counts too, before the server has answered", async () => {
+    vi.mocked(setChatPinned).mockImplementation(() => new Promise(() => {}));
+    const hook = await harness([chat(1), chat(2), chat(3)]);
+    const requestLeft = getPinnedChatListVersion();
+    void hook.result.current.setPinned(id(2), true);
+    await vi.waitFor(() => expect(order(hook)).toEqual([id(2)]));
+    expect(getPinnedChatIds(withNewestChatPins(staleAnswer(), requestLeft))).toEqual([id(2)]);
+  });
+
+  test("a refused pin is remembered as the list that was put back", async () => {
+    vi.mocked(setChatPinned).mockResolvedValue(reply(409, { code: "pin_limit", max: 1, error: "x" }));
+    const hook = await harness([chat(1, { pinned: true, pinPosition: 0 }), chat(2)]);
+    const requestLeft = getPinnedChatListVersion();
+    await hook.result.current.setPinned(id(2), true);
+    await expectOrder(hook, [id(1)]);
+    const arrived = [chat(1), chat(2, { pinned: true, pinPosition: 0 })];
+    expect(getPinnedChatIds(withNewestChatPins(arrived, requestLeft))).toEqual([id(1)]);
   });
 });
 

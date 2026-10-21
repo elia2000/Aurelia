@@ -91,7 +91,7 @@ export default function PinnedMessageBar({
         onClick={go}
         aria-label={`${pinBarTitle(current, count)}: ${preview.sender ? `${preview.sender}, ` : ""}${preview.text}. Go to the message`}
         contextMenu={{ isMobile: isTouch, disabled: !onOpenContextMenu, onOpen: openMenu }}
-        className="group flex min-w-0 flex-1 cursor-pointer items-center gap-3 py-1.5 ps-4 pe-2 text-start transition hover:bg-emerald-50/70 focus-visible:bg-emerald-50 focus-visible:outline-hidden dark:hover:bg-emerald-500/10 dark:focus-visible:bg-emerald-500/10"
+        className="group flex min-w-0 flex-1 cursor-pointer items-center gap-3 py-1.5 ps-4 pe-2 text-start transition hover:bg-emerald-50/70 focus-visible:bg-emerald-50 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-500 dark:hover:bg-emerald-500/10 dark:focus-visible:bg-emerald-500/10"
       >
         <span
           aria-hidden="true"
@@ -154,7 +154,7 @@ export default function PinnedMessageBar({
             }
             onUnpin?.(pin.messageId);
           }}
-          className="inline-flex w-11 shrink-0 items-center justify-center text-slate-500 transition hover:text-rose-600 focus-visible:text-rose-600 focus-visible:outline-hidden disabled:cursor-not-allowed disabled:opacity-50 dark:text-slate-400 dark:hover:text-rose-300 dark:focus-visible:text-rose-300"
+          className="inline-flex w-11 shrink-0 items-center justify-center text-slate-500 transition hover:text-rose-600 focus-visible:text-rose-600 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-slate-400 dark:hover:text-rose-300 dark:focus-visible:text-rose-300"
         >
           <Close size={18} />
         </button>

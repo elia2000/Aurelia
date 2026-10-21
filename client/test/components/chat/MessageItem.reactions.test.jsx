@@ -129,13 +129,29 @@ describe("MessageItem - double click puts a heart on the message (mouse)", () =>
     expect(burst()).toBeNull();
   });
 
-  test("the word the double click selected is let go: the reaction is what was meant", async () => {
-    render(<MessageItem {...BASE_PROPS} onReply={vi.fn()} msg={makeMsg()} />);
+  test("a double click that selected a word keeps the word and is not a reaction (so it can be copied)", async () => {
+    const onReply = vi.fn();
+    render(<MessageItem {...BASE_PROPS} onReply={onReply} msg={makeMsg()} />);
     await expect.element(page.getByText("Hello world from Bob")).toBeInTheDocument();
     selectText(bubbleEl().querySelector(".sb-markdown").firstChild, 0, 5);
     fire(bubbleEl(), "dblclick");
+    await wait(30);
+    expect(api.reactToMessage).not.toHaveBeenCalled();
+    expect(onReply).not.toHaveBeenCalled();
+    expect(String(window.getSelection())).toBe("Hello");
+  });
+
+  test("a selection somewhere else on the page does not stop the heart", async () => {
+    render(
+      <>
+        <p id="elsewhere">some other text</p>
+        <MessageItem {...BASE_PROPS} onReply={vi.fn()} msg={makeMsg()} />
+      </>,
+    );
+    await expect.element(page.getByText("Hello world from Bob")).toBeInTheDocument();
+    selectText(document.getElementById("elsewhere").firstChild, 0, 4);
+    fire(bubbleEl(), "dblclick");
     await vi.waitFor(() => expect(api.reactToMessage).toHaveBeenCalledTimes(1));
-    expect(String(window.getSelection())).toBe("");
   });
 
   test("a double click on a link is not a reaction", async () => {

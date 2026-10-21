@@ -27,6 +27,7 @@ import { createMessageDeleteService } from "../lib/services/messageDeleteService
 import {
   FORWARD_MAX_CREATED_MESSAGES,
   FORWARD_MAX_TARGET_CHATS,
+  FORWARD_MESSAGES_PER_MINUTE,
   commonFailureStatus,
   parseMessageIdList,
 } from "../lib/batchMessages.js";
@@ -170,9 +171,13 @@ function registerMessageRoutes(app, deps) {
   // handles each message whichever way it was asked for (lib/services).
   const forwardService = createMessageForwardService(deps, { computeTextExpiryIso });
   const deleteService = createMessageDeleteService(deps);
-  // Limits are per signed-in person, one token per request however many
-  // messages it names (see lib/throttle.js).
+  // Limits are per signed-in person (see lib/throttle.js). Deleting costs a
+  // token per request: it can only hide or delete what the person may already
+  // delete. Forwarding also costs a token per request, and in addition the
+  // messages it creates count against a budget, because every one of them is
+  // delivered to every member of the target chat.
   const forwardThrottle = createThrottle({ windowMs: 60 * 1000, max: 30 });
+  const forwardBudget = createThrottle({ windowMs: 60 * 1000, max: FORWARD_MESSAGES_PER_MINUTE });
   const deleteThrottle = createThrottle({ windowMs: 60 * 1000, max: 120 });
 
   const canUserPostInChat = async (chatId, userId, chat = null) => {
@@ -2197,6 +2202,11 @@ function registerMessageRoutes(app, deps) {
       }
       if (!forwardThrottle.take(String(user.id))) {
         return res.status(429).json({ error: "Too many forward requests. Please slow down." });
+      }
+      if (!forwardBudget.take(String(user.id), sourceIds.length * uniqueTargetChatIds.length)) {
+        return res.status(429).json({
+          error: "Too many messages forwarded in a short time. Please wait a moment.",
+        });
       }
 
       const outcome = await forwardService.forward({

@@ -303,7 +303,9 @@ describe("POST /api/messages with savedGifId", () => {
     });
 
     test("not enough free space on the server", async () => {
-      const { send, created, storage } = await setup({ deps: { hasEnoughFreeDiskSpace: () => false } });
+      // (saving the GIF in the first place is held to the same check, so the space runs out afterwards)
+      const { send, created, storage, deps } = await setup();
+      deps.hasEnoughFreeDiskSpace = () => false;
       const res = await send("alice", {});
       expect(res.status).toBe(400);
       expect(res.body).toEqual({ error: "Not enough free storage space on server." });

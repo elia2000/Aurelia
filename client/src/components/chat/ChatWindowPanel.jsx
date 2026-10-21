@@ -31,6 +31,7 @@ import {
   useFloatingDayChip,
 } from "./index.js";
 import ContextMenuSurface from "../context-menu/ContextMenuSurface.jsx";
+import { useMessageRowNavigation } from "../../hooks/chat/useMessageRowNavigation.js";
 import { useReactionSlots } from "../../hooks/chat/useReactionSlots.js";
 import { useBatchSelection } from "../../hooks/chat/useBatchSelection.js";
 import SelectionBar from "./selection/SelectionBar.jsx";
@@ -1063,6 +1064,14 @@ export default function ChatWindowPanel({
     onDelete: onDeleteMessages,
   });
 
+  // Keyboard: Tab reaches the list at one row; the arrow keys move between rows.
+  const rowNav = useMessageRowNavigation({
+    chatId: activeChatId,
+    scrollRef: chatScrollRef,
+    messages,
+    enabled: !batch.active,
+  });
+
   const renderMessageItem = (msg, options = {}) => (
     <MessageItem
       msg={msg}
@@ -1071,6 +1080,7 @@ export default function ChatWindowPanel({
       selectionMode={batch.active}
       isSelected={batch.isSelected(getMessageKey(msg))}
       isSelectionTabStop={batch.tabStopKey === getMessageKey(msg)}
+      isRowTabStop={rowNav.tabStopKey === getMessageKey(msg)}
       onToggleSelect={batch.toggle}
       isOffline={isOffline}
       sseConnected={sseConnected}

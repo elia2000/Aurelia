@@ -63,6 +63,7 @@ export function useResumeRefresh({
       scheduleMessageRefreshRef.current?.(activeId, {
         delayMs: 120,
         preserveHistory: true,
+        coverLoaded: true,
       });
     }
   }, [

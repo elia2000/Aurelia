@@ -119,8 +119,8 @@ export default function GifsPanel({
   const [menu, setMenu] = useState(null);
 
   useEffect(() => {
-    if (state.status === "idle") void store.load();
-  }, [state.status, store]);
+    if (state.status === "idle" || state.stale) void store.load();
+  }, [state.status, state.stale, store]);
 
   useEffect(() => {
     onMenuOpenChange?.(Boolean(menu));

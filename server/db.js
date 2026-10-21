@@ -2680,7 +2680,9 @@ function buildCallMessageRow(args, id, createdAt) {
 }
 
 function createCallMessageSqlite(args) {
-  const id = generateUuid();
+  // An ordered id, like every other message (see createMessage): a call that
+  // ends within the second of the messages around it keeps its place.
+  const id = generateOrderedUuid();
   const createdAt = new Date().toISOString().replace("T", " ").slice(0, 19);
   const savepoint = `sp_call_msg_${crypto.randomBytes(4).toString("hex")}`;
   runWithoutSave(`SAVEPOINT ${savepoint}`);
@@ -2719,7 +2721,7 @@ function createCallMessageSqlite(args) {
 }
 
 async function createCallMessagePostgres(args) {
-  const id = generateUuid();
+  const id = generateOrderedUuid();
   const createdAt = new Date().toISOString().replace("T", " ").slice(0, 19);
   return dbKnex.transaction(async (trx) => {
     // A second request for the same call waits here for the first one to

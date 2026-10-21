@@ -14,9 +14,9 @@ Reactions work in direct chats, groups and channels, in the browser and in the i
 |---|---|
 | Pick a reaction | **Right-click** the message (mouse) or **press and hold** it (touch). A row of seven quick reactions (👍 ❤️ 🔥 🥰 👏 😁 🤔) appears above the menu. Tap one. |
 | Use any other emoji | Press **+** at the end of the quick row to open the full emoji picker. |
-| Send a heart quickly | **Double-click** the message (mouse) or **double-tap** it (touch). Do it again to take your heart back. |
+| Send a heart quickly | **Double-click** the message (mouse) or **double-tap** it (touch). Do it again to take your heart back. A double-click on a word of the text selects that word instead, so it can be copied; double-click the bubble's padding, the time or a picture to send the heart. |
 | Change or remove your reaction | Tap a chip. Tapping the chip you used takes it off. The quick row highlights the reactions you already have. |
-| Use the keyboard | Focus a message and press the **Menu** key (or **Shift+F10**). Press **Up** from the first menu item to reach the quick row, move with **Left**/**Right**, and press **Enter**. Chips are buttons: reach them with **Tab** and press **Enter**. |
+| Use the keyboard | Press **Tab** to reach the messages, move between them with **Up**/**Down**, and press the **Menu** key (or **Shift+F10**) on one. Press **Up** from the first menu item to reach the quick row, move with **Left**/**Right**, and press **Enter**. Chips are buttons: reach them with **Tab** and press **Enter**. |
 
 A reaction appears at once. If the server refuses it (too many reactions in a short time, or the message was deleted) it is taken back and a short notice appears at the bottom of the chat.
 

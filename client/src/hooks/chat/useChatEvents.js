@@ -12,6 +12,7 @@ import {
 } from "../../utils/reactionStore.js";
 import { savedGifs } from "../../gifs/savedGifsStore.js";
 import { applyPinnedList } from "../../utils/chatPins.js";
+import { notePinnedChatList } from "../../utils/chatPinsTracker.js";
 import { isPinServiceMessage } from "../../utils/messagePins.js";
 import {
   PIN_EVENT_TYPES,
@@ -213,17 +214,24 @@ export function useChatEvents({
         setSseConnected(true);
         reconnectAttempts = 0;
         // Events sent while the connection was down are gone (a reaction, a
-        // new message): read the open chat again to catch up.
-        if (hasBeenConnected && activeChatIdRef.current) {
-          scheduleMessageRefreshRef.current?.(activeChatIdRef.current, {
-            delayMs: 150,
-            preserveHistory: true,
-          });
+        // new message, a pin made on another device): read the open chat, as
+        // far back as it is loaded, and the chat list again to catch up.
+        const reconnected = hasBeenConnected;
+        if (reconnected) {
+          savedGifs.invalidate();
+          scheduleLoadChats();
+          if (activeChatIdRef.current) {
+            scheduleMessageRefreshRef.current?.(activeChatIdRef.current, {
+              delayMs: 150,
+              preserveHistory: true,
+              coverLoaded: true,
+            });
+          }
         }
         hasBeenConnected = true;
         // Events sent while the connection was down are gone (a call invite
         // cannot be replayed), so let interested parts of the app catch up.
-        window.dispatchEvent(new Event(REALTIME_OPEN_EVENT));
+        window.dispatchEvent(new CustomEvent(REALTIME_OPEN_EVENT, { detail: { reconnected } }));
       };
 
       const handleMessageData = (dataStr) => {
@@ -262,6 +270,7 @@ export function useChatEvents({
         // The person's own pinned chats, on every device: the full list replaces ours.
         if (payload.type === "chat_pins_changed") {
           if (Array.isArray(payload.pinned)) {
+            notePinnedChatList(payload.pinned);
             setChats((prev) => applyPinnedList(prev, payload.pinned));
           }
           return;

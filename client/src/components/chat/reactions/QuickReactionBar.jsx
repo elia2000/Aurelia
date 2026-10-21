@@ -10,6 +10,8 @@ const EmojiPicker = lazy(() => import("../emoji/EmojiPicker.jsx"));
 
 const GAP = 6;
 const EDGE = 12;
+/** The space between the bar and the menu card it sits on. */
+export const QUICK_BAR_GAP = GAP;
 
 /**
  * The row of quick reactions above the message menu: seven emoji and a plus
@@ -18,7 +20,8 @@ const EDGE = 12;
  *
  * `anchorRef` is the menu card the bar sits on and `anchorPos` ({ x, y }) where
  * its top left corner is (it is measured by size only: the card is still
- * growing in when the bar is placed); `measureKey` changes each time the menu
+ * growing in when the bar is placed); `anchorMaxHeight` is the card's height
+ * limit when it had to be shortened (a short window); `measureKey` changes each time the menu
  * opens, so the bar is placed again even at the same spot. `onPickerChange(open)` lets the menu hide
  * behind the picker, and `onLeave("up" | "down")` hands the arrow keys back to
  * the menu.
@@ -28,6 +31,7 @@ export default function QuickReactionBar({
   messageId,
   anchorRef,
   anchorPos,
+  anchorMaxHeight = null,
   measureKey,
   onDone,
   onPickerChange,
@@ -64,7 +68,7 @@ export default function QuickReactionBar({
           ? below
           : Math.max(EDGE, above);
     setPosition({ left, top, bottom: top + height });
-  }, [anchorRef, anchorPos?.x, anchorPos?.y, measureKey, pickerOpen]);
+  }, [anchorRef, anchorPos?.x, anchorPos?.y, anchorMaxHeight, measureKey, pickerOpen]);
 
   const react = useCallback(
     (emoji) => {
@@ -132,7 +136,7 @@ export default function QuickReactionBar({
               aria-pressed={reacted}
               data-quick-reaction={emoji}
               onClick={() => react(emoji)}
-              className={`inline-flex h-9 w-9 items-center justify-center rounded-full outline-none transition duration-150 hover:scale-110 hover:bg-emerald-100 focus-visible:ring-2 focus-visible:ring-emerald-400 dark:hover:bg-emerald-500/20 ${
+              className={`inline-flex h-9 w-9 max-[345px]:h-8 max-[345px]:w-8 items-center justify-center rounded-full outline-none transition duration-150 hover:scale-110 hover:bg-emerald-100 focus-visible:ring-2 focus-visible:ring-emerald-400 dark:hover:bg-emerald-500/20 ${
                 reacted ? "bg-emerald-100 ring-1 ring-emerald-400 dark:bg-emerald-500/25" : ""
               }`}
             >
@@ -147,7 +151,7 @@ export default function QuickReactionBar({
           aria-haspopup="dialog"
           data-quick-reaction-more
           onClick={() => setPicker(!pickerOpen)}
-          className="inline-flex h-9 w-9 items-center justify-center rounded-full text-slate-500 outline-none transition duration-150 hover:bg-emerald-100 focus-visible:ring-2 focus-visible:ring-emerald-400 dark:text-slate-300 dark:hover:bg-emerald-500/20"
+          className="inline-flex h-9 w-9 max-[345px]:h-8 max-[345px]:w-8 items-center justify-center rounded-full text-slate-500 outline-none transition duration-150 hover:bg-emerald-100 focus-visible:ring-2 focus-visible:ring-emerald-400 dark:text-slate-300 dark:hover:bg-emerald-500/20"
         >
           <Plus size={18} />
         </button>

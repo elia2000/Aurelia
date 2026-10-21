@@ -217,6 +217,48 @@ describe("useChatEvents - after a reconnect", () => {
     expect(refresh).toHaveBeenCalledWith(CHAT, expect.objectContaining({ preserveHistory: true }));
   });
 
+  test("the catch-up covers every message that is loaded, not only the newest page", async () => {
+    vi.useFakeTimers();
+    await start();
+    socket().open();
+    socket().drop();
+    vi.advanceTimersByTime(5000);
+    socket().open();
+    vi.advanceTimersByTime(500);
+    expect(refresh).toHaveBeenCalledWith(CHAT, expect.objectContaining({ coverLoaded: true }));
+  });
+
+  test("a reconnection reads the chat list again (pins and the like changed on another device); the first connection does not", async () => {
+    vi.useFakeTimers();
+    await start();
+    socket().open();
+    vi.advanceTimersByTime(2000);
+    expect(params.loadChatsRef.current).not.toHaveBeenCalled();
+    socket().drop();
+    vi.advanceTimersByTime(5000);
+    socket().open();
+    vi.advanceTimersByTime(2000);
+    expect(params.loadChatsRef.current).toHaveBeenCalledTimes(1);
+    expect(params.loadChatsRef.current).toHaveBeenCalledWith({ silent: true });
+  });
+
+  test("everyone who listens is told whether this is a reconnection", async () => {
+    vi.useFakeTimers();
+    const seen = [];
+    const listener = (event) => seen.push(event.detail?.reconnected);
+    window.addEventListener("aurelle:realtime-open", listener);
+    try {
+      await start();
+      socket().open();
+      socket().drop();
+      vi.advanceTimersByTime(5000);
+      socket().open();
+      expect(seen).toEqual([false, true]);
+    } finally {
+      window.removeEventListener("aurelle:realtime-open", listener);
+    }
+  });
+
   test("with no chat open there is nothing to read", async () => {
     vi.useFakeTimers();
     await start({ activeChatIdRef: { current: null } });
@@ -225,5 +267,16 @@ describe("useChatEvents - after a reconnect", () => {
     vi.advanceTimersByTime(5000);
     socket().open();
     expect(refresh).not.toHaveBeenCalled();
+  });
+
+  test("with no chat open the chat list is still read again", async () => {
+    vi.useFakeTimers();
+    await start({ activeChatIdRef: { current: null } });
+    socket().open();
+    socket().drop();
+    vi.advanceTimersByTime(5000);
+    socket().open();
+    vi.advanceTimersByTime(2000);
+    expect(params.loadChatsRef.current).toHaveBeenCalledTimes(1);
   });
 });

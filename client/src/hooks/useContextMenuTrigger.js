@@ -47,7 +47,7 @@ const RELEASE_CLICK_MAX_WAIT_MS = 15000;
 // Only one finger opens a menu at a time, so one guard is enough.
 let stopActiveReleaseGuard = null;
 
-function swallowReleaseClick(surface) {
+export function swallowReleaseClick(surface) {
   if (typeof window === "undefined") return;
   stopActiveReleaseGuard?.();
   let expiresAt = Infinity;

@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import QuickReactionBar from "../chat/reactions/QuickReactionBar.jsx";
-
-const SCREEN_GAP = 12;
+import QuickReactionBar, { QUICK_BAR_GAP } from "../chat/reactions/QuickReactionBar.jsx";
+import { MENU_SCREEN_GAP as SCREEN_GAP, placeMenuCard } from "../../utils/menuPlacement.js";
 
 // A right click outside the open menu closes it and opens the menu of whatever
 // is under the cursor, so the user can jump from one message to another
@@ -29,6 +28,8 @@ export default function AppContextMenu({ menu, onClose }) {
   const menuRef = useRef(null);
   const [desktopPosition, setDesktopPosition] = useState({ x: 0, y: 0 });
   const [verticalPlacement, setVerticalPlacement] = useState("below");
+  // In a window too short for the card and the reaction bar the card scrolls.
+  const [cardMaxHeight, setCardMaxHeight] = useState(null);
   // The focused item belongs to the menu it was set for: a menu that opens
   // after another one starts on its first item, not on the item number the
   // last menu ended on (a stale index would focus, and Enter would pick, an
@@ -43,8 +44,16 @@ export default function AppContextMenu({ menu, onClose }) {
       }),
     [menu],
   );
-  // The reaction bar's "+" opens the emoji picker over the menu.
-  const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
+  // The reaction bar's "+" opens the emoji picker over the menu. Like the
+  // focused item it belongs to the menu it was opened for: the next menu must
+  // not start hidden behind a picker that is already gone (a hidden card
+  // cannot take focus, so the keyboard would never reach its first item).
+  const [pickerState, setPickerState] = useState({ menu: null, open: false });
+  const reactionPickerOpen = Boolean(menu) && pickerState.menu === menu && pickerState.open;
+  const setReactionPickerOpen = useCallback(
+    (open) => setPickerState({ menu, open: Boolean(open) }),
+    [menu],
+  );
   // The finger that opened the menu with a long press can still produce a click
   // when it lifts, and that click lands on the backdrop. Only a press that
   // started on the backdrop (or a keyboard activation) closes the menu.
@@ -53,7 +62,6 @@ export default function AppContextMenu({ menu, onClose }) {
   useEffect(() => {
     if (!menu) return undefined;
     backdropPressedRef.current = false;
-    setReactionPickerOpen(false);
     // When the menu goes away, give focus back to what had it (a message row
     // opened from the keyboard), unless that was a text field (a phone would
     // pop its keyboard up) or the chosen action already moved focus elsewhere.
@@ -87,6 +95,8 @@ export default function AppContextMenu({ menu, onClose }) {
       } catch {
         target.focus();
       }
+      // A card that scrolls (short window) shows the item the keys moved to.
+      target.scrollIntoView?.({ block: "nearest" });
     }
   }, [focusedIndex, menu]);
 
@@ -177,18 +187,27 @@ export default function AppContextMenu({ menu, onClose }) {
 
   useLayoutEffect(() => {
     if (!menu || !menuRef.current || typeof window === "undefined") return;
-    const rect = menuRef.current.getBoundingClientRect();
+    const card = menuRef.current;
+    const rect = card.getBoundingClientRect();
     const nextX = Math.min(
       Math.max(SCREEN_GAP, Number(menu.point?.x || 0)),
       window.innerWidth - rect.width - SCREEN_GAP,
     );
-    const preferY = Number(menu.point?.y || 0);
-    const fitsBelow = preferY + rect.height + SCREEN_GAP <= window.innerHeight;
-    const nextY = fitsBelow
-      ? preferY
-      : Math.max(SCREEN_GAP, preferY - rect.height);
-    setDesktopPosition({ x: nextX, y: nextY });
-    setVerticalPlacement(fitsBelow ? "below" : "above");
+    // The height the whole card would have (layout sizes: unlike the rect they
+    // ignore the opening animation's scale, and ignore a max-height set before).
+    const cardHeight = card.scrollHeight + (card.offsetHeight - card.clientHeight);
+    // The quick reaction bar needs room next to the card.
+    const bar = card.parentElement?.querySelector("[data-reaction-bar]");
+    const reserveTop = bar ? bar.offsetHeight + QUICK_BAR_GAP : 0;
+    const placed = placeMenuCard({
+      pointY: Number(menu.point?.y || 0),
+      cardHeight,
+      reserveTop,
+      viewportHeight: window.innerHeight,
+    });
+    setDesktopPosition({ x: nextX, y: placed.y });
+    setVerticalPlacement(placed.below ? "below" : "above");
+    setCardMaxHeight(placed.scrolls ? placed.maxHeight : null);
   }, [menu]);
 
   if (!menu || typeof document === "undefined") return null;
@@ -226,7 +245,7 @@ export default function AppContextMenu({ menu, onClose }) {
         ref={menuRef}
         role="menu"
         aria-label="Context menu"
-        className={`fixed overflow-hidden rounded-[1.25rem] border border-slate-300/80 bg-white text-slate-900 shadow-[0_18px_46px_rgba(15,23,42,0.2)] dark:border-white/10 dark:bg-slate-800 dark:text-slate-100 ${
+        className={`fixed overflow-y-auto overflow-x-hidden overscroll-contain rounded-[1.25rem] border border-slate-300/80 bg-white text-slate-900 shadow-[0_18px_46px_rgba(15,23,42,0.2)] dark:border-white/10 dark:bg-slate-800 dark:text-slate-100 ${
           verticalPlacement === "below"
             ? "sb-context-menu-open-down"
             : "sb-context-menu-open-up"
@@ -236,6 +255,7 @@ export default function AppContextMenu({ menu, onClose }) {
           left: `${desktopPosition.x}px`,
           minWidth: "220px",
           maxWidth: "280px",
+          maxHeight: cardMaxHeight ? `${cardMaxHeight}px` : undefined,
           visibility: reactionPickerOpen ? "hidden" : undefined,
           transformOrigin:
             verticalPlacement === "below" ? "top left" : "bottom left",
@@ -285,6 +305,7 @@ export default function AppContextMenu({ menu, onClose }) {
           messageId={menu.reactions.messageId}
           anchorRef={menuRef}
           anchorPos={desktopPosition}
+          anchorMaxHeight={cardMaxHeight}
           measureKey={menu}
           onDone={onClose}
           onPickerChange={setReactionPickerOpen}

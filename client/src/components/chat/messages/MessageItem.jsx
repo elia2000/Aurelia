@@ -204,6 +204,8 @@ export const MessageItem = memo(function MessageItem({
   selectionMode = false,
   isSelected = false,
   isSelectionTabStop = false,
+  // The one message row of the chat that Tab reaches (see useMessageRowNavigation).
+  isRowTabStop = false,
   // (msg, { shiftKey, ctrlKey }) => void
   onToggleSelect = null,
 }) {
@@ -1292,7 +1294,7 @@ export const MessageItem = memo(function MessageItem({
 
   return (
     <div
-      id={`message-${msg.id}`}
+      id={`message-${msg._serverId || msg.id}`}
       data-msg-day={dayLabel}
       data-msg-day-key={msg?._dayKey || ""}
       style={{ scrollMarginTop: "96px" }}
@@ -1334,8 +1336,8 @@ export const MessageItem = memo(function MessageItem({
           as="div"
           data-message-row
           data-message-key={messageIdentity}
-          tabIndex={-1}
-          className={`group/row relative flex w-full max-w-full items-end gap-2 outline-none ${
+          tabIndex={isRowTabStop ? 0 : -1}
+          className={`group/row relative flex w-full max-w-full items-end gap-2 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-400 ${
             selectionMode ? "ps-12 pe-2 md:pe-4" : "px-2 md:px-4"
           } ${
             isOwn ? "justify-end" : "justify-start"
@@ -1594,7 +1596,7 @@ export const MessageItem = memo(function MessageItem({
               />
             </div>
             {/* Room under the bubble for reaction chips. */}
-            <div data-slot="reactions" className="empty:hidden">
+            <div data-slot="reactions" className="empty:hidden" inert={selectionMode}>
               {reactionsSlot}
             </div>
             {isChannelChat && typeof onForwardMessage === "function" ? (
@@ -1623,6 +1625,7 @@ export const MessageItem = memo(function MessageItem({
   if (prev.selectionMode !== next.selectionMode) return false;
   if (prev.isSelected !== next.isSelected) return false;
   if (prev.isSelectionTabStop !== next.isSelectionTabStop) return false;
+  if (prev.isRowTabStop !== next.isRowTabStop) return false;
   if (prev.onToggleSelect !== next.onToggleSelect) return false;
   if (prev.reactionsSlot !== next.reactionsSlot) return false;
   if (prev.callPeer !== next.callPeer) return false;

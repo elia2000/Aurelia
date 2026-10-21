@@ -297,6 +297,8 @@ describe("MessageItem - menu and selected text", () => {
   });
 });
 
+// (No chatId here: a message that cannot take a reaction, so a double click replies.
+// For one that can, it is a heart: MessageItem.reactions.test.jsx.)
 describe("MessageItem - double click and drag selections", () => {
   test("double click on empty bubble space replies", async () => {
     const onReply = vi.fn();

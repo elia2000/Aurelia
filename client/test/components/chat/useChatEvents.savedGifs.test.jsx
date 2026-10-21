@@ -1,5 +1,12 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook } from "vitest-browser-react";
+vi.mock("../../../src/api/gifApi.js", () => ({
+  listSavedGifs: vi.fn(async () => ({ ok: true, status: 200, data: { gifs: [], limit: 50, count: 0 } })),
+  saveGifFromMessage: vi.fn(),
+  uploadSavedGif: vi.fn(),
+  deleteSavedGif: vi.fn(),
+}));
+
 import { useChatEvents } from "../../../src/hooks/chat/useChatEvents.js";
 import { savedGifs } from "../../../src/gifs/savedGifsStore.js";
 
@@ -11,6 +18,12 @@ class FakeSocket {
     FakeSocket.instances.push(this);
   }
   close() {}
+  open() {
+    this.onopen?.();
+  }
+  drop() {
+    this.onclose?.();
+  }
 }
 
 const GIF = {
@@ -75,6 +88,25 @@ describe("useChatEvents - the person's own saved GIFs", () => {
     });
     expect(savedGifs.getState().notice).toMatchObject({ removed: 1, limit: 50 });
     expect(savedGifs.getState().limit).toBe(50);
+  });
+
+  test("after a reconnection the collection is marked old (events sent while offline are gone)", async () => {
+    await savedGifs.load();
+    expect(savedGifs.getState().status).toBe("ready");
+    vi.useFakeTimers();
+    try {
+      const params = hookParams();
+      await renderHook(() => useChatEvents(params));
+      FakeSocket.instances.at(-1).open();
+      expect(savedGifs.getState().stale).toBe(false);
+      FakeSocket.instances.at(-1).drop();
+      vi.advanceTimersByTime(5000);
+      expect(FakeSocket.instances).toHaveLength(2);
+      FakeSocket.instances.at(-1).open();
+      expect(savedGifs.getState().stale).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("a save without evictions raises no notice", async () => {

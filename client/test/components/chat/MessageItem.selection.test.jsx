@@ -258,4 +258,14 @@ describe("MessageItem - selection mode", () => {
     await rerender(<MessageItem {...BASE_PROPS} msg={msg} />);
     expect(rowEl().getAttribute("role")).toBeNull();
   });
+
+  test("the reaction chips do nothing in selection mode (no list on a right click or a hold), and work again outside it", async () => {
+    const slot = <button type="button" data-testid="chip">chip</button>;
+    const { rerender } = await render(
+      <MessageItem {...BASE_PROPS} msg={makeMsg()} reactionsSlot={slot} selectionMode onToggleSelect={vi.fn()} />,
+    );
+    expect(document.querySelector("[data-slot='reactions']").inert).toBe(true);
+    await rerender(<MessageItem {...BASE_PROPS} msg={makeMsg()} reactionsSlot={slot} />);
+    expect(document.querySelector("[data-slot='reactions']").inert).toBe(false);
+  });
 });

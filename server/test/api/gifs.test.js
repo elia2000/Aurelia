@@ -689,6 +689,49 @@ describe("POST /api/gifs/upload (add from the device)", () => {
     expect(two.status).toBe(400);
   });
 
+  test("not enough free space on the server: nothing is stored (as for every other upload)", async () => {
+    const { as, storage, gifStore } = await setup({ deps: { hasEnoughFreeDiskSpace: () => false } });
+    const res = await upload(as, "alice", gif(3));
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "Not enough free storage space on server." });
+    expect(storage.calls.writeGif).toEqual([]);
+    expect(gifStore.rows).toEqual([]);
+  });
+
+  test("the free space asked for is the size of the file", async () => {
+    const asked = [];
+    const bytes = gif(3);
+    const { as } = await setup({ deps: { hasEnoughFreeDiskSpace: (n) => { asked.push(n); return true; } } });
+    expect((await upload(as, "alice", bytes)).status).toBe(201);
+    expect(asked).toEqual([bytes.length]);
+  });
+
+  test("a picture that is already saved needs no space", async () => {
+    const { as, deps } = await setup();
+    const bytes = gif(3);
+    expect((await upload(as, "alice", bytes)).status).toBe(201);
+    deps.hasEnoughFreeDiskSpace = () => false;
+    expect((await upload(as, "alice", bytes)).status).toBe(200);
+  });
+
+  test("saving from a message is held to the same free-space check", async () => {
+    const { as, addFile, storage, gifStore, deps } = await setup();
+    const file = addFile(MSG_ID, buildGif({ frames: 3 }));
+    deps.hasEnoughFreeDiskSpace = () => false;
+    const res = await as("alice").post("/api/gifs").send({ messageId: MSG_ID, fileId: file.id });
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "Not enough free storage space on server." });
+    expect(storage.calls.writeGif).toEqual([]);
+    expect(gifStore.rows).toEqual([]);
+  });
+
+  test("with remote storage there is no local disk to protect", async () => {
+    const { as } = await setup({
+      deps: { hasEnoughFreeDiskSpace: () => false, storageProvider: { type: "s3" } },
+    });
+    expect((await upload(as, "alice", gif(3))).status).toBe(201);
+  });
+
   test("saving the same file twice is a no-op", async () => {
     const { as, storage } = await setup({ settings: { MAX_SAVED_GIFS: 1 } });
     const bytes = gif(3);

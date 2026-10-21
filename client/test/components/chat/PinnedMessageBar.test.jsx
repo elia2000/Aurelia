@@ -43,6 +43,14 @@ describe("PinnedMessageBar", () => {
     expect(bar().getAttribute("role")).toBe("region");
   });
 
+  test("keyboard focus on the bar and on the unpin button shows a ring, not only a tint", async () => {
+    await render(<PinnedMessageBar pins={pinsOf(1)} canManage onUnpin={vi.fn()} onJump={vi.fn()} />);
+    const main = page.getByRole("button", { name: /Go to the message/ }).element();
+    const unpin = page.getByRole("button", { name: "Unpin message" }).element();
+    expect(main.className).toContain("focus-visible:ring-2");
+    expect(unpin.className).toContain("focus-visible:ring-2");
+  });
+
   test("a click goes to the shown message", async () => {
     const onJump = vi.fn();
     await render(<PinnedMessageBar pins={pinsOf(1)} onJump={onJump} />);

@@ -19,6 +19,7 @@ import { getMaxPinnedMessages, setPinLimits } from "../../src/utils/pinLimits.js
 import {
   applyRealtimePinEvent,
   bindPinStoreToUser,
+  forgetPinnedMessages,
   getChatPins,
   getChatPinsStatus,
   invalidateAllPins,
@@ -179,6 +180,16 @@ describe("loading the pins of a chat", () => {
     await loadChatPins(CHAT);
     invalidateAllPins();
     expect(getChatPinsStatus(CHAT)).toBe("ready");
+  });
+
+  test("but one that was read a moment ago is still invalidated when the connection came back after a break", async () => {
+    vi.mocked(listMessagePins).mockResolvedValue(reply(200, { pins: [rawPin(1)] }));
+    await loadChatPins(CHAT);
+    invalidateAllPins({ force: true });
+    expect(getChatPinsStatus(CHAT)).toBe("stale");
+    vi.mocked(listMessagePins).mockResolvedValue(reply(200, { pins: [rawPin(2), rawPin(1)] }));
+    await loadChatPins(CHAT);
+    expect(ids()).toEqual([id(2), id(1)]);
   });
 
   test("a list that failed to load is asked for again after a reconnect", async () => {
@@ -347,6 +358,53 @@ describe("realtime events", () => {
     refreshPinnedMessagePreview(CHAT, id(7));
     await vi.advanceTimersByTimeAsync(1000);
     expect(listMessagePins).not.toHaveBeenCalled();
+  });
+});
+
+describe("messages the person hid for themselves", () => {
+  beforeEach(async () => {
+    vi.mocked(listMessagePins).mockResolvedValue(reply(200, { pins: [rawPin(3), rawPin(2), rawPin(1)] }));
+    await loadChatPins(CHAT);
+    vi.mocked(listMessagePins).mockClear();
+  });
+
+  test("a hidden message leaves the list at once (the server sends no event for it)", () => {
+    forgetPinnedMessages(CHAT, [id(2)]);
+    expect(ids()).toEqual([id(3), id(1)]);
+    expect(getChatPinsStatus(CHAT)).toBe("ready");
+  });
+
+  test("several at once, subscribers hear about it once", () => {
+    const listener = vi.fn();
+    subscribeToChatPins(CHAT, listener);
+    forgetPinnedMessages(CHAT, [id(3), id(1), id(77)]);
+    expect(ids()).toEqual([id(2)]);
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  test("messages that are not pinned, bad ids and unknown chats change nothing", () => {
+    const listener = vi.fn();
+    subscribeToChatPins(CHAT, listener);
+    forgetPinnedMessages(CHAT, [id(77), "x", null]);
+    forgetPinnedMessages(CHAT, []);
+    forgetPinnedMessages(OTHER_CHAT, [id(1)]);
+    forgetPinnedMessages("x", [id(1)]);
+    expect(ids()).toEqual([id(3), id(2), id(1)]);
+    expect(listener).not.toHaveBeenCalled();
+    expect(getChatPinsStatus(OTHER_CHAT)).toBe("idle");
+  });
+
+  test("a read that was on its way before the hide is read again, not applied", async () => {
+    let release;
+    vi.mocked(listMessagePins)
+      .mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }))
+      .mockResolvedValueOnce(reply(200, { pins: [rawPin(3), rawPin(1)] }));
+    const reading = loadChatPins(CHAT, { force: true });
+    forgetPinnedMessages(CHAT, [id(2)]);
+    release(reply(200, { pins: [rawPin(3), rawPin(2), rawPin(1)] }));
+    await reading;
+    expect(listMessagePins).toHaveBeenCalledTimes(2);
+    expect(ids()).toEqual([id(3), id(1)]);
   });
 });
 

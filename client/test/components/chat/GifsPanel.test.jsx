@@ -47,6 +47,30 @@ describe("GifsPanel", () => {
     expect(document.querySelector('[data-testid="gif-panel"]').textContent).toContain("3/50");
   });
 
+  test("a list that went old while the picker was closed is read again when it opens", async () => {
+    const { store, api } = makeStore();
+    await store.load();
+    store.invalidate();
+    api.listSavedGifs.mockResolvedValueOnce(ok({ gifs: [gif(7)], limit: 50, count: 1 }));
+    render(<GifsPanel store={store} onSend={() => {}} isTouch={false} />);
+    await vi.waitFor(() =>
+      expect([...tiles()].map((el) => el.getAttribute("data-gif-id"))).toEqual(["gif-7"]),
+    );
+    expect(api.listSavedGifs).toHaveBeenCalledTimes(2);
+  });
+
+  test("a list that goes old while the picker is open is read again", async () => {
+    const { store, api } = makeStore();
+    render(<GifsPanel store={store} onSend={() => {}} isTouch={false} />);
+    await expect.element(page.getByRole("button", { name: "Send GIF 1" })).toBeInTheDocument();
+    api.listSavedGifs.mockResolvedValueOnce(ok({ gifs: [gif(8)], limit: 50, count: 1 }));
+    store.invalidate();
+    await vi.waitFor(() =>
+      expect([...tiles()].map((el) => el.getAttribute("data-gif-id"))).toEqual(["gif-8"]),
+    );
+    expect(api.listSavedGifs).toHaveBeenCalledTimes(2);
+  });
+
   test("takes the limit from the server, not from the code", async () => {
     const { store } = makeStore({ limit: 12 });
     render(<GifsPanel store={store} onSend={() => {}} isTouch={false} />);

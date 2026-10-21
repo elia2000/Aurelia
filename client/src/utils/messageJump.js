@@ -9,6 +9,14 @@ const FLASH_FALLBACK_MS = 900;
 // smooth scroll over thousands of pixels only makes the person wait.
 const SMOOTH_SCREENS = 1.5;
 
+const prefersReducedMotion = () => {
+  try {
+    return Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
+  } catch {
+    return false;
+  }
+};
+
 /** The row of a message on the page (its id is the server's message id). */
 export const getMessageElement = (messageId) =>
   typeof document === "undefined" || !messageId
@@ -33,8 +41,8 @@ export function jumpToLoadedMessage(messageId, scrollRoot = null) {
   const target = getMessageElement(messageId);
   if (!target) return false;
 
-  let behavior = "smooth";
-  if (scrollRoot) {
+  let behavior = prefersReducedMotion() ? "auto" : "smooth";
+  if (behavior === "smooth" && scrollRoot) {
     const distance = Math.abs(
       target.getBoundingClientRect().top - scrollRoot.getBoundingClientRect().top,
     );

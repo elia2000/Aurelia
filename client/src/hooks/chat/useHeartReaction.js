@@ -21,7 +21,8 @@ const isInteractive = (target) => target instanceof Element && Boolean(target.cl
 
 /**
  * Double click (mouse) and double tap (finger, pen) on a message put a heart
- * on it, or take mine off again, like Telegram's quick reaction.
+ * on it, or take mine off again, like Telegram's quick reaction. A double
+ * click that selected a word is left to the selection.
  *
  * Put `pointerHandlers` on the message row (a finger's pointer is captured by
  * the row while it swipes to reply, so the bubble never sees its pointerup)
@@ -48,14 +49,20 @@ export function useHeartReaction({ msg, chatId, enabled }) {
     (event) => {
       if (Date.now() - lastTouchAt.current < TOUCH_DBLCLICK_GUARD_MS) return true;
       if (isInteractive(event.target)) return false;
-      if (!react()) return false;
-      // The double click also selected a word: the reaction is what was meant.
+      // A double click on text selects a word, and that is what was meant (to
+      // copy it): the heart is for a double click that selected nothing, on
+      // the padding, the time or a picture.
       const bubble = event.currentTarget;
       const selection = window.getSelection?.();
-      if (selection?.rangeCount && bubble?.contains(selection.anchorNode)) {
-        selection.removeAllRanges();
+      if (
+        selection?.rangeCount &&
+        !selection.isCollapsed &&
+        String(selection).trim() &&
+        bubble?.contains(selection.anchorNode)
+      ) {
+        return false;
       }
-      return true;
+      return react();
     },
     [react],
   );

@@ -10,11 +10,19 @@ export const BATCH_MESSAGE_LIMIT = 100;
 export const FORWARD_MAX_TARGET_CHATS = 20;
 
 /**
- * The most messages one forward request may create (messages x chats). One
- * request costs one rate-limit token however big it is, so its size is bounded
- * here instead.
+ * The most messages one forward request may create (messages x chats). It is
+ * also what a person may create in a minute (FORWARD_MESSAGES_PER_MINUTE).
  */
 export const FORWARD_MAX_CREATED_MESSAGES = 500;
+
+/**
+ * How many forwarded messages one person may create in a minute (a request is
+ * charged for the messages it creates, see the route). It is one largest
+ * request a minute: a forward is a burst of messages every member of the
+ * target chats receives, and an ordinary send is limited to a few dozen a
+ * minute, so this bounds how fast one account can fill a chat.
+ */
+export const FORWARD_MESSAGES_PER_MINUTE = FORWARD_MAX_CREATED_MESSAGES;
 
 /**
  * Reads a list of message ids from a request: an array of 1 to `max` UUID

@@ -12,6 +12,7 @@ import {
 } from "../../utils/batchMessages.js";
 import { getMessageKey } from "../../utils/batchSelection.js";
 import { batchSelectionStore } from "../../utils/batchSelectionStore.js";
+import { forgetPinnedMessages } from "../../utils/pinStore.js";
 import { showToast } from "../../utils/toast.js";
 import { normalizeUuid } from "../../utils/uuidUtils.js";
 
@@ -221,6 +222,9 @@ export function useBatchMessageActions({
             }),
         );
         pruneCache?.(chatId, okIds);
+        // A message hidden for the person is gone from their pins as well, and
+        // the server says nothing about it.
+        forgetPinnedMessages(chatId, okIds);
         void reload?.({ silent: true });
       }
       const summary = summarizeDelete({

@@ -33,6 +33,9 @@ export const emptyState = (owner = null) => ({
   handledAdds: [],
   // A change arrived while the list was loading: ask again afterwards.
   dirty: false,
+  // The connection dropped and came back: events of that time are gone, so
+  // the list is read again the next time it is looked at.
+  stale: false,
   seq: 0,
 });
 
@@ -89,6 +92,7 @@ export function reduceList(state, payload) {
     limit: limitFrom(state, payload?.limit),
     count: count !== null ? count : gifs.length,
     error: "",
+    stale: false,
   };
 }
 
@@ -242,7 +246,7 @@ export function createSavedGifsStore({ api = gifApi, notify = notifyWithToast } 
   };
 
   const load = ({ force = false } = {}) => {
-    if (!force && state.status === "ready") return Promise.resolve();
+    if (!force && state.status === "ready" && !state.stale) return Promise.resolve();
     if (loadPromise) return loadPromise;
     const mine = generation;
     update((s) => ({
@@ -251,6 +255,7 @@ export function createSavedGifsStore({ api = gifApi, notify = notifyWithToast } 
       loading: true,
       error: "",
       dirty: false,
+      stale: false,
     }));
     loadPromise = (async () => {
       try {
@@ -371,6 +376,14 @@ export function createSavedGifsStore({ api = gifApi, notify = notifyWithToast } 
     else if (payload.type === "saved_gif_removed") update((s) => reduceRemoved(s, payload));
   };
 
+  /**
+   * The realtime connection came back after a break: whatever was saved or
+   * removed on another device meanwhile is not in the list. The list that is
+   * shown stays until it has been read again.
+   */
+  const invalidate = () =>
+    update((s) => (s.stale || (s.status !== "ready" && s.status !== "error") ? s : { ...s, stale: true }));
+
   const dismissNotice = () => update((s) => (s.notice ? { ...s, notice: null } : s));
 
   return {
@@ -383,6 +396,7 @@ export function createSavedGifsStore({ api = gifApi, notify = notifyWithToast } 
     uploadFile,
     remove,
     handleRealtimeEvent,
+    invalidate,
     dismissNotice,
   };
 }

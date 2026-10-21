@@ -286,6 +286,40 @@ describe("ReactionChips - who reacted", () => {
     expect(api.reactToMessage).not.toHaveBeenCalled();
   });
 
+  test("the click that ends the hold lands on the backdrop and does not close the list; a later tap does", async () => {
+    api.listMessageReactors.mockResolvedValue(reply(200, listAnswer));
+    seed([{ emoji: HEART, count: 1, reacted: false }]);
+    renderChips({ canListReactors: true });
+    await expect.element(page.getByRole("button", { name: /1 reaction/ })).toBeInTheDocument();
+    chip(HEART).dispatchEvent(pointer("pointerdown", { clientX: 10, clientY: 10 }));
+    await expect.element(page.getByRole("dialog", { name: "Who reacted" })).toBeInTheDocument();
+    const backdrop = document.querySelector("[data-reactors-popover]").parentElement.querySelector("button");
+    // the finger lifts over the sheet; the browser clicks what is under it
+    backdrop.dispatchEvent(pointer("pointerup", { clientX: 10, clientY: 10 }));
+    backdrop.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await flush();
+    expect(document.querySelector("[data-reactors-popover]")).not.toBeNull();
+    // the next tap outside is a real one
+    backdrop.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await flush();
+    expect(document.querySelector("[data-reactors-popover]")).toBeNull();
+  });
+
+  test("the context menu event a long press sends once the list is up does not close it", async () => {
+    api.listMessageReactors.mockResolvedValue(reply(200, listAnswer));
+    seed([{ emoji: HEART, count: 1, reacted: false }]);
+    renderChips({ canListReactors: true });
+    await expect.element(page.getByRole("button", { name: /1 reaction/ })).toBeInTheDocument();
+    chip(HEART).dispatchEvent(pointer("pointerdown", { clientX: 10, clientY: 10 }));
+    await expect.element(page.getByRole("dialog", { name: "Who reacted" })).toBeInTheDocument();
+    const overlay = document.querySelector("[data-reactors-popover]").parentElement;
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    overlay.dispatchEvent(event);
+    await flush();
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.querySelector("[data-reactors-popover]")).not.toBeNull();
+  });
+
   test("a short tap or a finger that moves is not a long press", async () => {
     seed([{ emoji: HEART, count: 1, reacted: false }]);
     renderChips({ canListReactors: true });

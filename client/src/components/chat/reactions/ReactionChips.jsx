@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import ReactionEmoji from "./ReactionEmoji.jsx";
 import ReactorsPopover from "./ReactorsPopover.jsx";
 import { useMessageReactions } from "../../../hooks/chat/useMessageReactions.js";
+import { swallowReleaseClick } from "../../../hooks/useContextMenuTrigger.js";
 import { toggleReaction } from "../../../utils/reactionStore.js";
 import { SHOW_REACTORS_EVENT, reactionAriaLabel } from "../../../utils/reactions.js";
 import { keepAtBottomAfterGrowth } from "../../../utils/stickToBottom.js";
@@ -59,6 +60,9 @@ function Chip({ item, pop, canList, onToggle, onShowReactors }) {
       state.timer = window.setTimeout(() => {
         state.timer = 0;
         state.fired = true;
+        // The finger is still down: the click that ends the hold lands on the
+        // list's backdrop and would close it again.
+        swallowReleaseClick(chip);
         onShowReactors(item.emoji, chip);
       }, LONG_PRESS_MS);
     },

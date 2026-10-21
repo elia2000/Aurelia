@@ -8,6 +8,8 @@ const batch = vi.hoisted(() => ({ forwardMessages: vi.fn(), deleteMessages: vi.f
 vi.mock("../../../src/api/batchApi.js", () => batch);
 const chatApi = vi.hoisted(() => ({ getSavedMessagesChat: vi.fn() }));
 vi.mock("../../../src/api/chatApi.js", () => chatApi);
+const pins = vi.hoisted(() => ({ forgetPinnedMessages: vi.fn() }));
+vi.mock("../../../src/utils/pinStore.js", () => pins);
 
 import { useBatchMessageActions } from "../../../src/hooks/chat/useBatchMessageActions.js";
 import { createBatchSelectionStore } from "../../../src/utils/batchSelectionStore.js";
@@ -71,6 +73,7 @@ beforeEach(() => {
   batch.forwardMessages.mockReset();
   batch.deleteMessages.mockReset();
   chatApi.getSavedMessagesChat.mockReset();
+  pins.forgetPinnedMessages.mockReset();
 });
 
 describe("useBatchMessageActions - Select", () => {
@@ -295,6 +298,39 @@ describe("useBatchMessageActions - delete", () => {
     expect(result.current.modalProps.remove).toBeNull();
     expect(store.getSnapshot().active).toBe(false);
     expect(loadChats).toHaveBeenCalledWith({ silent: true });
+  });
+
+  test("a deleted message leaves the pinned bar too (hiding it sends no event)", async () => {
+    batch.deleteMessages.mockResolvedValue(
+      reply(200, { results: mine.map((m) => ({ messageId: m.id, ok: true })) }),
+    );
+    const { result } = await mount();
+    await inAct(() => result.current.deleteSelected(mine));
+    await inAct(() => result.current.modalProps.remove.onConfirm(false));
+    expect(pins.forgetPinnedMessages).toHaveBeenCalledWith(CHAT, [uuid(1), uuid(2)]);
+  });
+
+  test("a message that could not be deleted stays pinned", async () => {
+    batch.deleteMessages.mockResolvedValue(
+      reply(200, {
+        results: [
+          { messageId: uuid(1), ok: true },
+          { messageId: uuid(2), ok: false, code: "forbidden", error: "Not allowed" },
+        ],
+      }),
+    );
+    const { result } = await mount();
+    await inAct(() => result.current.deleteSelected(mine));
+    await inAct(() => result.current.modalProps.remove.onConfirm(false));
+    expect(pins.forgetPinnedMessages).toHaveBeenCalledWith(CHAT, [uuid(1)]);
+  });
+
+  test("nothing deleted: the pinned bar is left alone", async () => {
+    batch.deleteMessages.mockRejectedValue(new Error("offline"));
+    const { result } = await mount();
+    await inAct(() => result.current.deleteSelected(mine));
+    await inAct(() => result.current.modalProps.remove.onConfirm(false));
+    expect(pins.forgetPinnedMessages).not.toHaveBeenCalled();
   });
 
   test("for everyone: what may goes with scope everyone, the rest is hidden for me", async () => {

@@ -81,6 +81,14 @@ export function createSavedGifService(deps) {
     }
   }
 
+  // The same guard every upload has: on local storage, keep some disk free.
+  // (Remote storage has no local disk to fill.)
+  const lacksDiskSpace = (sizeBytes) =>
+    !isRemoteType(deps.storageProvider?.type) &&
+    typeof deps.hasEnoughFreeDiskSpace === "function" &&
+    !deps.hasEnoughFreeDiskSpace(Number(sizeBytes) || 0);
+  const noSpace = () => fail(400, "Not enough free storage space on server.");
+
   const sha256Of = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
 
   async function existingResponse(user, row, max) {
@@ -101,6 +109,8 @@ export function createSavedGifService(deps) {
     const sha256 = sha256Of(bytes);
     const duplicate = await maybe(deps.findSavedGifByHash(user.id, sha256));
     if (duplicate) return existingResponse(user, duplicate, max);
+
+    if (lacksDiskSpace(bytes.length)) return noSpace();
 
     const id = generateUuid();
     const storageKey = buildSavedGifKey(user.id, id, verdict.type);
@@ -304,13 +314,7 @@ export function createSavedGifService(deps) {
       if (existingId) return ok(200, { id: existingId, deduped: true });
     }
 
-    if (
-      !isRemoteType(deps.storageProvider?.type) &&
-      typeof deps.hasEnoughFreeDiskSpace === "function" &&
-      !deps.hasEnoughFreeDiskSpace(Number(gif.size_bytes) || 0)
-    ) {
-      return fail(400, "Not enough free storage space on server.");
-    }
+    if (lacksDiskSpace(gif.size_bytes)) return noSpace();
 
     const bytes = await storage().readGif(gif, { maxBytes: SAVED_GIF_MAX_BYTES });
     if (!bytes) return fail(404, "GIF file not found.");

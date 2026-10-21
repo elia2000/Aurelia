@@ -39,7 +39,7 @@ function ChatHarness({ all, shown, hasOlder = true, onReady, onJump, chatId = CH
   return (
     <div ref={scrollRef} style={{ height: 200, overflow: "auto" }}>
       {messages.map((m) => (
-        <div key={m.id} id={`message-${m.id}`} style={{ height: 60 }}>
+        <div key={m.id} id={`message-${m._serverId || m.id}`} style={{ height: 60 }}>
           <div data-message-bubble>{m.body}</div>
         </div>
       ))}
@@ -82,6 +82,53 @@ describe("jumpToLoadedMessage", () => {
     } finally {
       root.remove();
     }
+  });
+});
+
+describe("jumpToLoadedMessage - motion", () => {
+  const withRow = (run) => {
+    const root = document.createElement("div");
+    root.style.cssText = "height:400px;overflow:auto";
+    const row = document.createElement("div");
+    row.id = `message-${id(7)}`;
+    row.style.height = "60px";
+    row.innerHTML = "<div data-message-bubble>x</div>";
+    root.appendChild(row);
+    document.body.appendChild(root);
+    const spy = vi.spyOn(row, "scrollIntoView").mockImplementation(() => {});
+    try {
+      run(root, spy);
+    } finally {
+      root.remove();
+    }
+  };
+
+  const prefersReducedMotion = (reduce) =>
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
+      matches: reduce && String(query).includes("prefers-reduced-motion"),
+      media: String(query),
+      addEventListener() {},
+      removeEventListener() {},
+      addListener() {},
+      removeListener() {},
+    }));
+
+  test("scrolls smoothly for a message that is close", () => {
+    prefersReducedMotion(false);
+    withRow((root, spy) => {
+      jumpToLoadedMessage(id(7), root);
+      expect(spy).toHaveBeenCalledWith({ block: "center", behavior: "smooth" });
+    });
+    vi.restoreAllMocks();
+  });
+
+  test("jumps at once when the person asked for reduced motion", () => {
+    prefersReducedMotion(true);
+    withRow((root, spy) => {
+      jumpToLoadedMessage(id(7), root);
+      expect(spy).toHaveBeenCalledWith({ block: "center", behavior: "auto" });
+    });
+    vi.restoreAllMocks();
   });
 });
 
@@ -129,6 +176,25 @@ describe("useJumpToMessage", () => {
     expect(await get().jump(id(500))).toBe(false);
     expect(get().loadCalls).toHaveLength(0);
     expect(showToast).toHaveBeenCalledTimes(1);
+  });
+
+  test("a message sent in this page session (temporary id, server id on the side) is found by its server id", async () => {
+    const own = { id: "pending-1700000000000-abc123", _clientId: "pending-1700000000000-abc123", _serverId: id(10), body: "pin target", created_at: "2026-03-01T10:10:00.000Z" };
+    const all = [...history(9), own];
+    const onJump = vi.fn();
+    const get = await setup({ all, shown: 10, onJump });
+    expect(await get().jump(id(10))).toBe(true);
+    expect(get().loadCalls).toHaveLength(0);
+    expect(showToast).not.toHaveBeenCalled();
+    expect(onJump).toHaveBeenCalledTimes(1);
+  });
+
+  test("a message that still exists but is further back than the rounds reach says it is too far back, not gone", async () => {
+    const get = await setup({ all: history(3300), shown: 10, pageSize: 20 });
+    expect(await get().jump(id(1))).toBe(false);
+    expect(get().loadCalls).toHaveLength(6);
+    expect(showToast).toHaveBeenCalledTimes(1);
+    expect(showToast).toHaveBeenCalledWith("That message is too far back to jump to.", { tone: "error" });
   });
 
   test("bad ids do nothing", async () => {

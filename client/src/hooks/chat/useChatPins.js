@@ -8,6 +8,7 @@ import {
   isChatPinned,
   moveId,
 } from "../../utils/chatPins.js";
+import { notePinnedChatList } from "../../utils/chatPinsTracker.js";
 import { getMaxPinnedChats } from "../../utils/pinLimits.js";
 import { showToast } from "../../utils/toast.js";
 import { normalizeUuid } from "../../utils/uuidUtils.js";
@@ -35,8 +36,13 @@ export function useChatPins({ chats, setChats, isOffline = false }) {
 
   const pinnedChatIds = useMemo(() => getPinnedChatIds(chats), [chats]);
 
+  // Every list set here is also told to the tracker, so a chat-list answer
+  // that was read before it cannot put the old pins back.
   const replaceWith = useCallback(
-    (list) => setChats((prev) => applyPinnedList(prev, list)),
+    (list) => {
+      notePinnedChatList(list);
+      setChats((prev) => applyPinnedList(prev, list));
+    },
     [setChats],
   );
 
@@ -57,6 +63,7 @@ export function useChatPins({ chats, setChats, isOffline = false }) {
         return false;
       }
       const before = snapshotOf(latest.current.chats);
+      notePinnedChatList(optimistic.map((chatId, position) => ({ chatId, position })));
       setChats((prev) => applyPinnedOrder(prev, optimistic));
       try {
         const response = await request();

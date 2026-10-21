@@ -101,6 +101,7 @@ export function MessageComposer({
   const [voiceHandoff, setVoiceHandoff] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
   const emojiRef = useRef(null);
+  const emojiToggleRef = useRef(null);
 
   useEffect(() => {
     if (!showEmoji) return undefined;
@@ -557,6 +558,7 @@ export function MessageComposer({
           <div className="flex min-h-10 min-w-0 flex-1 items-end gap-0.5 rounded-[20px] border border-emerald-200 bg-white px-1 transition focus-within:border-emerald-400 focus-within:ring-2 focus-within:ring-emerald-300/60 dark:border-emerald-500/30 dark:bg-slate-900">
             <div className="relative mb-px flex shrink-0" ref={emojiRef}>
               <button
+                ref={emojiToggleRef}
                 type="button"
                 {...guard(() => setShowEmoji((open) => !open))}
                 aria-label="Emoji"
@@ -578,8 +580,15 @@ export function MessageComposer({
                     <EmojiPicker
                       onSelect={insertEmoji}
                       onClose={() => {
+                        // Focus inside the picker (a keyboard user) would be lost
+                        // when it goes: it goes back to the button that opened it.
+                        const focusWasInside = Boolean(
+                          emojiRef.current?.contains(document.activeElement) &&
+                            document.activeElement !== emojiToggleRef.current,
+                        );
                         setShowEmoji(false);
                         focusKeeper.restore();
+                        if (focusWasInside) emojiToggleRef.current?.focus({ preventScroll: true });
                       }}
                       autoFocusSearch={isDesktop}
                       onSendGif={onSendSavedGif}

@@ -79,6 +79,20 @@ describe("useChatMessagePins", () => {
     expect(listMessagePins).toHaveBeenCalledTimes(2);
   });
 
+  test("a reconnection after a break reads even a list that was read a moment ago; the first connection does not", async () => {
+    vi.mocked(listMessagePins).mockResolvedValue(reply(200, { pins: [rawPin(1)] }));
+    const hook = await renderHook(() => useChatMessagePins(CHAT));
+    await vi.waitFor(() => expect(hook.result.current.status).toBe("ready"));
+    // the first connection opens right after the chat did: nothing to read again
+    window.dispatchEvent(new CustomEvent(REALTIME_OPEN_EVENT, { detail: { reconnected: false } }));
+    expect(listMessagePins).toHaveBeenCalledTimes(1);
+    // the connection dropped for a second and came back: a pin may have been made meanwhile
+    vi.mocked(listMessagePins).mockResolvedValue(reply(200, { pins: [rawPin(2), rawPin(1)] }));
+    window.dispatchEvent(new CustomEvent(REALTIME_OPEN_EVENT, { detail: { reconnected: true } }));
+    await vi.waitFor(() => expect(hook.result.current.pins).toHaveLength(2));
+    expect(listMessagePins).toHaveBeenCalledTimes(2);
+  });
+
   test("stops listening for the connection when it goes away", async () => {
     vi.mocked(listMessagePins).mockResolvedValue(reply(200, { pins: [] }));
     const add = vi.spyOn(window, "addEventListener");

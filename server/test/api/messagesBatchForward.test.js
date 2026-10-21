@@ -664,16 +664,53 @@ describe("POST /api/messages/forward: lookups and rate limit", () => {
     expect(ctx.calls.findUserById.slice().sort()).toEqual([ALICE_ID, BOB_ID].sort());
   });
 
-  test("one rate-limit token per request, however many messages it names", async () => {
+  test("30 requests a minute, each a token", async () => {
     const ctx = makeBatchApp();
-    const ids = ctx.addFillers(100);
     for (let i = 0; i < 30; i += 1) {
-      const res = await batch(ctx, ids);
+      const res = await batch(ctx, [M1]);
       expect(res.status, `request ${i + 1}`).toBe(200);
     }
     const limited = await batch(ctx, [M1]);
     expect(limited.status).toBe(429);
     expect(limited.body).toEqual({ error: "Too many forward requests. Please slow down." });
+  }, 60_000);
+
+  // A forward is a burst of messages that every member of the target chat
+  // receives: it is charged for the messages it creates, not for the request.
+  test("a request is charged for the messages it creates: a minute's budget is 500", async () => {
+    const ctx = makeBatchApp();
+    const ids = ctx.addFillers(100);
+    for (let i = 0; i < 5; i += 1) {
+      const res = await batch(ctx, ids);
+      expect(res.status, `request ${i + 1}`).toBe(200);
+    }
+    expect(ctx.created).toHaveLength(500);
+    const limited = await batch(ctx, [M1]);
+    expect(limited.status).toBe(429);
+    expect(limited.body).toEqual({ error: "Too many messages forwarded in a short time. Please wait a moment." });
+    expect(ctx.created).toHaveLength(500);
+  }, 60_000);
+
+  test("sources times chats is the price: 100 messages to 3 chats costs 300", async () => {
+    const ctx = makeBatchApp();
+    const ids = ctx.addFillers(100);
+    const to3 = { targetChatIds: [TARGET_GROUP, GROUP, DM] };
+    expect((await batch(ctx, ids, to3)).status).toBe(200);
+    // 200 are left: 100 to two chats fits, one more message does not
+    expect((await batch(ctx, ids, { targetChatIds: [TARGET_GROUP, GROUP] })).status).toBe(200);
+    expect((await batch(ctx, [M1])).status).toBe(429);
+  }, 60_000);
+
+  test("a request that does not fit is refused whole, creates nothing and costs nothing", async () => {
+    const ctx = makeBatchApp();
+    const ids = ctx.addFillers(100);
+    for (let i = 0; i < 4; i += 1) expect((await batch(ctx, ids)).status).toBe(200);
+    const before = ctx.created.length;
+    const tooMany = await batch(ctx, ids.slice(0, 50), { targetChatIds: [TARGET_GROUP, GROUP, DM] });
+    expect(tooMany.status).toBe(429);
+    expect(ctx.created).toHaveLength(before);
+    // the 100 that were left are still there
+    expect((await batch(ctx, ids)).status).toBe(200);
   }, 60_000);
 
   test("the limit is per person", async () => {

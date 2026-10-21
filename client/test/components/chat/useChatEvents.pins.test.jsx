@@ -11,6 +11,12 @@ vi.mock("../../../src/api/pinsApi.js", () => ({
 import { listMessagePins } from "../../../src/api/pinsApi.js";
 import { useChatEvents } from "../../../src/hooks/chat/useChatEvents.js";
 import { getChatPins, loadChatPins, resetPinStore } from "../../../src/utils/pinStore.js";
+import { getPinnedChatIds } from "../../../src/utils/chatPins.js";
+import {
+  getPinnedChatListVersion,
+  resetPinnedChatListTracker,
+  withNewestChatPins,
+} from "../../../src/utils/chatPinsTracker.js";
 
 // A WebSocket that never connects: the test pushes frames into it by hand.
 class FakeSocket {
@@ -69,6 +75,7 @@ beforeEach(() => {
   FakeSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeSocket);
   resetPinStore();
+  resetPinnedChatListTracker();
   vi.mocked(listMessagePins).mockReset();
 });
 afterEach(() => {
@@ -98,6 +105,15 @@ describe("useChatEvents - the person's pinned chats", () => {
       [CHAT_B, true, 0],
       [CHAT_C, false, null],
     ]);
+  });
+
+  test("it is remembered, so a chat-list answer that was slower than the event does not undo it", async () => {
+    const params = hookParams();
+    await renderHook(() => useChatEvents(params));
+    const requestLeft = getPinnedChatListVersion();
+    frame({ type: "chat_pins_changed", pinned: [{ chatId: CHAT_B, position: 0 }] });
+    const slowAnswer = [{ id: CHAT_A }, { id: CHAT_B }];
+    expect(getPinnedChatIds(withNewestChatPins(slowAnswer, requestLeft))).toEqual([CHAT_B]);
   });
 
   test("an empty list unpins everything", async () => {

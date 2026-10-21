@@ -18,6 +18,8 @@ import "./reactions.css";
 const EDGE_GAP = 12;
 const ANCHOR_GAP = 8;
 const SHEET_BREAKPOINT_PX = 640;
+// Right after the list opened from a long press, the press is still going.
+const OPENING_PRESS_MS = 800;
 
 const LOADING = { status: "loading", groups: [], total: 0, truncated: false };
 
@@ -82,6 +84,7 @@ function ReactorRow({ row }) {
  */
 export default function ReactorsPopover({ chatId, messageId, initialEmoji = "", anchorEl = null, onClose }) {
   const panelRef = useRef(null);
+  const openedAtRef = useRef(0);
   const [data, setData] = useState(LOADING);
   const [tab, setTab] = useState(initialEmoji || "");
   const [reloadToken, setReloadToken] = useState(0);
@@ -91,6 +94,10 @@ export default function ReactorsPopover({ chatId, messageId, initialEmoji = "", 
   const signature = live.map((item) => `${item.emoji}:${item.count}`).join("|");
 
   useFocusTrap(panelRef, true);
+
+  useEffect(() => {
+    openedAtRef.current = Date.now();
+  }, []);
 
   useEffect(() => {
     // Every reaction was taken back: nothing left to list.
@@ -176,6 +183,9 @@ export default function ReactorsPopover({ chatId, messageId, initialEmoji = "", 
       className="fixed inset-0 z-210"
       onContextMenu={(event) => {
         event.preventDefault();
+        // A long press that opened this list sends its own context menu event a
+        // moment later, to whatever is under the finger: this backdrop.
+        if (Date.now() - openedAtRef.current < OPENING_PRESS_MS) return;
         onClose?.();
       }}
     >

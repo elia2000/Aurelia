@@ -61,6 +61,21 @@ describe("EmojiPicker - Emoji | GIFs tabs", () => {
     expect(gifApi.listSavedGifs).not.toHaveBeenCalled();
   });
 
+  test("each tab points at a panel that exists (aria-controls), and the shown panel is labelled by its tab", async () => {
+    render(<EmojiPicker onSelect={() => {}} onClose={() => {}} onSendGif={() => {}} />);
+    const emojiTab = page.getByRole("tab", { name: "Emoji", exact: true });
+    await expect.element(emojiTab).toHaveAttribute("aria-selected", "true");
+    const controls = (await emojiTab.element()).getAttribute("aria-controls");
+    const panel = document.getElementById(controls);
+    expect(panel).not.toBeNull();
+    expect(panel.getAttribute("role")).toBe("tabpanel");
+    expect(panel.getAttribute("aria-labelledby")).toBe("picker-tab-emoji");
+    expect(panel.querySelector('[role="searchbox"]')).not.toBeNull();
+    await page.getByRole("tab", { name: "GIFs", exact: true }).click();
+    const gifsControls = (await page.getByRole("tab", { name: "GIFs", exact: true }).element()).getAttribute("aria-controls");
+    expect(document.getElementById(gifsControls)?.getAttribute("role")).toBe("tabpanel");
+  });
+
   test("the GIFs tab shows the saved GIFs and the counter; the emoji search and categories are gone", async () => {
     render(<EmojiPicker onSelect={() => {}} onClose={() => {}} onSendGif={() => {}} />);
     await page.getByRole("tab", { name: "GIFs", exact: true }).click();

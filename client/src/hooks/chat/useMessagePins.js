@@ -44,8 +44,9 @@ export function useChatMessagePins(chatId) {
   }, [id, status]);
 
   useEffect(() => {
-    window.addEventListener(REALTIME_OPEN_EVENT, invalidateAllPins);
-    return () => window.removeEventListener(REALTIME_OPEN_EVENT, invalidateAllPins);
+    const onOpen = (event) => invalidateAllPins({ force: Boolean(event?.detail?.reconnected) });
+    window.addEventListener(REALTIME_OPEN_EVENT, onOpen);
+    return () => window.removeEventListener(REALTIME_OPEN_EVENT, onOpen);
   }, []);
 
   return { pins, status };

@@ -544,6 +544,20 @@ describe("MessageComposer — emoji", () => {
     await expect.element(page.getByRole("dialog", { name: "Emoji" })).not.toBeInTheDocument();
   });
 
+  test("closing the picker from the keyboard puts focus back on the Emoji button, not on nothing", async () => {
+    render(<MessageComposer {...BASE_PROPS} />);
+    await expect.element(page.getByRole("button", { name: "Emoji" })).toBeInTheDocument();
+    const toggle = page.getByRole("button", { name: "Emoji" }).element();
+    toggle.focus();
+    await userEvent.keyboard("{Enter}");
+    await expect.element(page.getByRole("dialog", { name: "Emoji" })).toBeInTheDocument();
+    // focus is inside the picker now (its search field)
+    await vi.waitFor(() => expect(document.querySelector('[role="dialog"]').contains(document.activeElement)).toBe(true));
+    await userEvent.keyboard("{Escape}");
+    await expect.element(page.getByRole("dialog", { name: "Emoji" })).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(toggle);
+  });
+
   test("a picked emoji goes into the message where the cursor is, and the picker stays open for more", async () => {
     const onMessageInput = vi.fn();
     render(<MessageComposer {...BASE_PROPS} onMessageInput={onMessageInput} />);
