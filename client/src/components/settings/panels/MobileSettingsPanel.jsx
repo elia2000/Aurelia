@@ -17,6 +17,7 @@ import {
   Sun,
   Trash,
   User,
+  Volume2,
 } from "../../../icons/lucide.js";
 import { LayoutDashboardIcon } from "../../../icons/AnimatedIcons.jsx";
 import { hasPersian } from "../../../utils/fontUtils.js";
@@ -25,6 +26,8 @@ import { USERNAME_INPUT_PATTERN, useNameLimits } from "../../../utils/nameLimits
 import { InlineError } from "../common/InlineError.jsx";
 import { AboutSettingsPanel } from "./AboutSettingsPanel.jsx";
 import { AppearanceSettingsPanel } from "./AppearanceSettingsPanel.jsx";
+import { CallSoundsSettingsPanel } from "./CallSoundsSettingsPanel.jsx";
+import { useCallSoundsAvailable } from "../../../calls/useCallSoundPrefs.js";
 import { DataSettingsPanel } from "./DataSettingsPanel.jsx";
 import { NotificationsSettingsPanel } from "./NotificationsSettingsPanel.jsx";
 import ConfirmPasswordModal from "../../modals/ConfirmPasswordModal.jsx";
@@ -39,6 +42,7 @@ const DETAIL_TITLES = {
   data: "Data",
   notifications: "Notifications",
   appearance: "Appearance",
+  sounds: "Call sounds",
   about: "About",
 };
 
@@ -146,6 +150,7 @@ export function MobileSettingsPanel({
     () => setSettingsPanel(null),
     [setSettingsPanel],
   );
+  const callSoundsAvailable = useCallSoundsAvailable();
   const resolvedUserColor = userColor || "#10b981";
   const displayInitials = getAvatarInitials(displayName);
   const profileIdentity = profileForm.nickname || profileForm.username || "S";
@@ -546,6 +551,9 @@ export function MobileSettingsPanel({
     if (settingsPanel === "appearance") {
       return <AppearanceSettingsPanel onDone={handleClosePanel} variant="mobile" />;
     }
+    if (settingsPanel === "sounds") {
+      return <CallSoundsSettingsPanel onDone={handleClosePanel} variant="mobile" />;
+    }
     if (settingsPanel === "about") {
       return (
         <AboutSettingsPanel
@@ -668,6 +676,13 @@ export function MobileSettingsPanel({
                   icon={<Palette size={22} className="icon-anim-spin-dir" />}
                   onClick={() => setSettingsPanel("appearance")}
                 />
+                {callSoundsAvailable ? (
+                  <MobileMenuRow
+                    label="Call sounds"
+                    icon={<Volume2 size={22} className="icon-anim-pop" />}
+                    onClick={() => setSettingsPanel("sounds")}
+                  />
+                ) : null}
                 <MobileMenuRow
                   label={isDark ? "Light mode" : "Dark mode"}
                   icon={

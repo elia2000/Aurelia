@@ -7,7 +7,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { CallManager, CALL_PHASE } from "./callManager.js";
-import { startRingtone } from "./ringtone.js";
+import { useCallSounds } from "./useCallSounds.js";
 import { endCallBeacon } from "../api/e2eeApi.js";
 import { getE2eeServices, isCallingSupported } from "../e2ee/services.js";
 import { CALL_EVENT, CallContext, IDLE_CALL_SNAPSHOT, REALTIME_OPEN_EVENT } from "./callContext.js";
@@ -129,14 +129,10 @@ export function CallProvider({ user, children }) {
     };
   }, [supported, userId, username]);
 
-  // Ringer: only while something is actually ringing.
+  // Sounds and vibration for the call's phases (ring, ringback, connect, end):
+  // see useCallSounds.js. Only while something is actually ringing.
   const phase = state.phase;
-  const ringingNow = Boolean(state.ringing);
-  useEffect(() => {
-    if (phase === CALL_PHASE.INCOMING && ringingNow) return startRingtone("incoming");
-    if (phase === CALL_PHASE.OUTGOING && ringingNow) return startRingtone("outgoing");
-    return undefined;
-  }, [phase, ringingNow]);
+  useCallSounds(state);
 
   // Background alert for an incoming call while the tab is hidden. The
   // notification is closed whenever the call stops ringing here, however that

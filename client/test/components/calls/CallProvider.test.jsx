@@ -6,6 +6,14 @@ const hoisted = vi.hoisted(() => ({
   manager: null,
   services: null,
   beacon: vi.fn(),
+  // Stands in for the sound maker: what the provider asks of it is what is checked, no audio plays.
+  sounds: {
+    armUnlock: vi.fn(() => () => {}),
+    startRingtone: vi.fn(() => () => {}),
+    startRingback: vi.fn(() => () => {}),
+    playConnected: vi.fn(),
+    playEnded: vi.fn(),
+  },
 }));
 
 vi.mock("../../../src/calls/callManager.js", () => {
@@ -37,7 +45,10 @@ vi.mock("../../../src/calls/callManager.js", () => {
   }
   return { CallManager, CALL_PHASE };
 });
-vi.mock("../../../src/calls/ringtone.js", () => ({ startRingtone: () => () => {} }));
+vi.mock("../../../src/calls/callSounds.js", async (importOriginal) => ({
+  ...(await importOriginal()),
+  callSounds: hoisted.sounds,
+}));
 vi.mock("../../../src/api/e2eeApi.js", () => ({ endCallBeacon: (...args) => hoisted.beacon(...args) }));
 vi.mock("../../../src/e2ee/services.js", () => ({
   getE2eeServices: () => hoisted.services,
@@ -59,6 +70,7 @@ const originalServiceWorker = Object.getOwnPropertyDescriptor(navigator, "servic
 beforeEach(() => {
   hoisted.manager = null;
   hoisted.beacon.mockReset();
+  Object.values(hoisted.sounds).forEach((fn) => fn.mockClear());
   hoisted.services = {
     api: { fetchPendingCall: vi.fn().mockResolvedValue({ call: null }) },
     directory: {},
@@ -205,6 +217,68 @@ describe("CallProvider", () => {
       });
       expect(notification.close).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("call sounds", () => {
+  const setState = (manager, next) =>
+    act(async () => {
+      manager.setState(next);
+      await flush();
+    });
+
+  test("listens for the first tap on the page so that a later call can ring", async () => {
+    await mount();
+    expect(hoisted.sounds.armUnlock).toHaveBeenCalledTimes(1);
+  });
+
+  test("an incoming call rings until it is answered", async () => {
+    const stop = vi.fn();
+    hoisted.sounds.startRingtone.mockReturnValueOnce(stop);
+    const manager = await mount();
+    await setState(manager, { phase: "incoming", callId: "c1", ringing: true, peer: { nickname: "Alice" } });
+    expect(hoisted.sounds.startRingtone).toHaveBeenCalledTimes(1);
+    expect(stop).not.toHaveBeenCalled();
+    await setState(manager, { phase: "connecting", callId: "c1", ringing: false });
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  test("an incoming call stops ringing when it is declined here, cancelled, or answered elsewhere", async () => {
+    for (const next of [
+      { phase: "ended", callId: "c1", endReason: "declined_local" },
+      { phase: "ended", callId: "c1", endReason: "cancelled" },
+      { phase: "idle", callId: null },
+    ]) {
+      const stop = vi.fn();
+      hoisted.sounds.startRingtone.mockReturnValueOnce(stop);
+      const manager = await mount();
+      await setState(manager, { phase: "incoming", callId: "c1", ringing: true });
+      await setState(manager, next);
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(hoisted.sounds.playEnded).not.toHaveBeenCalled();
+    }
+  });
+
+  test("a call placed here plays the ringback tone only while the other side rings", async () => {
+    const stop = vi.fn();
+    hoisted.sounds.startRingback.mockReturnValueOnce(stop);
+    const manager = await mount();
+    await setState(manager, { phase: "outgoing", callId: "c2", ringing: false, waiting: true });
+    expect(hoisted.sounds.startRingback).not.toHaveBeenCalled();
+    await setState(manager, { phase: "outgoing", callId: "c2", ringing: true });
+    expect(hoisted.sounds.startRingback).toHaveBeenCalledTimes(1);
+    await setState(manager, { phase: "ended", callId: "c2", endReason: "declined" });
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(hoisted.sounds.playEnded).toHaveBeenCalledWith("declined");
+  });
+
+  test("the call connecting and ending make their short sounds", async () => {
+    const manager = await mount();
+    await setState(manager, { phase: "connecting", callId: "c3", ringing: false });
+    await setState(manager, { phase: "connected", callId: "c3" });
+    expect(hoisted.sounds.playConnected).toHaveBeenCalledTimes(1);
+    await setState(manager, { phase: "ended", callId: "c3", endReason: "hangup" });
+    expect(hoisted.sounds.playEnded).toHaveBeenCalledWith("ended");
   });
 });
 

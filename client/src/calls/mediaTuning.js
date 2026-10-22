@@ -191,8 +191,13 @@ function selectedCandidatePair(reports, byId) {
   return nominated[0] || null;
 }
 
-/** Reduces an `RTCStatsReport` (as an array) to what the adaptation needs. */
-export function summarizeStats(reports) {
+/**
+ * Reduces an `RTCStatsReport` (as an array) to what the adaptation needs.
+ * `screen` names the shared-screen line (its receiver track id and/or mid), so
+ * that its picture is not mistaken for the camera's.
+ */
+export function summarizeStats(reports, screen = {}) {
+  const { screenTrackId = null, screenMid = null } = screen || {};
   let rttMs = null;
   let lossPct = 0;
   let relayed = false;
@@ -208,6 +213,7 @@ export function summarizeStats(reports) {
     relayed = local?.candidateType === "relay" || remote?.candidateType === "relay";
   }
   let incoming = null;
+  let screenIncoming = null;
   for (const r of reports) {
     if (r.type === "remote-inbound-rtp" && typeof r.fractionLost === "number") {
       lossPct = Math.max(lossPct, r.fractionLost * 100);
@@ -215,10 +221,21 @@ export function summarizeStats(reports) {
     }
     // The picture that is arriving: what the person is watching.
     if (r.type === "inbound-rtp" && (r.kind === "video" || r.mediaType === "video") && r.frameWidth > 0 && r.frameHeight > 0) {
-      incoming = { width: r.frameWidth, height: r.frameHeight, fps: Math.round(r.framesPerSecond || 0) };
+      const picture = { width: r.frameWidth, height: r.frameHeight, fps: Math.round(r.framesPerSecond || 0) };
+      const isScreen =
+        (screenTrackId != null && r.trackIdentifier === screenTrackId) || (screenMid != null && r.mid === screenMid);
+      if (isScreen) screenIncoming = picture;
+      else incoming = picture;
     }
   }
-  return { rttMs, lossPct, relayed, availableKbps, ...(incoming ? { incoming } : {}) };
+  return {
+    rttMs,
+    lossPct,
+    relayed,
+    availableKbps,
+    ...(incoming ? { incoming } : {}),
+    ...(screenIncoming ? { screenIncoming } : {}),
+  };
 }
 
 export const initialAdaptation = () => ({ bad: 0, good: 0 });
@@ -275,5 +292,112 @@ export function encodingForTier(id, capture = { width: 1280, height: 720 }) {
     maxFramerate: tier.maxFramerate,
     scaleResolutionDownBy: Math.round(scale * 100) / 100,
     active: tier.id !== "off",
+  };
+}
+
+// ── screen sharing ───────────────────────────────────────────────────────────
+// A shared screen is text and fine detail, not motion: it is sent with the
+// "detail" hint (the browser then keeps the resolution and gives up frames
+// instead), at a low frame rate, and with a bitrate ceiling that suits slides,
+// documents and code. It never carries sound.
+
+export const SCREEN_CONTENT_HINT = "detail";
+/** The biggest picture sent: a larger (or wider) screen is scaled down until it fits. */
+export const SCREEN_MAX_SIZE = Object.freeze({ long: 1920, short: 1080 });
+
+/** The argument for `navigator.mediaDevices.getDisplayMedia`. */
+export function screenCaptureRequest() {
+  return {
+    video: { frameRate: { ideal: 15, max: 15 } },
+    // The sound of the shared screen is not sent.
+    audio: false,
+    // Chromium extras that other browsers ignore: never offer this tab itself
+    // (it would show the call in the call), let the person switch sources
+    // from the browser's own bar, and do not capture system sound.
+    selfBrowserSurface: "exclude",
+    surfaceSwitching: "include",
+    systemAudio: "exclude",
+  };
+}
+
+/**
+ * The sending levels of a shared screen, best first. A poor network lowers the
+ * frame rate first (the frames that remain stay sharp), then the bitrate and
+ * finally the size. There is no "off": the screen keeps going at the lowest
+ * level, and the voice is never given up for it.
+ */
+export const SCREEN_PROFILES = Object.freeze([
+  { id: "full", maxFramerate: 15, maxBitrate: 2_500_000, minScale: 1 },
+  { id: "smooth", maxFramerate: 10, maxBitrate: 2_500_000, minScale: 1 },
+  { id: "light", maxFramerate: 5, maxBitrate: 2_500_000, minScale: 1 },
+  { id: "lean", maxFramerate: 5, maxBitrate: 1_200_000, minScale: 1 },
+  { id: "thin", maxFramerate: 3, maxBitrate: 600_000, minScale: 1.5 },
+  { id: "floor", maxFramerate: 2, maxBitrate: 300_000, minScale: 2 },
+]);
+export const DEFAULT_SCREEN_PROFILE = "full";
+
+const screenIndex = (id) => Math.max(0, SCREEN_PROFILES.findIndex((p) => p.id === id));
+export const getScreenProfile = (id) => SCREEN_PROFILES[screenIndex(id)];
+export const initialScreenAdaptation = () => ({ bad: 0, tight: 0, good: 0 });
+
+/**
+ * Picks the next screen level from one stats sample: down at once on a bad
+ * connection (or after two samples that say the link cannot carry the current
+ * level), up slowly when it has been healthy and has room for the next level.
+ */
+export function nextScreenProfile(currentId, sample, state = initialScreenAdaptation()) {
+  const rtt = sample.rttMs ?? 0;
+  const bad = sample.lossPct > 8 || rtt > 600;
+  const good = sample.lossPct < 2 && rtt < 250;
+  const index = screenIndex(currentId);
+  const current = SCREEN_PROFILES[index];
+  const tight =
+    !bad && sample.availableKbps != null && sample.availableKbps * 1000 < current.maxBitrate * 0.6 && index < SCREEN_PROFILES.length - 1;
+  let { bad: badCount, tight: tightCount, good: goodCount } = state;
+  badCount = bad ? badCount + 1 : 0;
+  tightCount = tight ? tightCount + 1 : 0;
+  goodCount = good && !tight ? goodCount + 1 : 0;
+
+  let next = index;
+  if ((bad || tightCount >= 2) && index < SCREEN_PROFILES.length - 1) {
+    next = index + 1;
+    badCount = 0;
+    tightCount = 0;
+    goodCount = 0;
+  } else if (good && !tight && index > 0 && goodCount >= 4) {
+    const wanted = SCREEN_PROFILES[index - 1].maxBitrate;
+    // A connection that does not say how much it can carry is given the benefit of the doubt.
+    if (sample.availableKbps == null || sample.availableKbps * 1000 >= wanted * 1.3) {
+      next = index - 1;
+      goodCount = 0;
+    }
+  }
+  return { profile: SCREEN_PROFILES[next].id, state: { bad: badCount, tight: tightCount, good: goodCount } };
+}
+
+/**
+ * Sender encoding parameters for a shared screen. `capture` is the size of what
+ * is being captured: it is scaled down until it fits 1920x1080 (1080x1920 held
+ * upright), so a 4K or ultra-wide screen does not cost more than Full HD, and
+ * never scaled up.
+ */
+export function encodingForScreen(id, capture = {}) {
+  const profile = getScreenProfile(id);
+  const width = Number(capture?.width) || 0;
+  const height = Number(capture?.height) || 0;
+  let scale = 1;
+  if (width > 0 && height > 0) {
+    scale = Math.max(
+      1,
+      Math.min(width, height) / SCREEN_MAX_SIZE.short,
+      Math.max(width, height) / SCREEN_MAX_SIZE.long,
+    );
+  }
+  scale = Math.max(scale, profile.minScale);
+  return {
+    maxBitrate: profile.maxBitrate,
+    maxFramerate: profile.maxFramerate,
+    scaleResolutionDownBy: Math.round(scale * 100) / 100,
+    active: true,
   };
 }

@@ -8,8 +8,10 @@ import {
   Rocket,
   ShieldCheck,
   User,
+  Volume2,
 } from "../../../icons/lucide.js";
 import { LayoutDashboardIcon } from "../../../icons/AnimatedIcons.jsx";
+import { useCallSoundsAvailable } from "../../../calls/useCallSoundPrefs.js";
 import { ThemeButton } from "../common/ThemeButton.jsx";
 
 export function SettingsMenuActions({
@@ -30,6 +32,7 @@ export function SettingsMenuActions({
   adminPanelEnabled = true,
 }) {
   const isMobile = variant === "mobile";
+  const callSoundsAvailable = useCallSoundsAvailable();
   const buttonBase = isMobile
     ? "flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-base font-medium"
     : "flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm font-semibold";
@@ -110,6 +113,16 @@ export function SettingsMenuActions({
         <Palette size={18} className={`${iconCls} icon-anim-spin-dir`} />
         Appearance
       </button>
+      {callSoundsAvailable ? (
+        <button
+          type="button"
+          onClick={() => setSettingsPanel("sounds")}
+          className={`${buttonBase} ${accentHover}`}
+        >
+          <Volume2 size={18} className={`${iconCls} icon-anim-pop`} />
+          Call sounds
+        </button>
+      ) : null}
       <ThemeButton
         isDark={isDark}
         toggleTheme={toggleTheme}

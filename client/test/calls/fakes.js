@@ -19,18 +19,28 @@ export async function waitFor(predicate, { timeout = 3000, label = "condition" }
 }
 
 // ── media ────────────────────────────────────────────────────────────────────
+let trackSerial = 0;
 export class FakeTrack {
-  constructor(kind, deviceId = "default") {
+  constructor(kind, deviceId = "default", settings = {}) {
+    this.id = `fake-track-${(trackSerial += 1)}`;
     this.kind = kind;
     this.deviceId = deviceId;
     this.enabled = true;
     this.readyState = "live";
     this.stopped = false;
+    this.contentHint = "";
+    this.extraSettings = settings;
+    this.onended = null;
   }
-  getSettings() { return { deviceId: this.deviceId }; }
+  getSettings() { return { deviceId: this.deviceId, ...this.extraSettings }; }
   stop() {
     this.stopped = true;
     this.readyState = "ended";
+  }
+  /** What the browser does when the person presses its own "Stop sharing" bar. */
+  endByBrowser() {
+    this.readyState = "ended";
+    this.onended?.({ type: "ended" });
   }
 }
 
@@ -56,6 +66,33 @@ export function makeGetUserMedia({ deny = null } = {}) {
     return new FakeStream(tracks);
   });
   fn.calls = calls;
+  return fn;
+}
+
+/**
+ * A fake navigator.mediaDevices.getDisplayMedia. `gate` is a promise (or a
+ * function returning one) that keeps the picker "open" until the test resolves it.
+ */
+export function makeGetDisplayMedia({
+  deny = null,
+  gate = null,
+  settings = { width: 1920, height: 1080, displaySurface: "monitor" },
+  withAudio = false,
+} = {}) {
+  const calls = [];
+  const streams = [];
+  const fn = vi.fn(async (constraints) => {
+    calls.push(constraints);
+    if (gate) await (typeof gate === "function" ? gate() : gate);
+    if (deny) throw Object.assign(new Error(deny), { name: deny });
+    const tracks = [new FakeTrack("video", "screen", settings)];
+    if (withAudio) tracks.push(new FakeTrack("audio", "system"));
+    const stream = new FakeStream(tracks);
+    streams.push(stream);
+    return stream;
+  });
+  fn.calls = calls;
+  fn.streams = streams;
   return fn;
 }
 
@@ -86,6 +123,34 @@ class FakeDataChannel {
   close() { this.readyState = "closed"; }
 }
 
+// Section list of an SDP: [{kind, mid, direction, rejected}], in m-line order.
+function fakeSections(sdp) {
+  const sections = [];
+  for (const line of String(sdp || "").split(/\r?\n/)) {
+    const m = /^m=(\w+) (\d+) /.exec(line);
+    if (m) {
+      sections.push({ kind: m[1], mid: null, direction: "sendrecv", rejected: m[2] === "0" });
+      continue;
+    }
+    const current = sections.at(-1);
+    if (!current) continue;
+    const mid = /^a=mid:(\S+)/.exec(line);
+    if (mid) current.mid = mid[1];
+    const direction = /^a=(sendrecv|sendonly|recvonly|inactive)$/.exec(line);
+    if (direction) current.direction = direction[1];
+  }
+  return sections;
+}
+
+const sends = (direction) => direction === "sendrecv" || direction === "sendonly";
+const receives = (direction) => direction === "sendrecv" || direction === "recvonly";
+// What an answerer ends up doing for an offered direction, given its own wish.
+function answerDirection(offered, own) {
+  const send = sends(own) && receives(offered);
+  const receive = receives(own) && sends(offered);
+  return send && receive ? "sendrecv" : send ? "sendonly" : receive ? "recvonly" : "inactive";
+}
+
 export class FakePeerConnection {
   static instances = [];
   /** false: media never connects (a network that needs a relay nobody set up). */
@@ -100,6 +165,8 @@ export class FakePeerConnection {
   static iceErrors = [];
   /** false: gathering never reports that it is complete. */
   static gatheringCompletes = true;
+  /** true: an answering connection rejects (port 0) every video line after the first, like a stack that does not know the extra line. */
+  static rejectExtraVideo = false;
 
   constructor(config) {
     this.config = config;
@@ -120,20 +187,39 @@ export class FakePeerConnection {
     this.onconnectionstatechange = null;
     FakePeerConnection.instances.push(this);
   }
+  #makeTransceiver(kind, { sender, direction, byAddTrack = false, mid = null }) {
+    const receiverTrack = new FakeTrack(kind);
+    receiverTrack.muted = true; // a remote track stays muted until media actually arrives
+    const transceiver = {
+      kind,
+      sender,
+      receiver: { track: receiverTrack },
+      direction,
+      currentDirection: null,
+      mid,
+      byAddTrack,
+      stopped: false,
+      setCodecPreferences: vi.fn(),
+    };
+    this.senders.push(sender);
+    this.transceivers.push(transceiver);
+    return transceiver;
+  }
+  #takeMid() {
+    const used = new Set(this.transceivers.map((t) => t.mid).filter((m) => m !== null));
+    let n = 0;
+    while (used.has(String(n))) n += 1;
+    return String(n);
+  }
   addTrack(track) {
     const sender = new FakeSender(track);
-    this.senders.push(sender);
-    this.transceivers.push({ sender, receiver: { track: { kind: track.kind } }, setCodecPreferences: vi.fn() });
+    this.#makeTransceiver(track.kind, { sender, direction: "sendrecv", byAddTrack: true });
     return sender;
   }
   addTransceiver(kind, init = {}) {
     // Like a browser: a two-way transceiver without a track yet, which a track
     // can later be swapped into without renegotiating.
-    const sender = new FakeSender(null);
-    const transceiver = { sender, receiver: { track: { kind } }, direction: init.direction, setCodecPreferences: vi.fn() };
-    this.senders.push(sender);
-    this.transceivers.push(transceiver);
-    return transceiver;
+    return this.#makeTransceiver(kind, { sender: new FakeSender(null), direction: init.direction || "sendrecv" });
   }
   getTransceivers() { return this.transceivers; }
   createDataChannel() {
@@ -142,11 +228,33 @@ export class FakePeerConnection {
   }
   async createOffer(options) {
     this.offerOptions.push(options);
-    return { type: "offer", sdp: FAKE_SDP };
+    for (const t of this.transceivers) if (t.mid === null && !t.stopped) t.mid = this.#takeMid();
+    const sections = this.transceivers.map((t) => ({ kind: t.kind, mid: t.mid, direction: t.direction, rejected: false }));
+    return { type: "offer", sdp: fakeSdp(sections) };
   }
-  async createAnswer() { return { type: "answer", sdp: FAKE_SDP }; }
+  async createAnswer() {
+    let videoSeen = 0;
+    const sections = fakeSections(this.remoteDescription?.sdp).map((offered) => {
+      const t = this.transceivers.find((x) => x.mid === offered.mid);
+      if (offered.kind === "video") videoSeen += 1;
+      const unknown = FakePeerConnection.rejectExtraVideo && offered.kind === "video" && videoSeen > 1;
+      if (unknown) {
+        if (t) t.stopped = true;
+        return { kind: offered.kind, mid: offered.mid, direction: "inactive", rejected: true };
+      }
+      if (!t || t.stopped) return { kind: offered.kind, mid: offered.mid, direction: "inactive", rejected: true };
+      return { kind: offered.kind, mid: offered.mid, direction: answerDirection(offered.direction, t.direction), rejected: false };
+    });
+    return { type: "answer", sdp: fakeSdp(sections) };
+  }
   async setLocalDescription(desc) {
     this.localDescription = desc;
+    if (desc.type === "answer") {
+      for (const section of fakeSections(desc.sdp)) {
+        const t = this.transceivers.find((x) => x.mid === section.mid);
+        if (t) t.currentDirection = section.rejected ? null : section.direction;
+      }
+    }
     // Gathering yields two candidates and then the end-of-candidates marker.
     queueMicrotask(() => {
       const make = (n) => ({ candidate: { toJSON: () => ({ candidate: `candidate:${n} 1 udp 1 10.0.0.${n} 9 typ host`, sdpMid: "0" }) } });
@@ -171,21 +279,32 @@ export class FakePeerConnection {
   }
   async setRemoteDescription(desc) {
     this.remoteDescription = desc;
-    if (
-      desc.type === "offer" &&
-      FakePeerConnection.videoLineFromOffer &&
-      FakePeerConnection.instances.some(
-        (pc) => pc !== this && pc.transceivers.some((t) => t.receiver.track.kind === "video"),
-      ) &&
-      !this.transceivers.some((t) => t.receiver.track.kind === "video")
-    ) {
-      this.transceivers.push({
-        sender: new FakeSender(null),
-        receiver: { track: { kind: "video" } },
-        direction: "recvonly",
-        setCodecPreferences: vi.fn(),
-      });
-    }
+    const sections = fakeSections(desc.sdp);
+    sections.forEach((section) => {
+      let t = this.transceivers.find((x) => x.mid === section.mid);
+      if (!t && desc.type === "offer" && !section.rejected) {
+        // A browser attaches the offered line to a transceiver addTrack made
+        // for that kind, or else creates a receive-only one.
+        t = this.transceivers.find((x) => x.mid === null && x.byAddTrack && x.kind === section.kind && !x.stopped);
+        if (t) t.mid = section.mid;
+        else if (section.kind !== "video" || FakePeerConnection.videoLineFromOffer) {
+          t = this.#makeTransceiver(section.kind, { sender: new FakeSender(null), direction: "recvonly", mid: section.mid });
+        }
+      }
+      if (!t) return;
+      if (desc.type === "answer") {
+        if (section.rejected) {
+          t.stopped = true;
+          t.currentDirection = null;
+        } else {
+          t.currentDirection = answerDirection(section.direction, t.direction);
+        }
+      }
+      if (!section.rejected && sends(section.direction)) {
+        // The remote side sends on this line: the browser announces the track.
+        this.ontrack?.({ track: t.receiver.track, transceiver: t, receiver: t.receiver, streams: [] });
+      }
+    });
     this.#maybeConnect();
   }
   async addIceCandidate(c) { this.addedCandidates.push(c); }
@@ -205,17 +324,31 @@ export class FakePeerConnection {
   }
 }
 
-export const FAKE_SDP = [
-  "v=0",
-  "o=- 1 2 IN IP4 127.0.0.1",
-  "s=-",
-  "t=0 0",
-  "a=fingerprint:sha-256 AA:BB:CC:SECRET-FINGERPRINT",
-  "m=audio 9 UDP/TLS/RTP/SAVPF 111",
-  "a=rtpmap:111 opus/48000/2",
-  "a=fmtp:111 minptime=10;useinbandfec=1",
-  "",
-].join("\r\n");
+/** The SDP of a fake session: one fingerprint, one BUNDLE group, one m-line per section. */
+export function fakeSdp(sections) {
+  const bundled = sections.filter((s) => !s.rejected).map((s) => s.mid);
+  const lines = [
+    "v=0",
+    "o=- 1 2 IN IP4 127.0.0.1",
+    "s=-",
+    "t=0 0",
+    "a=fingerprint:sha-256 AA:BB:CC:SECRET-FINGERPRINT",
+    `a=group:BUNDLE ${bundled.join(" ")}`.trimEnd(),
+  ];
+  for (const s of sections) {
+    if (s.kind === "audio") {
+      lines.push(`m=audio ${s.rejected ? 0 : 9} UDP/TLS/RTP/SAVPF 111`, `a=mid:${s.mid}`, `a=${s.direction}`);
+      lines.push("a=rtpmap:111 opus/48000/2", "a=fmtp:111 minptime=10;useinbandfec=1");
+    } else {
+      lines.push(`m=${s.kind} ${s.rejected ? 0 : 9} UDP/TLS/RTP/SAVPF 96`, `a=mid:${s.mid}`, `a=${s.direction}`);
+      lines.push("a=rtpmap:96 VP8/90000");
+    }
+  }
+  lines.push("");
+  return lines.join("\r\n");
+}
+
+export const FAKE_SDP = fakeSdp([{ kind: "audio", mid: "0", direction: "sendrecv", rejected: false }]);
 
 /** Links the two negotiated data channels of a call so state messages flow. */
 export function linkDataChannels(a, b) {

@@ -7,6 +7,7 @@ import { USERNAME_INPUT_PATTERN, useNameLimits } from "../../../utils/nameLimits
 import { InlineError } from "../common/InlineError.jsx";
 import { AboutSettingsPanel } from "../panels/AboutSettingsPanel.jsx";
 import { AppearanceSettingsPanel } from "../panels/AppearanceSettingsPanel.jsx";
+import { CallSoundsSettingsPanel } from "../panels/CallSoundsSettingsPanel.jsx";
 import { DataSettingsPanel } from "../panels/DataSettingsPanel.jsx";
 import ConfirmPasswordModal from "../../modals/ConfirmPasswordModal.jsx";
 import Avatar from "../../common/Avatar.jsx";
@@ -70,7 +71,9 @@ export function DesktopSettingsModal({
                   ? "Data"
                   : settingsPanel === "appearance"
                     ? "Appearance"
-                    : "About"}
+                    : settingsPanel === "sounds"
+                      ? "Call sounds"
+                      : "About"}
           </h3>
           <button
             type="button"
@@ -384,6 +387,12 @@ export function DesktopSettingsModal({
         {settingsPanel === "appearance" ? (
           <div className="app-scroll mt-4 min-h-0 flex-1 overflow-y-auto px-6 pb-6">
             <AppearanceSettingsPanel onDone={handleClosePanel} variant="desktop" />
+          </div>
+        ) : null}
+
+        {settingsPanel === "sounds" ? (
+          <div className="app-scroll mt-4 min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+            <CallSoundsSettingsPanel onDone={handleClosePanel} variant="desktop" />
           </div>
         ) : null}
 

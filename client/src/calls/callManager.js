@@ -35,6 +35,7 @@ import {
   isQualityChoice,
 } from "./mediaTuning.js";
 import { loadQuality, saveQuality } from "./callQuality.js";
+import { ScreenShare, canShareScreen, locateVideoLines } from "./screenShare.js";
 
 export const CALL_PHASE = Object.freeze({
   IDLE: "idle",
@@ -99,6 +100,15 @@ const idleState = () => ({
   audioDeviceError: null, // why the last microphone switch did not work
   quality: "auto", // what this person asked to watch: "auto" or one level
   videoStats: null, // {width, height, fps} of the picture that arrives
+  screenSharing: false, // this person is sending their screen
+  screenSurface: null, // what is shared: "monitor" | "window" | "browser"
+  screenBusy: false, // the picker is open / the share is starting
+  screenError: null, // "cancelled" | "unsupported" | "unavailable" | "failed": a small hint that clears itself
+  screenAvailable: false, // the screen line is negotiated and the other app can show a shared screen
+  remoteScreenOn: false, // the other person shares their screen and its picture is here
+  remoteScreenStream: null, // a stream with only the shared screen's picture
+  remoteScreenSize: null, // {w, h} as announced (clamped)
+  screenStats: null, // {width, height, fps} of the shared screen that arrives
   networkPaused: false,
   relayed: false,
   localStream: null,
@@ -168,6 +178,8 @@ export class CallManager {
    * @param {Function} [opts.createMediaStream]     () => MediaStream
    * @param {Function} [opts.getVideoCodecs]        () => RTCRtpCodec[] | null
    * @param {Function} [opts.requestWakeLock]       () => Promise<{release: Function}>
+   * @param {Function|null} [opts.getDisplayMedia]  (constraints) => Promise<MediaStream>; null: this browser cannot share its screen
+   * @param {boolean} [opts.screenSharing]          false: act like an app that has no screen line
    * @param {{postMessage: Function, close?: Function}} [opts.broadcast]
    */
   constructor(opts) {
@@ -183,6 +195,10 @@ export class CallManager {
         }
       },
       requestWakeLock: async () => navigator.wakeLock.request("screen"),
+      // Screen capture exists on computers only; without it a screen can still be watched.
+      getDisplayMedia: canShareScreen() ? (c) => navigator.mediaDevices.getDisplayMedia(c) : null,
+      // false behaves like an older app that knows nothing about screen sharing.
+      screenSharing: true,
       // "Ringing" is only reported to the caller while this screen can really
       // show the call (not in the background, not with the screen off).
       isPageVisible: () => typeof document === "undefined" || !document.hidden,
@@ -703,8 +719,12 @@ export class CallManager {
 
     try {
       if (kind === "offer" && call.direction === "incoming") {
-        await call.pc.setRemoteDescription({ type: "offer", sdp: String(payload.sdp) });
-        await this.#adoptOfferedVideoLine(call);
+        const offeredSdp = String(payload.sdp);
+        // The screen line is known from the offer, before the browser has
+        // applied it, so its track can be told apart the moment it arrives.
+        this.#expectScreenLine(call, offeredSdp);
+        await call.pc.setRemoteDescription({ type: "offer", sdp: offeredSdp });
+        await this.#adoptOfferedVideoLine(call, offeredSdp);
         await this.#drainRemoteCandidates(call);
         const answer = await call.pc.createAnswer();
         const sdp = tuneOpusSdp(answer.sdp);
@@ -733,9 +753,15 @@ export class CallManager {
    * but only receives. Make it two-way before answering so the camera can be
    * switched on later by swapping in a track, with no new negotiation.
    */
-  async #adoptOfferedVideoLine(call) {
+  async #adoptOfferedVideoLine(call, sdp = "") {
+    this.#adoptScreenLine(call, sdp);
     if (call.kind !== "video" || call.videoSender) return;
-    const line = call.pc.getTransceivers().find((t) => t.receiver?.track?.kind === "video");
+    // The camera is the first video line of the offer; the screen line is never mistaken for it.
+    const cameraMid = locateVideoLines(sdp, call.kind).camera?.mid;
+    const transceivers = call.pc.getTransceivers();
+    const line =
+      (cameraMid != null && transceivers.find((t) => t.mid === cameraMid)) ||
+      transceivers.find((t) => !call.screen?.isLine(t) && t.receiver?.track?.kind === "video");
     if (!line) return;
     try {
       line.direction = "sendrecv";
@@ -753,6 +779,31 @@ export class CallManager {
         // The next camera toggle tries again.
       }
     }
+  }
+
+  /** Learns which video line of the offer is the screen's (by position), before it is applied. */
+  #expectScreenLine(call, sdp) {
+    if (!call.screen || call.screen.hasLine) return;
+    const { screen } = locateVideoLines(sdp, call.kind);
+    if (screen) call.screen.expectMid(screen.mid);
+  }
+
+  /**
+   * The offer's screen line only receives until we answer it: make it two-way,
+   * so either side can share. An offer without that line (an older app) leaves
+   * screen sharing off for this call.
+   */
+  #adoptScreenLine(call, sdp) {
+    if (!call.screen || call.screen.hasLine) return;
+    const { screen } = locateVideoLines(sdp, call.kind);
+    if (!screen) return;
+    const line = call.pc.getTransceivers().find((t) => t.mid === screen.mid);
+    if (!line) return;
+    try {
+      line.direction = "sendrecv";
+    } catch (_) {}
+    call.screen.attachLine(line);
+    this.#applyCodecPreferences(call);
   }
 
   async #drainRemoteCandidates(call) {
@@ -803,19 +854,29 @@ export class CallManager {
       const transceiver = pc.addTransceiver?.("video", { direction: "sendrecv" });
       call.videoSender = transceiver?.sender || null;
     }
+    this.#addScreenLine(call);
     this.#applyCodecPreferences(call);
 
     // Negotiated in-band channel for mute/camera state; no renegotiation and
     // no extra signaling. It rides the same encrypted DTLS transport.
     try {
       call.dc = pc.createDataChannel("aurelle", { negotiated: true, id: 0, ordered: true });
-      call.dc.onopen = () => this.#sendMediaState(call);
+      call.dc.onopen = () => {
+        this.#sendMediaState(call);
+        if (call.screen?.sharing) call.screen.announce();
+      };
       call.dc.onmessage = (e) => this.#onChannelMessage(call, e.data);
     } catch (_) {
       call.dc = null;
     }
 
     pc.ontrack = (event) => {
+      // The shared screen has a stream of its own: its picture is neither the
+      // camera's nor shown until the other person announces a share.
+      if (call.screen?.isLine(event.transceiver)) {
+        if (event.track.kind === "video") call.screen.attachRemoteTrack(event.track);
+        return;
+      }
       if (!call.remoteStream.getTracks().includes(event.track)) {
         call.remoteStream.addTrack(event.track);
       }
@@ -865,13 +926,43 @@ export class CallManager {
     try {
       const codecs = this.#opts.getVideoCodecs();
       if (!codecs?.length) return;
-      const transceiver = call.pc
+      const ordered = orderVideoCodecs(codecs);
+      // The camera's line and the screen's line prefer the same hardware-friendly codecs.
+      call.pc
         .getTransceivers()
-        .find((t) => t.sender === call.videoSender || t.receiver?.track?.kind === "video");
-      transceiver?.setCodecPreferences?.(orderVideoCodecs(codecs));
+        .filter((t) => t.sender === call.videoSender || t.receiver?.track?.kind === "video")
+        .forEach((t) => {
+          try {
+            t.setCodecPreferences?.(ordered);
+          } catch (_) {}
+        });
     } catch (_) {
       // Codec preferences are an optimisation only.
     }
+  }
+
+  /**
+   * Every call is offered a second video line for the screen, right after the
+   * camera's (the only video line of a voice call), two-way and with no picture
+   * on it: nothing is sent until someone shares, and sharing never renegotiates.
+   * The answering side configures the line the offer created (see
+   * #adoptScreenLine): a browser does not attach a transceiver made without a
+   * track to the offer's lines.
+   */
+  #addScreenLine(call) {
+    if (this.#opts.screenSharing === false) return;
+    call.screen = new ScreenShare({
+      getDisplayMedia: this.#opts.getDisplayMedia,
+      send: (message) => this.#sendChannel(call, message),
+      emit: (patch) => {
+        if (!this.#isStale(call)) this.#set(patch);
+      },
+      isLive: () => !this.#isStale(call),
+      createMediaStream: this.#opts.createMediaStream,
+    });
+    if (call.direction !== "outgoing") return;
+    const line = call.pc.addTransceiver?.("video", { direction: "sendrecv" });
+    if (line) call.screen.attachLine(line);
   }
 
   async #negotiate(call, { iceRestart, reveal = null }) {
@@ -1451,17 +1542,22 @@ export class CallManager {
   }
 
   #sendMediaState(call) {
+    this.#sendChannel(call, {
+      t: "state",
+      muted: this.#state.muted,
+      video: call.localStream?.getVideoTracks().length > 0,
+      q: this.#quality,
+      // This app can show a shared screen (an older one never says so).
+      ...(call.screen?.capabilityToAnnounce ? { screen: true } : {}),
+    });
+  }
+
+  /** One message on the in-band channel, if it is open. */
+  #sendChannel(call, message) {
     const dc = call.dc;
     if (!dc || dc.readyState !== "open") return;
     try {
-      dc.send(
-        JSON.stringify({
-          t: "state",
-          muted: this.#state.muted,
-          video: call.localStream?.getVideoTracks().length > 0,
-          q: this.#quality,
-        }),
-      );
+      dc.send(JSON.stringify(message));
     } catch (_) {}
   }
 
@@ -1471,8 +1567,11 @@ export class CallManager {
       const msg = JSON.parse(data);
       if (msg?.t === "state") {
         this.#set({ remoteMuted: msg.muted === true, remoteCameraOn: msg.video === true });
+        call.screen?.setPeerCapable(msg.screen === true);
         // Anything that is not a real level counts as Auto.
         this.#onPeerQuality(call, isQualityChoice(msg.q) ? msg.q : "auto");
+      } else if (msg?.t === "screen") {
+        call.screen?.onRemoteMessage(msg);
       }
     } catch (_) {}
   }
