@@ -10,7 +10,7 @@ import LinkPreviewsSetting from "../common/LinkPreviewsSetting.jsx";
 const accentOf = (hex) => colorScale(hex)[500];
 
 const swatch = (selected) =>
-  `h-9 w-9 rounded-full border-2 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
+  `h-9 w-9 rounded-full border-2 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
     selected ? "border-slate-900 ring-2 ring-emerald-300 dark:border-white" : "border-white/70 dark:border-slate-700"
   }`;
 

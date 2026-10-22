@@ -396,7 +396,7 @@ export default function VideoNoteBubble({ msg, user, header = null }) {
           onClick={onToggle}
           aria-label={label}
           aria-busy={loading}
-          className="absolute inset-0 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+          className="absolute inset-0 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
           style={{ position: "absolute", inset: 0, padding: `${(INSET / SIZE) * 100}%` }}
         >
           <span
@@ -501,7 +501,7 @@ export default function VideoNoteBubble({ msg, user, header = null }) {
           aria-valuetext={`${formatDurationMs(progress * totalS * 1000)} of ${formatDurationMs(durationMs)}`}
           tabIndex={source && engaged ? 0 : -1}
           onKeyDown={onSliderKey}
-          className="rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+          className="rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
           style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
         />
         {error ? (

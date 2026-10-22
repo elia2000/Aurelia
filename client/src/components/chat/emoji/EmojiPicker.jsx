@@ -39,7 +39,7 @@ function EmojiButton({ emoji, onPick }) {
       aria-label={emoji.shortName}
       title={`:${emoji.shortName}:`}
       onClick={() => onPick(emoji.char)}
-      className="flex h-9 w-9 items-center justify-center rounded-lg transition hover:bg-emerald-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 dark:hover:bg-emerald-500/20"
+      className="flex h-9 w-9 items-center justify-center rounded-lg transition hover:bg-emerald-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 dark:hover:bg-emerald-500/20"
     >
       <img
         className="emoji-pick"

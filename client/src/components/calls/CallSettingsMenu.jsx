@@ -100,6 +100,11 @@ const describePicture = (stats) =>
  * The call's settings: where the sound goes, which microphone, and (video
  * calls) how sharp the picture you watch should be. Below the choices: how the
  * connection is doing, in numbers, and the keyboard shortcuts of the call.
+ *
+ * `clearOf` is the distance in pixels from the bottom edge of the card to the
+ * top of something the panel must not cover (the screen-sharing banner, which
+ * has to stay readable while the settings are open): the panel then sits above
+ * it, and is not taller than what is left.
  */
 export default function CallSettingsMenu({
   open,
@@ -117,6 +122,7 @@ export default function CallSettingsMenu({
   onFit,
   connection,
   showShortcuts = false,
+  clearOf = 0,
 }) {
   const panelRef = useRef(null);
 
@@ -152,6 +158,11 @@ export default function CallSettingsMenu({
         role="group"
         aria-label="Call settings"
         className="absolute inset-x-3 bottom-24 z-40 max-h-[65%] overflow-y-auto rounded-2xl border border-white/10 bg-slate-900/95 p-2 text-left shadow-2xl backdrop-blur"
+        style={
+          clearOf > 0
+            ? { bottom: `${clearOf + 8}px`, maxHeight: `min(65%, calc(100% - ${clearOf + 8}px - 4.5rem))` }
+            : undefined
+        }
       >
         {model.routes.length > 0 ? (
           <Section title="Sound">

@@ -6,7 +6,8 @@
  * web server (SSRF), and cannot tie the server up:
  *
  *   - only http/https, no user:password in the URL, ports 80/443 only
- *   - the host name is resolved HERE, every returned address must be public
+ *   - the host name is resolved HERE (c-ares with a timeout, cancelled by the
+ *     deadline below; see dnsResolver.js), every returned address must be public
  *     (see addresses.js), and the connection is made to that exact address
  *     (the socket's own lookup is replaced), so a DNS answer that changes
  *     between "check" and "connect" (DNS rebinding) cannot matter
@@ -29,10 +30,10 @@
  * variable in production.
  */
 
-import dns from "node:dns";
 import http from "node:http";
 import https from "node:https";
 import { addressFamily, isPublicAddress } from "./addresses.js";
+import { createDnsResolver } from "./dnsResolver.js";
 
 export const USER_AGENT = "AurelleLinkPreview/1.0 (+self-hosted messenger; no cookies)";
 export const MAX_URL_LENGTH = 2048;
@@ -108,7 +109,9 @@ export function checkLinkUrl(raw, { allowPrivate = false } = {}) {
   return url;
 }
 
-const defaultResolve = (hostname) => dns.promises.lookup(hostname, { all: true, verbatim: true });
+// c-ares, not getaddrinfo: it times out, and the fetch's deadline cancels it
+// (see dnsResolver.js for why the threadpool lookup is not an option).
+const defaultResolve = createDnsResolver();
 
 /**
  * The real request. One connection to one of `addresses` (already checked),
@@ -217,7 +220,7 @@ async function readLimited(response, { maxBytes, mustFit, signal }) {
 
 /**
  * @param {object} [options]
- * @param {(host: string) => Promise<Array<{address: string, family?: number}>>} [options.resolve]
+ * @param {(host: string, options: { signal: AbortSignal }) => Promise<Array<{address: string, family?: number}>>} [options.resolve]
  * @param {Function} [options.transport]  see nodeTransport
  * @param {boolean}  [options.allowPrivate]  TEST HOOK, see the file comment
  */
@@ -232,7 +235,7 @@ export function createGuardedFetcher({
     if (family) return [{ address: host, family }];
     let answer;
     try {
-      answer = await raceAbort(resolve(host.replace(/\.$/, "")), signal);
+      answer = await raceAbort(resolve(host.replace(/\.$/, ""), { signal }), signal);
     } catch (error) {
       if (error instanceof LinkPreviewError) throw error;
       if (signal.aborted) throw signal.reason;

@@ -1274,7 +1274,7 @@ export default function ChatWindowPanel({
                           whenTruncated={false}
                         >
                           <span
-                            className={`block min-w-0 truncate whitespace-nowrap font-semibold leading-[1.2] text-emerald-500 dark:text-emerald-300 ${
+                            className={`block min-w-0 truncate whitespace-nowrap font-semibold leading-[1.2] text-emerald-600 dark:text-emerald-300 ${
                               hasPersian(typingIndicator?.label) ? "font-fa sb-fa-baseline-fix" : ""
                             }`}
                             dir="auto"
@@ -1301,7 +1301,7 @@ export default function ChatWindowPanel({
                         <span
                           className={`block min-w-0 truncate leading-[1.2] ${
                             peerStatusLabel === "online"
-                              ? "font-semibold text-emerald-500 dark:text-emerald-300"
+                              ? "font-semibold text-emerald-600 dark:text-emerald-300"
                               : ""
                           } ${
                             hasPersian(peerStatusLabel) ? "font-fa sb-fa-baseline-fix" : ""
@@ -1630,7 +1630,7 @@ export default function ChatWindowPanel({
             <ArrowDown size={18} className="icon-anim-bob" />
           </span>
           {unreadInChat > 0 ? (
-            <span className="absolute -right-1 -top-1 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-emerald-500 px-2 text-[10px] font-bold text-white">
+            <span className="absolute -right-1 -top-1 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-emerald-600 px-2 text-[10px] font-bold text-white">
               {unreadInChat > 999 ? formatCompactCount(unreadInChat) : unreadInChat}
             </span>
           ) : null}

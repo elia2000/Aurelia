@@ -871,7 +871,7 @@ export default function ChatsListPanel({
                           className={`inline-flex h-5 min-w-[20px] items-center justify-center rounded-full px-1.5 text-xs font-bold text-white ${
                             conv._muted
                               ? "bg-slate-400 dark:bg-slate-500"
-                              : "bg-emerald-500"
+                              : "bg-emerald-600"
                           }`}
                         >
                           {unreadCount}

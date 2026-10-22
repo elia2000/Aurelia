@@ -39,7 +39,7 @@ export const DataSettingsPanel = memo(function DataSettingsPanel({
       className={`${isMobile ? "space-y-3" : "space-y-4"} text-slate-600 dark:text-slate-300`}
     >
       <div className="rounded-2xl border border-emerald-200/70 bg-white/90 px-6 py-5 text-center dark:border-emerald-500/30 dark:bg-slate-900/50">
-        <p className="text-[10px] uppercase tracking-[0.25em] text-emerald-500/80">
+        <p className="text-[10px] uppercase tracking-[0.25em] text-emerald-600 dark:text-emerald-400">
           Cached Size
         </p>
         <p

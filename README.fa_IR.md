@@ -83,7 +83,7 @@ nginx همراه پروژه پیش از اجرا به فایل‌های `certs/c
 مستندات در پوشه‌ی [`docs/`](docs/) قرار دارد (VitePress، انگلیسی و فارسی). برای مرور محلی `npm run docs:dev` را اجرا کنید.
 
 - [تماس‌ها و پیام‌های ویدیویی](docs/fa/Calls-and-Video-Messages.md)
-- [منوی پیام](docs/fa/Message-Menu.md)، [واکنش‌ها](docs/fa/Reactions.md)، [انتخاب پیام‌ها](docs/fa/Selecting-Messages.md)، [پیام‌ها و گفتگوهای سنجاق‌شده](docs/fa/Pinned-Messages-and-Chats.md)، [گیف‌ها](docs/fa/Saved-GIFs.md)
+- [منوی پیام](docs/fa/Message-Menu.md)، [واکنش‌ها](docs/fa/Reactions.md)، [انتخاب پیام‌ها](docs/fa/Selecting-Messages.md)، [پیام‌ها و گفتگوهای سنجاق‌شده](docs/fa/Pinned-Messages-and-Chats.md)، [گیف‌ها](docs/fa/Saved-GIFs.md)، [پیش‌نمایش پیوند](docs/fa/Link-Previews.md)
 - [پروتکل رمزنگاری سرتاسری](docs/fa/E2EE-Protocol.md) (برای توسعه‌دهندگان اپلیکیشن بومی)
 - [اسکریپت نصب](docs/fa/Deployment-Script.md)
 - [نصب از طریق Docker](docs/fa/Installation-Docker.md)

@@ -37,7 +37,7 @@ function GifTile({ gif, index, isTouch, onSend, onOpenMenu }) {
       onClick={() => onSend(gif)}
       aria-label={`Send GIF ${index + 1}`}
       data-gif-id={gif.id}
-      className="relative block aspect-square w-full overflow-hidden bg-slate-100 outline-hidden transition duration-150 [-webkit-touch-callout:none] hover:brightness-90 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-400 dark:bg-slate-800"
+      className="relative block aspect-square w-full overflow-hidden bg-slate-100 outline-hidden transition duration-150 [-webkit-touch-callout:none] hover:brightness-90 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-500 dark:bg-slate-800"
     >
       <img
         src={gif.url}

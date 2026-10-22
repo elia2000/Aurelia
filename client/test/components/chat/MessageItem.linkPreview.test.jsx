@@ -274,6 +274,99 @@ describe("MessageItem - lazy loading", () => {
   });
 });
 
+describe("MessageItem - a card that arrives late, in a chat that is scrolled to the bottom", () => {
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const distanceFromBottom = (el) => el.scrollHeight - el.scrollTop - el.clientHeight;
+  let styleTag;
+
+  beforeEach(() => {
+    // Tailwind is not applied in these tests: give the card the size it has in the app.
+    styleTag = document.createElement("style");
+    // The time moves to its own row under the card (MessageItem's "row" meta): one more line of height.
+    styleTag.textContent =
+      "[data-link-preview]{display:flex;width:288px;margin-top:6px;min-height:60px}" +
+      "[data-message-bubble]:has([data-link-preview])::after{content:'';display:block;height:18px}";
+    document.head.append(styleTag);
+  });
+  afterEach(() => styleTag.remove());
+
+  // The server needs a moment for a link it has not seen: answer after `ms`.
+  const slowAnswer = (ms) =>
+    fetchMock.mockImplementation(async () => {
+      await wait(ms);
+      return { ok: true, status: 200, json: async () => PREVIEW };
+    });
+
+  const renderInScroller = async (fillerHeight) => {
+    await render(
+      <div
+        data-test-scroller
+        style={{ overflowY: "auto", overflowAnchor: "none", height: "300px", width: "420px" }}
+      >
+        <div style={{ height: `${fillerHeight}px` }} />
+        <MessageItem {...PROPS} msg={makeMsg()} />
+      </div>,
+    );
+    return document.querySelector("[data-test-scroller]");
+  };
+
+  test("the chat stays at the bottom, so the new card is not pushed out of view", async () => {
+    slowAnswer(250); // well after the message itself was put in place
+    const scroller = await renderInScroller(500);
+    scroller.scrollTop = scroller.scrollHeight;
+    expect(distanceFromBottom(scroller)).toBeLessThanOrEqual(1);
+
+    await expect.element(page.getByText("A very important headline")).toBeVisible();
+    expect(card()).not.toBeNull();
+    await wait(100);
+    expect(distanceFromBottom(scroller)).toBeLessThanOrEqual(1);
+    // The whole card is inside what the person sees.
+    expect(card().getBoundingClientRect().bottom).toBeLessThanOrEqual(scroller.getBoundingClientRect().bottom + 1);
+  });
+
+  test("and so does the sender's own message", async () => {
+    slowAnswer(250);
+    await render(
+      <div data-test-scroller style={{ overflowY: "auto", overflowAnchor: "none", height: "300px", width: "420px" }}>
+        <div style={{ height: "500px" }} />
+        <MessageItem {...PROPS} msg={makeMsg({ user_id: ME.id, username: ME.username, nickname: ME.nickname })} />
+      </div>,
+    );
+    const scroller = document.querySelector("[data-test-scroller]");
+    scroller.scrollTop = scroller.scrollHeight;
+    await expect.element(page.getByText("A very important headline")).toBeVisible();
+    await wait(100);
+    expect(distanceFromBottom(scroller)).toBeLessThanOrEqual(1);
+  });
+
+  test("someone who scrolled up to read is left where they are", async () => {
+    slowAnswer(150);
+    const scroller = await renderInScroller(300);
+    scroller.scrollTop = 20; // not at the bottom
+    const before = scroller.scrollTop;
+    await expect.element(page.getByText("A very important headline")).toBeVisible();
+    await wait(100);
+    expect(scroller.scrollTop).toBe(before);
+  });
+});
+
+describe("MessageItem - the keyboard focus ring of the card", () => {
+  // Tailwind is not applied in these tests, so the class is what is checked: the 400 shade it used to be
+  // measures 1.7:1 on an own bubble and 2.3:1 on another person's in light mode; 700 (300 in dark mode)
+  // is guarded by the "ring-on-bubble" pairs of themeContrast.js (>= 3:1 for every accent).
+  test.each([
+    ["another person's", ME.id, BOB.id],
+    ["my own", ME.id, ME.id],
+  ])("on %s bubble it is the dark shade, and the light one in dark mode", async (_name, _me, sender) => {
+    await render(<MessageItem {...PROPS} msg={makeMsg({ user_id: sender })} />);
+    await expect.element(page.getByText("A very important headline")).toBeVisible();
+    const classes = card().className;
+    expect(classes).toContain("focus-visible:outline-emerald-700");
+    expect(classes).toContain("dark:focus-visible:outline-emerald-300");
+    expect(classes).not.toContain("outline-emerald-400");
+  });
+});
+
 describe("MessageItem - the picture", () => {
   test("is drawn from the address the server gave (its own), never from the linked site", async () => {
     const image = "/api/link-preview/image/0123456789abcdef0123456789abcdef";

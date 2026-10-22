@@ -4,15 +4,19 @@
  * Decided from the bytes only (never the Content-Type or file name the other
  * site sent). PNG, JPEG, WebP and GIF are accepted; SVG, BMP and everything
  * else are not. The size is read from the header, so a tiny file that claims
- * to be tens of thousands of pixels wide (a decompression bomb for whoever
- * decodes it) is refused without decoding anything.
+ * to be thousands of pixels wide (a decompression bomb for whoever decodes it:
+ * the server never does, but the browser of everyone reading the chat would)
+ * is refused without decoding anything.
  */
 
 import { IMAGE_MIME_BY_TYPE, sniffImageType } from "../animatedImage.js";
 
 export const PREVIEW_IMAGE_MAX_BYTES = 400 * 1024;
 export const MAX_IMAGE_SIDE = 10000;
-export const MAX_IMAGE_PIXELS = 36_000_000;
+// A preview picture is drawn 64 px wide, but the browser decodes all of it: 4
+// bytes a pixel, so this is at most 16 MB of bitmap (a real og:image is about
+// 1200 x 630; 36 MP, which this used to allow, was 144 MB for one card).
+export const MAX_IMAGE_PIXELS = 2048 * 2048;
 
 const ALLOWED = new Set(["png", "jpeg", "webp", "gif"]);
 

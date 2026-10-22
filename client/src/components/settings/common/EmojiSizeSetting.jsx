@@ -37,7 +37,7 @@ const EmojiSizeSetting = memo(function EmojiSizeSetting({ variant = "desktop" })
                 className="peer sr-only"
               />
               <span
-                className={`flex flex-col items-center gap-1 rounded-2xl border border-emerald-200/70 bg-white/90 px-2 py-2 text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-50 peer-checked:border-emerald-400 peer-checked:bg-emerald-50 peer-checked:ring-2 peer-checked:ring-emerald-300 peer-focus-visible:ring-2 peer-focus-visible:ring-emerald-400 dark:border-emerald-500/30 dark:bg-slate-900/50 dark:text-emerald-200 dark:hover:bg-emerald-500/10 dark:peer-checked:bg-emerald-500/10 ${
+                className={`flex flex-col items-center gap-1 rounded-2xl border border-emerald-200/70 bg-white/90 px-2 py-2 text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-50 peer-checked:border-emerald-400 peer-checked:bg-emerald-50 peer-checked:ring-2 peer-checked:ring-emerald-300 peer-focus-visible:ring-2 peer-focus-visible:ring-emerald-500 dark:border-emerald-500/30 dark:bg-slate-900/50 dark:text-emerald-200 dark:hover:bg-emerald-500/10 dark:peer-checked:bg-emerald-500/10 ${
                   isMobile ? "text-xs" : "text-sm"
                 }`}
               >

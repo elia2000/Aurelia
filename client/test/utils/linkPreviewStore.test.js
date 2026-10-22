@@ -190,6 +190,21 @@ describe("when the server says no", () => {
     expect(await loadLinkPreview("https://example.com/a")).toBeTruthy();
   });
 
+  test("a server that is busy (503) does not stop previews for everybody, and the link is asked again later", async () => {
+    fetchMock.mockImplementation(async () => answer(503, { code: "busy" }));
+    expect(await loadLinkPreview("https://example.com/a")).toBeNull();
+    expect(peekLinkPreview("https://example.com/a")).toBeUndefined();
+    // No pause: the very next link is asked straight away, and so is this one.
+    fetchMock.mockImplementation(async () => answer(200, good()));
+    expect(await loadLinkPreview("https://example.com/b")).toBeTruthy();
+    expect(await loadLinkPreview("https://example.com/a")).toBeTruthy();
+  });
+
+  test("never more requests at once than the server lets one person run", () => {
+    // server/lib/linkPreview.js MAX_FETCHES_PER_OWNER; one more would just be answered "busy".
+    expect(MAX_PARALLEL).toBe(2);
+  });
+
   test("a plain 404 (an old server without the feature) is just 'nothing'", async () => {
     fetchMock.mockImplementation(async () => answer(404, { error: "Not found" }));
     expect(await loadLinkPreview("https://example.com/a")).toBeNull();

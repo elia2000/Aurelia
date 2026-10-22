@@ -136,7 +136,7 @@ export default function QuickReactionBar({
               aria-pressed={reacted}
               data-quick-reaction={emoji}
               onClick={() => react(emoji)}
-              className={`inline-flex h-9 w-9 max-[345px]:h-8 max-[345px]:w-8 items-center justify-center rounded-full outline-none transition duration-150 hover:scale-110 hover:bg-emerald-100 focus-visible:ring-2 focus-visible:ring-emerald-400 dark:hover:bg-emerald-500/20 ${
+              className={`inline-flex h-9 w-9 max-[345px]:h-8 max-[345px]:w-8 items-center justify-center rounded-full outline-none transition duration-150 hover:scale-110 hover:bg-emerald-100 focus-visible:ring-2 focus-visible:ring-emerald-500 dark:hover:bg-emerald-500/20 ${
                 reacted ? "bg-emerald-100 ring-1 ring-emerald-400 dark:bg-emerald-500/25" : ""
               }`}
             >
@@ -151,7 +151,7 @@ export default function QuickReactionBar({
           aria-haspopup="dialog"
           data-quick-reaction-more
           onClick={() => setPicker(!pickerOpen)}
-          className="inline-flex h-9 w-9 max-[345px]:h-8 max-[345px]:w-8 items-center justify-center rounded-full text-slate-500 outline-none transition duration-150 hover:bg-emerald-100 focus-visible:ring-2 focus-visible:ring-emerald-400 dark:text-slate-300 dark:hover:bg-emerald-500/20"
+          className="inline-flex h-9 w-9 max-[345px]:h-8 max-[345px]:w-8 items-center justify-center rounded-full text-slate-500 outline-none transition duration-150 hover:bg-emerald-100 focus-visible:ring-2 focus-visible:ring-emerald-500 dark:text-slate-300 dark:hover:bg-emerald-500/20"
         >
           <Plus size={18} />
         </button>

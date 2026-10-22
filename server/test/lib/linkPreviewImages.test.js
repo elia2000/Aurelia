@@ -52,8 +52,9 @@ describe("pictures that are accepted", () => {
   });
 
   test("a picture right at the limits", () => {
-    expect(readPreviewImage(pngBytes(6000, 6000))).toMatchObject({ width: 6000, height: 6000 });
-    expect(readPreviewImage(pngBytes(MAX_IMAGE_SIDE, 3600))).toMatchObject({ width: MAX_IMAGE_SIDE, height: 3600 });
+    expect(readPreviewImage(pngBytes(2048, 2048))).toMatchObject({ width: 2048, height: 2048 });
+    expect(readPreviewImage(pngBytes(MAX_IMAGE_SIDE, 419))).toMatchObject({ width: MAX_IMAGE_SIDE, height: 419 });
+    expect(readPreviewImage(pngBytes(1200, 630))).toMatchObject({ width: 1200, height: 630 }); // a typical og:image
     const exact = pngBytes(100, 50, PREVIEW_IMAGE_MAX_BYTES - pngBytes(100, 50).length);
     expect(exact.length).toBe(PREVIEW_IMAGE_MAX_BYTES);
     expect(readPreviewImage(exact)).not.toBeNull();
@@ -110,6 +111,15 @@ describe("pictures that claim to be enormous (a few bytes that decode to gigabyt
     ["PNG 4294967295 wide", () => pngBytes(0xffffffff, 10)],
     ["PNG 10001 wide", () => pngBytes(MAX_IMAGE_SIDE + 1, 10)],
     ["PNG 6001 x 6001", () => pngBytes(6001, 6001)],
+    // Small files that the page would still have to decode in full: 6000 x 6000
+    // is 144 MB of bitmap for a 64 px thumbnail, and eight of them used to cost
+    // a reader's browser half a gigabyte.
+    ["PNG 6000 x 6000", () => pngBytes(6000, 6000)],
+    ["PNG 2049 x 2048", () => pngBytes(2049, 2048)],
+    ["PNG 10000 x 420", () => pngBytes(MAX_IMAGE_SIDE, 420)],
+    ["GIF 3000 x 3000", () => gifBytes(3000, 3000)],
+    ["JPEG 4000 x 3000", () => jpegBytes(4000, 3000)],
+    ["WebP 3000 x 3000", () => webpBytes(3000, 3000)],
     ["PNG 0 wide", () => pngBytes(0, 10)],
     ["PNG 0 high", () => pngBytes(10, 0)],
     ["JPEG 65535 x 65535", () => jpegBytes(65535, 65535)],
@@ -120,7 +130,7 @@ describe("pictures that claim to be enormous (a few bytes that decode to gigabyt
     expect(readPreviewImage(make())).toBeNull();
   });
 
-  test("the pixel limit", () => {
-    expect(MAX_IMAGE_PIXELS).toBe(36_000_000);
+  test("the pixel limit is a few megapixels (what a real og:image needs, not what a bomb needs)", () => {
+    expect(MAX_IMAGE_PIXELS).toBe(2048 * 2048);
   });
 });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Close,
@@ -31,6 +31,7 @@ import { usePictureInPicture } from "../../calls/usePictureInPicture.js";
 import { useFullscreen } from "../../calls/useFullscreen.js";
 import { exitFullscreen } from "../../calls/fullscreen.js";
 import { useCallShortcuts } from "../../calls/useCallShortcuts.js";
+import { useCallShortcutsEnabled } from "../../calls/useCallShortcutPrefs.js";
 import { useAnnouncer } from "../../calls/useAnnouncer.js";
 import { loadFit, objectFitFor, saveFit } from "../../calls/pictureFit.js";
 import { CALL_PHASE, isFailureReason } from "../../calls/callManager.js";
@@ -164,6 +165,11 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
   const pinnedHidden = useRef(false);
   const [audioElement, setAudioElement] = useState(null);
   const settingsButtonRef = useRef(null);
+  const shareButtonRef = useRef(null);
+  const expandButtonRef = useRef(null);
+  const bannerRef = useRef(null);
+  // The single-letter keys are a per-device choice: the tooltips only name them while they work.
+  const lettersOn = useCallShortcutsEnabled();
   // One stable callback, so the element is only reported when it appears or goes.
   const attachAudio = useCallback((el) => {
     remoteAudioRef.current = el;
@@ -328,13 +334,17 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
   }, [videoOnScreen, mustStay, armHide]);
   // The hidden buttons cannot be focused, so whatever had focus loses it and
   // key presses would go to the page behind. Keep them on the call: the dialog
-  // takes the focus, and any key brings the details back.
+  // takes the focus (when the focus is on nothing, not when it is on something
+  // else: the chat's message box keeps what is typed into it), and any key
+  // brings the details back.
   useEffect(() => {
     if (!hideChrome) return undefined;
     const dialog = dialogRef.current;
     if (dialog && dialog.contains(document.activeElement) && document.activeElement !== dialog) dialog.focus({ preventScroll: true });
     const onKey = () => {
-      if (dialog && !dialog.contains(document.activeElement)) dialog.focus({ preventScroll: true });
+      // Only when the focus was lost (on nothing): never taken from the chat's own message box or list.
+      const focused = document.activeElement;
+      if (dialog && (!focused || focused === document.body)) dialog.focus({ preventScroll: true });
       wake();
     };
     document.addEventListener("keydown", onKey);
@@ -378,6 +388,75 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
     if (safetyOpen) void exitFullscreen(dialogRef.current);
   }, [safetyOpen]);
 
+  // ── focus when the card and the pill swap places ──
+  // The button that was pressed goes away with its half of the screen, which would leave the
+  // focus on nothing. When the focus was in the call, it follows to the other half.
+  const carryFocus = useRef(false);
+  const minimise = useCallback(() => {
+    carryFocus.current = Boolean(dialogRef.current?.contains(document.activeElement));
+    setMinimized(true);
+  }, [setMinimized]);
+  const expand = useCallback(() => {
+    carryFocus.current = true;
+    setMinimized(false);
+  }, [setMinimized]);
+  useEffect(() => {
+    if (!carryFocus.current) return;
+    carryFocus.current = false;
+    (minimized ? expandButtonRef : dialogRef).current?.focus({ preventScroll: true });
+  }, [minimized]);
+
+  // ── screen sharing: what a screen reader hears, and where the focus goes ──
+  // Said whichever way the change was made (the button, the S key, the banner, the pill, the
+  // browser's own "Stop sharing" bar, the other person), and not when the call itself ends
+  // (the card says that).
+  const watchedScreen = useRef({ sharing: Boolean(screenSharing), remote: Boolean(remoteScreenOn) });
+  useEffect(() => {
+    const before = watchedScreen.current;
+    const now = { sharing: Boolean(screenSharing), remote: Boolean(remoteScreenOn) };
+    watchedScreen.current = now;
+    if (phase !== CALL_PHASE.CONNECTED) return;
+    const name = peer?.nickname || peer?.username || "The other person";
+    if (now.sharing !== before.sharing) say(now.sharing ? "You are sharing your screen" : "Stopped sharing your screen");
+    else if (now.remote !== before.remote) say(now.remote ? `${name} is sharing their screen` : `${name} stopped sharing their screen`);
+  }, [screenSharing, remoteScreenOn, phase, peer, say]);
+  // Stop sharing in the banner removes the banner, and with it the focus: it goes to the
+  // Share screen button, which takes the banner's place in the row of buttons.
+  const focusShareUntil = useRef(0);
+  const stopFromBanner = useCallback(() => {
+    focusShareUntil.current = Date.now() + 3000;
+    stopScreenShare();
+  }, [stopScreenShare]);
+  useEffect(() => {
+    if (screenSharing || Date.now() > focusShareUntil.current) return;
+    focusShareUntil.current = 0;
+    const button = shareButtonRef.current;
+    if (button && !button.disabled && !button.closest("[inert]")) button.focus({ preventScroll: true });
+    else dialogRef.current?.focus({ preventScroll: true });
+  }, [screenSharing]);
+  // The call settings are a panel over the bottom of the card, where the sharing banner is: the
+  // banner stays on top of the click-catcher, and the panel sits above it.
+  const bannerShown = Boolean(screenSharing) && phase !== CALL_PHASE.ENDED && !minimized;
+  const [settingsClear, setSettingsClear] = useState(0);
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    const banner = bannerRef.current;
+    if (!settingsOpen || !bannerShown || !dialog || !banner) {
+      setSettingsClear(0);
+      return undefined;
+    }
+    const measure = () => {
+      const next = Math.max(0, Math.round(dialog.getBoundingClientRect().bottom - banner.getBoundingClientRect().top));
+      setSettingsClear((prev) => (prev === next ? prev : next));
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(measure);
+    const controls = dialog.querySelector('[data-chrome="controls"]');
+    [dialog, banner, controls].forEach((el) => el && observer.observe(el));
+    return () => observer.disconnect();
+  }, [settingsOpen, bannerShown]);
+
   // Keys: only while the card is on screen (a minimised call leaves them to the chat). An action
   // that returns false is not available right now, and its key goes on to whoever else wants it.
   const callOn = Boolean(active) && phase !== CALL_PHASE.INCOMING && phase !== CALL_PHASE.ENDED;
@@ -401,7 +480,7 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
       screen: () => {
         if (!canShare) return false;
         wake();
-        if (screenSharing) say("Stopped sharing your screen");
+        // (The change itself is announced below, whichever way it was made.)
         toggleScreenShare();
       },
       pip: () => {
@@ -419,7 +498,7 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
       // Escape closes the settings (and the safety number) first: only then the call.
       minimise: () => {
         if (!callOn || settingsOpen || safetyOpen) return false;
-        setMinimized(true);
+        minimise();
       },
       hangup: () => {
         if (!callOn) return false;
@@ -485,14 +564,17 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
   // An incoming call must not steal focus from what the person is typing:
   // pressing Space or Enter in the message box would otherwise answer it (and
   // turn the microphone on). Take focus only when nothing editable has it.
+  // The card of a call you place takes the focus too (you pressed the button that started it, and
+  // the keys of the call only work while the card, or nothing, has the focus).
   const ringing = phase === CALL_PHASE.INCOMING;
+  const placing = phase === CALL_PHASE.OUTGOING;
   useEffect(() => {
-    if (!ringing) return;
+    if (!ringing && !placing) return;
     const el = document.activeElement;
     const editing =
       el && (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName));
     if (!editing) dialogRef.current?.focus();
-  }, [ringing]);
+  }, [ringing, placing]);
 
   if (!active || typeof document === "undefined") return null;
 
@@ -560,6 +642,10 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
     return createPortal(
       <>
         {sink}
+        {/* Sharing starting or stopping is said here too, with the card out of sight. */}
+        <p role="status" className="sr-only">
+          {announcement}
+        </p>
         <div
           role="status"
           className="fixed left-1/2 z-[340] flex -translate-x-1/2 items-center gap-3 rounded-full bg-emerald-600 py-1.5 pl-4 pr-1.5 text-white shadow-lg"
@@ -569,14 +655,23 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
           <span className={`min-w-0 max-w-[40vw] truncate text-sm font-semibold ${fa}`} dir="auto">
             {peerName}
           </span>
-          <span className="min-w-0 max-w-[30vw] truncate text-xs tabular-nums opacity-90" title={statusText}>
+          {/* The pill is a status region, so the running clock must not be read out every second. */}
+          <span
+            className="min-w-0 max-w-[30vw] truncate text-xs tabular-nums opacity-90"
+            title={statusText}
+            {...(connected ? { role: "timer", "aria-live": "off" } : {})}
+          >
             {statusText}
           </span>
           {screenSharing ? (
             // The call is out of sight: sharing still has to be obvious, and one tap from stopping.
             <button
               type="button"
-              onClick={stopScreenShare}
+              onClick={() => {
+                // This button goes away with the sharing: the focus moves on to the next one.
+                expandButtonRef.current?.focus({ preventScroll: true });
+                stopScreenShare();
+              }}
               aria-label="Stop sharing"
               title="You are sharing your screen. Stop sharing"
               className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full bg-rose-600 px-2.5 text-xs font-semibold hover:bg-rose-500"
@@ -585,8 +680,9 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
             </button>
           ) : null}
           <button
+            ref={expandButtonRef}
             type="button"
-            onClick={() => setMinimized(false)}
+            onClick={expand}
             aria-label="Expand call"
             className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/15 hover:bg-white/25"
           >
@@ -692,7 +788,7 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
                 onClick={togglePip}
                 aria-label="Picture in picture"
                 aria-pressed={pip.inPip}
-                title="Picture in picture (P)"
+                title={lettersOn ? "Picture in picture (P)" : "Picture in picture"}
                 className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/10 hover:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
               >
                 <PictureInPicture2 size={16} />
@@ -700,7 +796,7 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
             ) : null}
             <button
               type="button"
-              onClick={() => setMinimized(true)}
+              onClick={minimise}
               aria-label="Minimise call"
               title="Minimise call (Esc)"
               className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/10 hover:bg-white/20"
@@ -715,7 +811,7 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
             data-chrome="warning"
             inert={hideChrome}
             // The small pictures down the right edge must not sit on top of the words.
-            style={tiles > 0 && !viewingScreen ? { marginRight: "7rem" } : undefined}
+            style={tiles > 0 ? { marginRight: "7rem" } : undefined}
             className={`relative z-10 mx-4 mt-3 flex items-start gap-2 rounded-xl border border-amber-400/40 bg-amber-500/15 px-3 py-2 text-xs text-amber-100 ${chromeClass(hideChrome)}`}
           >
             <ShieldOff size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
@@ -833,7 +929,7 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
             </p>
           ) : null}
           {connected && relayed ? (
-            <p className="text-[11px] text-slate-500">Relayed through your server for privacy and reliability</p>
+            <p className="text-[11px] text-slate-400">Relayed through your server for privacy and reliability</p>
           ) : null}
         </div>
 
@@ -904,7 +1000,7 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
           />
         ) : null}
         {/* Whoever shares always sees that they do, however the other details are hidden. */}
-        {screenSharing && !ended ? <ScreenSharingBanner surface={screenSurface} onStop={stopScreenShare} /> : null}
+        {screenSharing && !ended ? <ScreenSharingBanner surface={screenSurface} onStop={stopFromBanner} bannerRef={bannerRef} /> : null}
 
         <CallSettingsMenu
           open={settingsOpen && inCallScreen}
@@ -933,6 +1029,7 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
               : null
           }
           showShortcuts={shortcutsHelp}
+          clearOf={settingsClear}
         />
 
         <div
@@ -964,14 +1061,14 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
             </>
           ) : (
             <>
-              <RoundButton size="h-12 w-12" label={muted ? "Unmute microphone" : "Mute microphone"} shortcut="M" active={muted} onClick={() => setMuted(!muted)}>
+              <RoundButton size="h-12 w-12" label={muted ? "Unmute microphone" : "Mute microphone"} shortcut={lettersOn ? "M" : undefined} active={muted} onClick={() => setMuted(!muted)}>
                 {muted ? <MicOff size={22} /> : <Mic size={22} />}
               </RoundButton>
               {kind === "video" ? (
                 <RoundButton
                   size="h-12 w-12"
                   label={cameraOn ? "Turn camera off" : "Turn camera on"}
-                  shortcut="V"
+                  shortcut={lettersOn ? "V" : undefined}
                   active={!cameraOn}
                   onClick={() => setCameraEnabled(!cameraOn)}
                 >
@@ -983,8 +1080,9 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
                 // and the other app has said it can show one, with the reason in its title.
                 <RoundButton
                   size="h-12 w-12"
+                  buttonRef={shareButtonRef}
                   label={screenSharing ? "Stop sharing" : "Share screen"}
-                  shortcut="S"
+                  shortcut={lettersOn ? "S" : undefined}
                   hint={screenSharing ? undefined : shareHint || undefined}
                   active={screenSharing || state.screenBusy}
                   disabled={!screenSharing && !state.screenBusy && Boolean(shareHint)}

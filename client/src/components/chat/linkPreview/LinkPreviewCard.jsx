@@ -9,6 +9,9 @@ import { hasPersian } from "../../../utils/fontUtils.js";
 // the linked site: opening a chat does not tell that site anything. A click
 // opens the link in a new tab like any other link of the message, and the card
 // is marked data-no-select so it is left out of selected and copied text.
+// The keyboard focus ring is the 700 shade (300 in dark mode), not the usual
+// 500: it is drawn on a bubble, which on your own side is tinted with the
+// accent, and 500 would be about 2:1 there (see "ring-on-bubble" in themeContrast.js).
 const TONE = {
   own: {
     bar: "bg-emerald-700 dark:bg-emerald-100",
@@ -41,7 +44,7 @@ const LinkPreviewCard = memo(function LinkPreviewCard({ url, preview, isOwn = fa
       dir="auto"
       data-link-preview
       data-no-select
-      className={`mt-1.5 flex w-72 max-w-full items-stretch gap-2 rounded-md text-start no-underline transition-colors hover:bg-black/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-400 dark:hover:bg-white/5 ${
+      className={`mt-1.5 flex w-72 max-w-full items-stretch gap-2 rounded-md text-start no-underline transition-colors hover:bg-black/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 dark:hover:bg-white/5 dark:focus-visible:outline-emerald-300 ${
         persian ? "font-fa" : ""
       }`}
     >

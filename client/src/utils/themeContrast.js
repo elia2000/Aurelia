@@ -12,6 +12,8 @@
 //
 // Thresholds (WCAG 2.2): 4.5:1 for text, 3:1 for icons, rings, dots and the
 // bold white label of a filled accent control (1.4.11 / large-text floor).
+// One softer floor, 2:1, keeps the white label readable on the lighter hover
+// fill (a pointer-only, momentary state; not a WCAG level, a guard rail).
 
 import { composite, contrastRatio, oklchToHex } from "./colorMath.js";
 
@@ -47,8 +49,16 @@ const A = shade;
 const LIGHT_TEXT_SURFACES = [WHITE, SLATE_50, A(50), A(100), tint(WHITE, 0.9, A(100))];
 const DARK_SURFACES = [SLATE_900, SLATE_950, CHAT_DARK];
 const DARK_TINTS = [tint(A(500), 0.1, SLATE_900), tint(A(500), 0.1, SLATE_950)];
-// The call screen is always dark: slate or black, with a translucent chip over a video.
+// The call screen is always dark: slate or black, with a translucent chip over a
+// video. The chip is measured over black and over the worst frame a video can
+// have, a white one.
 const CALL_CHIP = composite(SLATE_900, 0.7, BLACK);
+const CALL_CHIP_BRIGHT = composite(SLATE_900, 0.7, WHITE);
+// The "you are sharing your screen" banner stays over the raw video when the
+// details fade out: rose-950 at 90%, over black or over a white frame.
+const ROSE_950 = "#4c0519";
+const SHARING_BANNER = composite(ROSE_950, 0.9, BLACK);
+const SHARING_BANNER_BRIGHT = composite(ROSE_950, 0.9, WHITE);
 
 /**
  * Every pair: `fg` on `bg`, needing `min`. When one fails, a shade gives way:
@@ -65,16 +75,19 @@ function add(theme, id, min, fgs, bgs, use, { move, lighter = theme === "light" 
 }
 
 // ── light mode ───────────────────────────────────────────────────────────────
-add("light", "label-on-fill", 3, WHITE, A(500), "white label on a filled accent: buttons, unread counter, reaction chip, toast", { move: "bg", lighter: "fg" });
-add("light", "label-on-strong-fill", 4.5, WHITE, A(600), "white label on the stronger fill: call banner, call-entry button, tooltip", { move: "bg", lighter: "fg" });
+add("light", "label-on-fill", 3, WHITE, A(500), "white label on a filled accent: buttons, reaction chip, toast", { move: "bg", lighter: "fg" });
+add("light", "label-on-strong-fill", 4.5, WHITE, A(600), "white label on the stronger fill: unread counter, call banner, call-entry button, tooltip", { move: "bg", lighter: "fg" });
 add("light", "label-on-hover-fill", 4.5, WHITE, A(700), "white label on the darkest hover fill", { move: "bg", lighter: "fg" });
+add("light", "label-on-soft-hover-fill", 2, WHITE, A(400), "white label on the lighter hover fill of a filled button (momentary, pointer only)", { move: "bg", lighter: "fg" });
 add("light", "text-700", 4.5, A(700), LIGHT_TEXT_SURFACES, "accent text, links, chips and badges on white, slate-50 or a tint");
+add("light", "text-700-hover", 4.5, A(700), tint(A(200), 0.7, WHITE), "accent text on a hovered chip or round button (emerald-200/70)");
 add("light", "text-600", 4.5, A(600), LIGHT_TEXT_SURFACES, "smaller accent text and icons-with-text on white or a tint");
-add("light", "text-800", 4.5, A(800), [WHITE, A(50), A(100), A(200)], "reaction chip text, call entry in an own bubble");
+add("light", "text-800", 4.5, A(800), [WHITE, A(50), A(100), A(200)], "reaction chip text, call entry and link preview site name in an own bubble");
 add("light", "own-bubble-text", 4.5, A(950), A(200), "text in an own message bubble");
-add("light", "own-bubble-meta", 4.5, tint(A(900), 0.7, A(200)), A(200), "time and ticks in an own bubble");
+add("light", "own-bubble-meta", 4.5, tint(A(900), 0.7, A(200)), A(200), "time and ticks in an own bubble, the description of a link preview card");
 add("light", "pending-tick", 4.5, tint(A(900), 0.8, WHITE), WHITE, "the pending tick in the chat list");
 add("light", "icon-500", 3, A(500), [WHITE, SLATE_50, A(50)], "icons, dots, progress, outlines and focus rings in the accent");
+add("light", "ring-on-bubble", 3, A(700), [WHITE, SLATE_50, A(50), A(200)], "focus ring on a message bubble: the link preview card on another person's bubble or your own (accent-tinted)");
 add("light", "text-on-tint", 4.5, [SLATE_800, "#334155"], [A(50), A(100), A(200)], "ordinary text on a hovered or selected row", { move: "bg" });
 add("light", "selection", 4.5, SLATE_900, tint(A(500), 0.35, WHITE), "selected text", { move: "bg" });
 add("light", "ticked-row", 4.5, SLATE_800, tint(A(500), 0.15, A(100)), "text in a ticked (selected) message row", { move: "bg" });
@@ -83,16 +96,21 @@ add("light", "ticked-row", 4.5, SLATE_800, tint(A(500), 0.15, A(100)), "text in 
 add("dark", "text-200", 4.5, A(200), [...DARK_SURFACES, ...DARK_TINTS, tint(A(500), 0.2, SLATE_900), tint(A(950), 0.4, SLATE_900), tint(A(900), 0.4, SLATE_900)], "accent text and chips on dark panels");
 add("dark", "text-300", 4.5, A(300), [...DARK_SURFACES, ...DARK_TINTS, tint(A(500), 0.2, SLATE_900), tint(A(500), 0.3, SLATE_950)], "accent text on dark panels and tinted rows");
 add("dark", "text-400", 4.5, A(400), [...DARK_SURFACES, tint(A(500), 0.1, SLATE_900)], "smaller accent text on dark panels");
-add("dark", "text-100", 4.5, A(100), [tint(A(500), 0.2, SLATE_950), A(800)], "light accent text on a tinted or dark-filled surface");
+add("dark", "text-100", 4.5, A(100), [tint(A(500), 0.2, SLATE_900), tint(A(500), 0.2, SLATE_950), A(800)], "light accent text on a tinted or dark-filled surface");
+add("dark", "text-200-soft", 4.5, tint(A(200), 0.8, A(800)), A(800), "small time stamp in an own bubble", { move: "bg" });
 add("dark", "icon-500", 3, A(500), DARK_SURFACES, "icons, dots, toggles, progress and outlines in the accent");
 add("dark", "ring-300", 3, A(300), [SLATE_950, SLATE_900], "focus ring on a dark panel");
 add("dark", "ring-400", 3, A(400), [SLATE_950, SLATE_900], "focus ring and slider on the call screen");
+add("dark", "ring-on-bubble", 3, A(300), [A(800), tint(SLATE_800, 0.75, CHAT_DARK)], "focus ring on a message bubble: the link preview card on your own (accent) bubble or another person's");
 add("dark", "own-bubble-text", 4.5, WHITE, A(800), "text in an own message bubble", { move: "bg" });
-add("dark", "own-bubble-meta", 4.5, tint(A(50), 0.7, A(800)), A(800), "time and ticks in an own bubble", { move: "bg" });
+add("dark", "own-bubble-meta", 4.5, tint(A(50), 0.7, A(800)), A(800), "time and ticks in an own bubble, the description of a link preview card", { move: "bg" });
 add("dark", "button-text", 4.5, A(950), A(400), "dark label on the light accent button", { lighter: "bg" });
 add("dark", "selection", 4.5, SLATE_100, tint(A(500), 0.45, SLATE_900), "selected text", { move: "bg" });
 add("dark", "text-on-tint", 4.5, [SLATE_100, WHITE], [tint(A(500), 0.1, SLATE_900), tint(A(500), 0.2, SLATE_950), tint(A(500), 0.3, SLATE_950)], "ordinary text on a hovered, selected or checked row", { move: "bg" });
-add("dark", "call-chip", 4.5, A(200), CALL_CHIP, "the encrypted chip over a video");
+add("dark", "call-chip", 4.5, A(200), [CALL_CHIP, CALL_CHIP_BRIGHT], "the encrypted chip over a video, a dark one or the brightest frame");
+// Fixed colours (not the accent), listed so that nobody lightens the banner without the table noticing.
+add("dark", "sharing-banner", 4.5, ["#fff1f2", "#ffe4e6"], [SHARING_BANNER, SHARING_BANNER_BRIGHT], "the screen-sharing banner (rose-50 and rose-100 text) over a video, a dark one or the brightest frame");
+add("dark", "sharing-banner-stop", 4.5, WHITE, "#e11d48", "the white label of the banner's Stop sharing button (rose-600)");
 
 export const AUDIT_PAIRS = Object.freeze(PAIRS.map((pair) => Object.freeze(pair)));
 

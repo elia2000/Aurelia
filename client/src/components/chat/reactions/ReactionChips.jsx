@@ -105,7 +105,7 @@ function Chip({ item, pop, canList, onToggle, onShowReactors }) {
       data-reaction-chip={item.emoji}
       aria-pressed={item.reacted}
       aria-label={reactionAriaLabel(item)}
-      className={`relative inline-flex h-[22px] min-w-0 select-none items-center gap-1 rounded-full border px-1.5 text-[12px] font-semibold leading-none outline-none transition duration-150 [-webkit-touch-callout:none] after:absolute after:-inset-x-0.5 after:-inset-y-1 after:content-[''] focus-visible:ring-2 focus-visible:ring-emerald-400 ${
+      className={`relative inline-flex h-[22px] min-w-0 select-none items-center gap-1 rounded-full border px-1.5 text-[12px] font-semibold leading-none outline-none transition duration-150 [-webkit-touch-callout:none] after:absolute after:-inset-x-0.5 after:-inset-y-1 after:content-[''] focus-visible:ring-2 focus-visible:ring-emerald-500 ${
         item.reacted
           ? "border-emerald-500 bg-emerald-500 text-white hover:bg-emerald-600"
           : "border-emerald-200/80 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 dark:border-emerald-500/25 dark:bg-slate-800 dark:text-emerald-100 dark:hover:bg-slate-700"

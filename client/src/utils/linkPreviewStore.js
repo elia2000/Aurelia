@@ -10,7 +10,9 @@
 
 import { fetchLinkPreview } from "../api/linkPreviewApi.js";
 
-export const MAX_PARALLEL = 3;
+// The server lets one person have two previews loading at once (more are
+// answered "busy"), so this asks for no more than that.
+export const MAX_PARALLEL = 2;
 const MAX_ENTRIES = 300;
 const FOUND_TTL_MS = 30 * 60 * 1000;
 const MISSING_TTL_MS = 10 * 60 * 1000;

@@ -197,7 +197,7 @@ export function Pagination({
   };
 
   const navBtn =
-    "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-emerald-200/70 bg-white/90 text-slate-500 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-emerald-200/70 disabled:hover:bg-white/90 disabled:hover:text-slate-500 dark:border-emerald-500/30 dark:bg-slate-900/50 dark:text-slate-300 dark:hover:bg-emerald-500/10 dark:disabled:hover:bg-slate-900/50 dark:disabled:hover:text-slate-300";
+    "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-emerald-200/70 bg-white/90 text-slate-500 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-emerald-200/70 disabled:hover:bg-white/90 disabled:hover:text-slate-500 dark:border-emerald-500/30 dark:bg-slate-900/50 dark:text-slate-300 dark:hover:bg-emerald-500/10 dark:hover:text-emerald-200 dark:disabled:hover:bg-slate-900/50 dark:disabled:hover:text-slate-300";
 
   const canSelectSize = typeof onPageSizeChange === "function";
 
@@ -324,7 +324,7 @@ export function FilterPopover({ sections = [], onReset }) {
         <span className="hidden sm:inline">Filter</span>
         <ChevronDown size={12} className={`hidden text-emerald-500 transition-transform sm:inline-flex ${open ? "rotate-180" : ""}`} />
         {activeCount > 0 && (
-          <span className="absolute -right-1 -top-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-500 px-1 text-[10px] font-bold text-white shadow-xs">
+          <span className="absolute -right-1 -top-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-600 px-1 text-[10px] font-bold text-white shadow-xs">
             {activeCount}
           </span>
         )}

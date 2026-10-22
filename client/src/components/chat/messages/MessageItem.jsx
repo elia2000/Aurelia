@@ -352,6 +352,7 @@ export const MessageItem = memo(function MessageItem({
       (hasMixedVoiceAndOtherFiles &&
         /^Sent a voice message$/i.test(normalizedBodyText)));
   const messageBodyRef = useRef(null);
+  const messageBubbleRef = useRef(null);
   const suppressCodeClickUntilRef = useRef(0);
   const mentionDebugEnabled =
     typeof window !== "undefined" &&
@@ -379,6 +380,7 @@ export const MessageItem = memo(function MessageItem({
   const linkPreview = useLinkPreview({
     html: markdownHtml,
     elementRef: messageBodyRef,
+    bubbleRef: messageBubbleRef,
     skip:
       isCallEntry ||
       isUnsupported ||
@@ -1046,7 +1048,7 @@ export const MessageItem = memo(function MessageItem({
   const bubbleSurface = isBareBubble
     ? ""
     : isOwn
-      ? "bg-emerald-200 text-emerald-950 shadow-xs dark:bg-emerald-800 dark:text-white"
+      ? "sb-own-bubble bg-emerald-200 text-emerald-950 shadow-xs dark:bg-emerald-800 dark:text-white"
       : "bg-white/90 text-slate-800 shadow-xs dark:bg-slate-800/75 dark:text-slate-100";
   // A single picture or video gives the bubble its shape; an album, or a
   // picture next to a file, gets the full media width.
@@ -1298,7 +1300,7 @@ export const MessageItem = memo(function MessageItem({
       }
     : null;
   const selectionRowClass = selectionMode
-    ? `cursor-pointer transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-400 ${
+    ? `cursor-pointer transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-500 ${
         isTicked ? "bg-emerald-500/15 dark:bg-emerald-400/15" : ""
       }`
     : "";
@@ -1357,7 +1359,7 @@ export const MessageItem = memo(function MessageItem({
           data-message-row
           data-message-key={messageIdentity}
           tabIndex={isRowTabStop ? 0 : -1}
-          className={`group/row relative flex w-full max-w-full items-end gap-2 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-400 ${
+          className={`group/row relative flex w-full max-w-full items-end gap-2 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-500 ${
             selectionMode ? "ps-12 pe-2 md:pe-4" : "px-2 md:px-4"
           } ${
             isOwn ? "justify-end" : "justify-start"
@@ -1490,6 +1492,7 @@ export const MessageItem = memo(function MessageItem({
             }}
           >
             <div
+              ref={messageBubbleRef}
               data-message-bubble
               className={`relative max-w-full text-[15px] leading-[1.35] ${bubbleSize} ${bubbleCorners} ${bubbleSurface}`}
               style={{

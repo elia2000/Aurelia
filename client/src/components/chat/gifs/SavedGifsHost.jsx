@@ -34,7 +34,7 @@ export default function SavedGifsHost({ ownerKey, store = savedGifs }) {
         <button
           type="button"
           onClick={() => store.dismissNotice()}
-          className="h-8 shrink-0 rounded-full bg-emerald-600 px-4 text-xs font-semibold text-white transition duration-150 hover:bg-emerald-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-500 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400"
+          className="h-8 shrink-0 rounded-full bg-emerald-600 px-4 text-xs font-semibold text-white transition duration-150 hover:bg-emerald-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-500 dark:bg-emerald-400 dark:text-emerald-950 dark:hover:bg-emerald-300"
         >
           OK
         </button>

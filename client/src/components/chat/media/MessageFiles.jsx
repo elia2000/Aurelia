@@ -805,7 +805,7 @@ const VoiceMessageChip = memo(
           type="button"
           onClick={togglePlay}
           disabled={!canPlay}
-          className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-emerald-200 bg-emerald-100 text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-200/70 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200"
+          className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-emerald-200 bg-emerald-100 text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-200/70 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200 dark:hover:bg-emerald-500/20"
           aria-label={
             hasActivePlayback ? "Pause voice message" : "Play voice message"
           }

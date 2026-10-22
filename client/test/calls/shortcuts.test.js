@@ -1,7 +1,9 @@
 import { describe, test, expect, vi } from "vitest";
 import {
   CALL_SHORTCUTS,
+  LETTER_SHORTCUT_IDS,
   createShortcutHandler,
+  focusIsOnCall,
   isTypingTarget,
   shortcutFor,
   windowOnTop,
@@ -222,3 +224,116 @@ describe("createShortcutHandler", () => {
     expect(hangup).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("focusIsOnCall: where the call's keys apply", () => {
+  const card = { contains: (node) => node === card || node?.inCard === true };
+  const body = { tagName: "BODY" };
+  const doc = (activeElement) => ({ activeElement, body, documentElement: { tagName: "HTML" } });
+
+  test("on the bare page (nothing, the body or the root focused)", () => {
+    expect(focusIsOnCall(doc(null), card)).toBe(true);
+    expect(focusIsOnCall(doc(undefined), card)).toBe(true);
+    expect(focusIsOnCall(doc(body), card)).toBe(true);
+    const root = { tagName: "HTML" };
+    expect(focusIsOnCall({ activeElement: root, body, documentElement: root }, card)).toBe(true);
+  });
+
+  test("on the call card or anything inside it", () => {
+    expect(focusIsOnCall(doc(card), card)).toBe(true);
+    expect(focusIsOnCall(doc({ inCard: true }), card)).toBe(true);
+  });
+
+  test("not on a control of the page behind the card (the chat list, a message, the header)", () => {
+    expect(focusIsOnCall(doc({ inCard: false }), card)).toBe(false);
+    expect(focusIsOnCall(doc({ inCard: false }), null)).toBe(false);
+  });
+
+  test("a missing document is nothing to object to", () => {
+    expect(focusIsOnCall(null, card)).toBe(true);
+  });
+});
+
+describe("createShortcutHandler: the switch for the letter keys and the focus rule", () => {
+  const BODY = { tagName: "BODY" };
+  const behind = { tagName: "BUTTON", getAttribute: () => null }; // a chat row
+  const card = { contains: (node) => node === card || node?.inCard === true };
+  const docWith = (activeElement) => ({
+    activeElement,
+    body: BODY,
+    documentElement: { tagName: "HTML" },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  });
+  const setup = (actions, { active = BODY, lettersEnabled = () => true } = {}) =>
+    createShortcutHandler({ getActions: () => actions, getCard: () => card, doc: docWith(active), lettersEnabled });
+  const press = (handler, k, extra = {}) => {
+    const event = key(k, { target: extra.target || BODY, ...extra });
+    return { taken: handler(event), event };
+  };
+
+  test("the letter keys are exactly M, V, S, P and F", () => {
+    expect([...LETTER_SHORTCUT_IDS].sort()).toEqual(["camera", "fullscreen", "mute", "pip", "screen"]);
+  });
+
+  test("switched off, the letter keys pass untouched", () => {
+    const actions = { mute: vi.fn(), camera: vi.fn(), screen: vi.fn(), pip: vi.fn(), fullscreen: vi.fn() };
+    const handler = setup(actions, { lettersEnabled: () => false });
+    for (const letter of ["m", "v", "s", "p", "f"]) {
+      const { taken, event } = press(handler, letter);
+      expect(taken, letter).toBe(false);
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    }
+    for (const action of Object.values(actions)) expect(action).not.toHaveBeenCalled();
+  });
+
+  test("switched off, Escape, ? and Shift+H are as always", () => {
+    const actions = { minimise: vi.fn(), help: vi.fn(), hangup: vi.fn() };
+    const handler = setup(actions, { lettersEnabled: () => false });
+    expect(press(handler, "Escape").taken).toBe(true);
+    expect(press(handler, "?", { shiftKey: true }).taken).toBe(true);
+    expect(press(handler, "H", { shiftKey: true }).taken).toBe(true);
+    expect(actions.minimise).toHaveBeenCalledTimes(1);
+    expect(actions.help).toHaveBeenCalledTimes(1);
+    expect(actions.hangup).toHaveBeenCalledTimes(1);
+  });
+
+  test("the switch is asked at every key press, so a change applies at once", () => {
+    const mute = vi.fn();
+    let on = true;
+    const handler = setup({ mute }, { lettersEnabled: () => on });
+    expect(press(handler, "m").taken).toBe(true);
+    on = false;
+    expect(press(handler, "m").taken).toBe(false);
+    on = true;
+    expect(press(handler, "m").taken).toBe(true);
+    expect(mute).toHaveBeenCalledTimes(2);
+  });
+
+  test("with the focus on the page behind the card, the letters and the other keys are left alone", () => {
+    const actions = { mute: vi.fn(), screen: vi.fn(), help: vi.fn(), hangup: vi.fn() };
+    const handler = setup(actions, { active: behind });
+    for (const [k, extra] of [["m", {}], ["s", {}], ["?", { shiftKey: true }], ["H", { shiftKey: true }]]) {
+      const { taken, event } = press(handler, k, { ...extra, target: behind });
+      expect(taken, k).toBe(false);
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    }
+    for (const action of Object.values(actions)) expect(action).not.toHaveBeenCalled();
+  });
+
+  test("Escape still minimises the call from anywhere, so it is never also the chat's Escape", () => {
+    const minimise = vi.fn();
+    const handler = setup({ minimise }, { active: behind });
+    const { taken, event } = press(handler, "Escape", { target: behind });
+    expect(taken).toBe(true);
+    expect(minimise).toHaveBeenCalledTimes(1);
+    expect(event.stopPropagation).toHaveBeenCalled();
+  });
+
+  test("with the focus on the card, or inside it, the keys work", () => {
+    const mute = vi.fn();
+    expect(press(setup({ mute }, { active: card }), "m").taken).toBe(true);
+    expect(press(setup({ mute }, { active: { tagName: "BUTTON", inCard: true, getAttribute: () => null } }), "m").taken).toBe(true);
+    expect(mute).toHaveBeenCalledTimes(2);
+  });
+});
+

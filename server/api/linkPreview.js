@@ -19,7 +19,9 @@ const maybe = async (value) =>
  *   400 invalid_url          the link is not one that may be fetched
  *   404 link_previews_disabled
  *   422 preview_unavailable  the site could not be fetched or has nothing to show
- *   429                      too many requests / too many fetches at once
+ *   429 rate_limited         this person asks too fast (the app then waits a minute)
+ *   503 busy                 the server (or this person) has enough previews loading
+ *                            right now; nothing is wrong, the app just asks again later
  *
  * Fetching a site is limited per signed-in person (30 a minute, 300 a day);
  * an answer from the cache costs only the (generous) lookup limit.
@@ -79,6 +81,7 @@ function registerLinkPreviewRoutes(app, deps) {
       if (!lookupThrottle.take(userKey)) return tooMany(res);
 
       const result = await service.getPreview(readUrl(req), {
+        owner: userKey,
         // Asked only when a site is really about to be contacted.
         admit: () => {
           if (fetchPerMinute.remaining(userKey) < 1 || fetchPerDay.remaining(userKey) < 1) return false;
@@ -94,7 +97,12 @@ function registerLinkPreviewRoutes(app, deps) {
         if (error.code === "invalid_url") {
           return res.status(400).json({ error: "This link cannot be previewed.", code: "invalid_url" });
         }
-        if (error.code === "rate_limited" || error.code === "busy") return tooMany(res);
+        if (error.code === "rate_limited") return tooMany(res);
+        if (error.code === "busy") {
+          // Not the person's own rate limit: the app must not stop asking for a minute.
+          res.setHeader("Retry-After", "5");
+          return res.status(503).json({ error: "Link previews are busy. Try again shortly.", code: "busy" });
+        }
         // Whatever went wrong with the site (blocked address, timeout, wrong
         // type, nothing to show), the answer is the same, so a preview cannot
         // be used to find out what is on the server's network.

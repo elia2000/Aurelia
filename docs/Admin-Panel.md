@@ -163,6 +163,7 @@ These four apply without a restart. See [Reactions](./Reactions.md), [Pinned Mes
 - Pending file message timeout
 - Pending retry interval
 - Pending status check interval
+- Link previews (`LINK_PREVIEWS`, off by default, applies without a restart). See [Link Previews](./Link-Previews.md) for what the server fetches and how it is limited.
 
 #### Storage (Object Storage & Worker)
 

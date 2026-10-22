@@ -12,6 +12,7 @@ vi.mock("../../../src/e2ee/services.js", () => ({ getE2eeServices: () => e2ee.se
 
 import CallOverlay from "../../../src/components/calls/CallOverlay.jsx";
 import { CallContext } from "../../../src/calls/callContext.js";
+import { CALL_SHORTCUT_KEY, getCallShortcutsEnabled, reloadCallShortcutsEnabled } from "../../../src/calls/callShortcutPrefs.js";
 
 const peer = { userId: "u-bob", username: "bob", nickname: "Bob", avatarUrl: "", color: "#10b981" };
 
@@ -522,10 +523,11 @@ describe("keyboard shortcuts", () => {
     expect(value.toggleScreenShare).not.toHaveBeenCalled();
   });
 
-  test("S stops a share that is going on, and says so", async () => {
-    const { value } = await renderOverlay(connected({ screenSharing: true, screenSurface: "monitor" }));
+  test("S stops a share that is going on, and it is said once the share has really stopped", async () => {
+    const { value, show } = await renderOverlay(connected({ screenSharing: true, screenSurface: "monitor" }));
     press("s");
     expect(value.toggleScreenShare).toHaveBeenCalledTimes(1);
+    await show({ ...value, state: { ...value.state, screenSharing: false } });
     await expect.poll(() => document.querySelector('[role="dialog"] p[role="status"]')?.textContent).toBe("Stopped sharing your screen");
   });
 
@@ -772,5 +774,197 @@ describe("keyboard shortcuts", () => {
       press("m", {}, button);
       expect(value.setMuted).toHaveBeenCalledWith(true);
     });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+describe("the switch for the single-letter keys", () => {
+  const letters = ["m", "v", "s", "p", "f"];
+  const lettersOff = () => {
+    localStorage.setItem(CALL_SHORTCUT_KEY, "0");
+    reloadCallShortcutsEnabled();
+  };
+  beforeEach(() => {
+    localStorage.clear();
+    reloadCallShortcutsEnabled();
+  });
+  afterEach(() => {
+    localStorage.clear();
+    reloadCallShortcutsEnabled();
+  });
+
+  test("the letter keys are on by default", async () => {
+    expect(getCallShortcutsEnabled()).toBe(true);
+    const { value } = await renderOverlay(connected());
+    expect(press("m").defaultPrevented).toBe(true);
+    expect(value.setMuted).toHaveBeenCalledWith(true);
+  });
+
+  test("switched off, M, V, S, P and F do nothing at all and are left to the page", async () => {
+    lettersOff();
+    stubPip();
+    stubFullscreen();
+    const { value } = await renderOverlay(videoCall());
+    for (const letter of letters) {
+      const event = press(letter);
+      expect(event.defaultPrevented, letter).toBe(false);
+      press(letter.toUpperCase());
+    }
+    expect(value.setMuted).not.toHaveBeenCalled();
+    expect(value.setCameraEnabled).not.toHaveBeenCalled();
+    expect(value.toggleScreenShare).not.toHaveBeenCalled();
+    expect(document.fullscreenElement).toBeNull();
+  });
+
+  test("switched off, Escape, ? and Shift+H are as always", async () => {
+    lettersOff();
+    const { value } = await renderOverlay(connected());
+    expect(press("?", shift).defaultPrevented).toBe(true);
+    await expect.element(page.getByRole("group", { name: "Call settings" })).toBeInTheDocument();
+    press("?", shift); // closes the settings again
+    await expect.poll(() => document.querySelector('[role="group"][aria-label="Call settings"]')).toBeNull();
+    expect(press("Escape").defaultPrevented).toBe(true);
+    expect(value.setMinimized).toHaveBeenCalledWith(true);
+    press("H", shift);
+    expect(value.hangup).toHaveBeenCalledTimes(1);
+  });
+
+  test("switched off, the buttons stop naming their letters in the tooltips (Esc and Shift+H stay)", async () => {
+    lettersOff();
+    stubPip();
+    await renderOverlay(videoCall());
+    expect(page.getByRole("button", { name: "Mute microphone" }).element().title).toBe("Mute microphone");
+    expect(page.getByRole("button", { name: "Turn camera off" }).element().title).toBe("Turn camera off");
+    expect(page.getByRole("button", { name: "Share screen" }).element().title).toBe("Share screen");
+    expect(page.getByRole("button", { name: "Picture in picture" }).element().title).toBe("Picture in picture");
+    expect(page.getByRole("button", { name: "End call" }).element().title).toBe("End call (Shift+H)");
+    expect(page.getByRole("button", { name: "Minimise call" }).element().title).toBe("Minimise call (Esc)");
+  });
+
+  test("the call settings hold the switch, at the top of the Keyboard shortcuts list, and it is on", async () => {
+    await renderOverlay(connected());
+    expect(press("?", shift).defaultPrevented).toBe(true);
+    const toggle = page.getByRole("switch", { name: /Single-key shortcuts/ });
+    await expect.element(toggle).toBeInTheDocument();
+    await expect.element(toggle).toHaveAttribute("aria-checked", "true");
+    const details = document.querySelector("details[data-shortcuts]");
+    expect(details.contains(toggle.element())).toBe(true);
+    expect(details.querySelector("[data-shortcuts-switch]")).toBe(toggle.element());
+  });
+
+  test("turning it off there takes effect at once, is remembered on this device, and says what stays", async () => {
+    const { value } = await renderOverlay(connected());
+    press("?", shift);
+    const toggle = page.getByRole("switch", { name: /Single-key shortcuts/ });
+    await toggle.click();
+    await expect.element(toggle).toHaveAttribute("aria-checked", "false");
+    expect(localStorage.getItem(CALL_SHORTCUT_KEY)).toBe("0");
+    expect(getCallShortcutsEnabled()).toBe(false);
+    await expect.element(page.getByText(/The letter keys are off\. Esc, \? and Shift\+H still work\./)).toBeInTheDocument();
+    expect(press("m").defaultPrevented).toBe(false);
+    expect(value.setMuted).not.toHaveBeenCalled();
+
+    await toggle.click();
+    await expect.element(toggle).toHaveAttribute("aria-checked", "true");
+    expect(localStorage.getItem(CALL_SHORTCUT_KEY)).toBe("1");
+    expect(press("m").defaultPrevented).toBe(true);
+    expect(value.setMuted).toHaveBeenCalledWith(true);
+  });
+
+  test("the switch can be reached and used with the keyboard", async () => {
+    await renderOverlay(connected());
+    press("?", shift);
+    await expect.element(page.getByRole("switch", { name: /Single-key shortcuts/ })).toBeInTheDocument();
+    const toggle = page.getByRole("switch", { name: /Single-key shortcuts/ }).element();
+    toggle.focus();
+    expect(document.activeElement).toBe(toggle); // it is a real button in the tab order
+    toggle.click(); // what Space or Enter does on a button
+    await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("false");
+  });
+
+  test("an off choice saved earlier is honoured from the first key press", async () => {
+    localStorage.setItem(CALL_SHORTCUT_KEY, "0");
+    reloadCallShortcutsEnabled();
+    const { value } = await renderOverlay(connected());
+    press("m");
+    expect(value.setMuted).not.toHaveBeenCalled();
+  });
+
+  test("a phone with only a touch screen has no list of keys in the call settings (and the app's settings hold the switch)", async () => {
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
+      matches: !query.includes("any-pointer: fine"),
+      media: query,
+      addEventListener() {},
+      removeEventListener() {},
+    }));
+    await renderOverlay(connected());
+    await page.getByRole("button", { name: "Call settings" }).click();
+    await expect.element(page.getByRole("group", { name: "Call settings" })).toBeInTheDocument();
+    expect(page.getByRole("switch", { name: /Single-key shortcuts/ }).elements()).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+describe("the letter keys belong to the call only while the focus is on it", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    reloadCallShortcutsEnabled();
+  });
+  const outside = (tag = "button") => {
+    const el = document.createElement(tag);
+    el.dataset.testExtra = "";
+    el.textContent = "a row of the chat";
+    document.body.appendChild(el);
+    el.focus();
+    return el;
+  };
+
+  test("on the chat list or a message behind the card, a letter is the chat's", async () => {
+    const { value } = await renderOverlay(connected());
+    const row = outside();
+    for (const letter of ["m", "v", "s", "p", "f"]) expect(press(letter, {}, row).defaultPrevented, letter).toBe(false);
+    expect(press("?", shift, row).defaultPrevented).toBe(false);
+    press("H", shift, row);
+    expect(value.setMuted).not.toHaveBeenCalled();
+    expect(value.toggleScreenShare).not.toHaveBeenCalled();
+    expect(value.hangup).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="group"][aria-label="Call settings"]')).toBeNull();
+  });
+
+  test("Escape still minimises the call from there (and is not also the chat's Escape)", async () => {
+    const { value } = await renderOverlay(connected());
+    const row = outside();
+    expect(press("Escape", {}, row).defaultPrevented).toBe(true);
+    expect(value.setMinimized).toHaveBeenCalledWith(true);
+  });
+
+  test("on the card itself, or a button in it, the keys work", async () => {
+    const { value } = await renderOverlay(connected());
+    document.querySelector('[role="dialog"]').focus();
+    press("m", {}, document.activeElement);
+    expect(value.setMuted).toHaveBeenCalledWith(true);
+    const button = page.getByRole("button", { name: "Call settings" }).element();
+    button.focus();
+    press("?", shift, button);
+    await expect.element(page.getByRole("group", { name: "Call settings" })).toBeInTheDocument();
+  });
+
+  test("with nothing in particular focused (the bare page), they work", async () => {
+    const { value } = await renderOverlay(connected());
+    document.activeElement?.blur?.();
+    expect(document.activeElement).toBe(document.body);
+    press("m");
+    expect(value.setMuted).toHaveBeenCalledWith(true);
+  });
+
+  test("once the focus is back on the card, the keys work again", async () => {
+    const { value } = await renderOverlay(connected());
+    const row = outside();
+    press("m", {}, row);
+    expect(value.setMuted).not.toHaveBeenCalled();
+    row.remove();
+    document.querySelector('[role="dialog"]').focus();
+    press("m", {}, document.activeElement);
+    expect(value.setMuted).toHaveBeenCalledTimes(1);
   });
 });

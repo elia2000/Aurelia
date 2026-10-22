@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { describe, test, expect } from "vitest";
 import { composite, contrastRatio, hexToOklch, oklchToHex, relativeLuminance } from "../../src/utils/colorMath.js";
 import { AUDIT_PAIRS, auditScale, guardScale, resolveRef } from "../../src/utils/themeContrast.js";
@@ -62,10 +62,11 @@ describe("colour maths", () => {
 });
 
 describe("the audit table", () => {
-  test("covers light and dark mode with 4.5:1 for text and 3:1 for the rest", () => {
+  test("covers light and dark mode with 4.5:1 for text, 3:1 for the rest and a 2:1 floor for the hover fill", () => {
     const themes = new Set(AUDIT_PAIRS.map((p) => p.theme));
     expect([...themes].sort()).toEqual(["dark", "light"]);
-    expect(new Set(AUDIT_PAIRS.map((p) => p.min))).toEqual(new Set([3, 4.5]));
+    expect(new Set(AUDIT_PAIRS.map((p) => p.min))).toEqual(new Set([2, 3, 4.5]));
+    expect(AUDIT_PAIRS.filter((p) => p.min === 2).map((p) => p.id)).toEqual(["label-on-soft-hover-fill"]);
     expect(AUDIT_PAIRS.length).toBeGreaterThan(50);
   });
 
@@ -75,9 +76,23 @@ describe("the audit table", () => {
       "light/label-on-fill", "light/label-on-strong-fill", "light/text-700", "light/text-600", "light/icon-500",
       "light/own-bubble-text", "light/own-bubble-meta", "light/selection",
       "dark/text-200", "dark/text-300", "dark/text-400", "dark/icon-500", "dark/own-bubble-text", "dark/call-chip",
+      "light/text-700-hover", "light/label-on-soft-hover-fill", "dark/text-200-soft",
+      "light/ring-on-bubble", "dark/ring-on-bubble", "dark/sharing-banner", "dark/sharing-banner-stop",
     ]) {
       expect(ids.has(id), id).toBe(true);
     }
+  });
+
+  test("the screen-sharing banner is readable over any picture: the brightest frame is the worst case (it was 1.4:1)", () => {
+    // rose-950 at 90% (bg-rose-950/90), rose-50 title and rose-100 line, over black and over a white frame.
+    for (const frame of ["#000000", "#808080", "#ffffff"]) {
+      const backing = composite("#4c0519", 0.9, frame);
+      expect(contrastRatio("#fff1f2", backing), `rose-50 over ${frame}`).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio("#ffe4e6", backing), `rose-100 over ${frame}`).toBeGreaterThanOrEqual(4.5);
+    }
+    // what it used to be: rose-500 at 20% over a white frame, with a blurred white video behind
+    expect(contrastRatio("#fff1f2", composite("#f43f5e", 0.2, "#ffffff"))).toBeLessThan(1.6);
+    expect(contrastRatio("#ffffff", "#e11d48"), "white on the Stop sharing button (rose-600)").toBeGreaterThanOrEqual(4.5);
   });
 
   test("every reference resolves to a colour", () => {
@@ -137,6 +152,16 @@ describe("every accent stays readable", () => {
         expect(contrastRatio(s[500], surface), `${hex} 500 on ${surface}`).toBeGreaterThanOrEqual(3);
       }
       expect(contrastRatio("#ffffff", s[800]), `${hex} white on 800 (dark own bubble)`).toBeGreaterThanOrEqual(4.5);
+      // the focus ring of the link preview card on a bubble (it was 500/400: 1.7:1 on an own bubble in light mode)
+      expect(contrastRatio(s[700], s[200]), `${hex} 700 ring on 200 (own bubble)`).toBeGreaterThanOrEqual(3);
+      expect(contrastRatio(s[700], "#ffffff"), `${hex} 700 ring on white (other bubble)`).toBeGreaterThanOrEqual(3);
+      expect(contrastRatio(s[300], s[800]), `${hex} 300 ring on 800 (dark own bubble)`).toBeGreaterThanOrEqual(3);
+      expect(contrastRatio(s[300], composite("#1e293b", 0.75, "#0b1320")), `${hex} 300 ring on the dark other bubble`).toBeGreaterThanOrEqual(3);
+      expect(contrastRatio("#ffffff", s[400]), `${hex} white on 400 (hover fill)`).toBeGreaterThanOrEqual(2);
+      // the encrypted chip of the call screen: over black and over a white video frame
+      for (const frame of ["#000000", "#ffffff"]) {
+        expect(contrastRatio(s[200], composite("#0f172a", 0.7, frame)), `${hex} 200 on the call chip over ${frame}`).toBeGreaterThanOrEqual(4.5);
+      }
     }
   });
 });
@@ -257,5 +282,77 @@ describe("the built-in green in index.css", () => {
     expect(contrastRatio("#ffffff", vars.get("--color-emerald-600"))).toBeGreaterThanOrEqual(4.5);
     applyThemeColor(null, { root, meta: null });
     expect(vars.size).toBe(0);
+  });
+});
+
+// ── the interface keeps to the table ─────────────────────────────────────────
+function sourceFiles(dir, out = []) {
+  for (const name of readdirSync(dir)) {
+    const path = `${dir}/${name}`;
+    if (statSync(path).isDirectory()) sourceFiles(path, out);
+    else if (/\.jsx?$/.test(name)) out.push(path);
+  }
+  return out;
+}
+const SRC = new URL("../../src", import.meta.url).pathname;
+const FILES = sourceFiles(SRC).map((path) => ({ path: path.slice(SRC.length + 1), text: readFileSync(path, "utf8") }));
+
+describe("the interface uses each shade for its job", () => {
+  test("the 500 shade is a fill, icon or dot colour: it is never the colour of a text label", () => {
+    const offenders = [];
+    for (const { path, text } of FILES) {
+      for (const match of text.matchAll(/(?:font-semibold|uppercase)[^"`']*\btext-emerald-500(?:\/\d+)?(?![\w-])|\btext-emerald-500(?:\/\d+)?[^"`']*(?:font-semibold|uppercase)/g)) {
+        offenders.push(`${path}: ${match[0].slice(0, 70)}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  test("keyboard focus rings use the 500 shade, which holds 3:1 on white and on dark panels (the call screen and chips laid over a video are always dark)", () => {
+    const offenders = [];
+    for (const { path, text } of FILES) {
+      if (path.startsWith("components/calls/")) continue;
+      text.split("\n").forEach((line, index) => {
+        if (/focus-visible:ring-emerald-(?:200|300|400)\b/.test(line) && !/bg-(?:white|black)\/\d+/.test(line)) offenders.push(`${path}:${index + 1}`);
+      });
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  test("every shade a pair names exists in the scale", () => {
+    for (const pair of AUDIT_PAIRS) {
+      for (const ref of [pair.fg, pair.bg]) {
+        const shades = [];
+        const walk = (r) => (typeof r === "number" ? shades.push(r) : typeof r === "object" ? (walk(r.fg), walk(r.over)) : null);
+        walk(ref);
+        for (const shade of shades) expect(SHADES, `${pair.theme}/${pair.id}`).toContain(shade);
+      }
+    }
+  });
+});
+
+describe("links and mentions in messages", () => {
+  const css = readFileSync(new URL("../../src/index.css", import.meta.url), "utf8");
+  // the colour of the first rule whose selector list holds `selector` (as a whole selector, not part of a longer one)
+  const colorOf = (selector) =>
+    new RegExp(`(?<![\\w.-])(?<!\\.dark )${selector.replace(/[.]/g, "\\.")}\\s*(?:,[^{}]*)?\\{[^}]*?color:\\s*(#[0-9a-f]{6})`, "i").exec(css)?.[1];
+  const darkColorOf = (selector) =>
+    new RegExp(`\\.dark ${selector.replace(/[.]/g, "\\.")}\\s*(?:,[^{}]*)?\\{[^}]*?color:\\s*(#[0-9a-f]{6})`, "i").exec(css)?.[1];
+
+  test("the light-surface link colour holds 4.5:1 on white, slate-50 and a light bubble; the dark one on a dark bubble", () => {
+    const light = colorOf(".sb-link");
+    const dark = darkColorOf(".sb-link");
+    expect(light).toBeTruthy();
+    expect(dark).toBeTruthy();
+    for (const surface of ["#ffffff", "#f8fafc"]) expect(contrastRatio(light, surface), `${light} on ${surface}`).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(dark, composite("#1e293b", 0.75, "#0b1320"))).toBeGreaterThanOrEqual(4.5);
+    expect(colorOf(".sb-mention-active")).toBe(light);
+    expect(contrastRatio(colorOf(".sb-mention-active:hover"), "#ffffff")).toBeGreaterThanOrEqual(4.5);
+  });
+
+  test("in your own bubble, whose colour follows the accent, a link takes the bubble's text colour, which the table guards", () => {
+    expect(css).toMatch(/\.sb-own-bubble \.sb-link,[\s\S]*?\.sb-own-bubble \.sb-mention-active:hover \{\s*color: inherit;/);
+    const message = FILES.find(({ path }) => path === "components/chat/messages/MessageItem.jsx").text;
+    expect(message).toMatch(/"sb-own-bubble bg-emerald-200 text-emerald-950[^"]*dark:bg-emerald-800 dark:text-white"/);
   });
 });

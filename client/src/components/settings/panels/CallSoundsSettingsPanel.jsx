@@ -1,8 +1,10 @@
 import { memo, useState } from "react";
-import { Phone, Volume2, VolumeX } from "../../../icons/lucide.js";
+import { Keyboard, Phone, Volume2, VolumeX } from "../../../icons/lucide.js";
 import { callSounds } from "../../../calls/callSounds.js";
 import { setCallSoundPrefs } from "../../../calls/callSoundPrefs.js";
+import { setCallShortcutsEnabled } from "../../../calls/callShortcutPrefs.js";
 import { useCallSoundPrefs } from "../../../calls/useCallSoundPrefs.js";
+import { useCallShortcutsEnabled } from "../../../calls/useCallShortcutPrefs.js";
 
 const canVibrate = () => typeof navigator !== "undefined" && typeof navigator.vibrate === "function";
 
@@ -40,14 +42,16 @@ function SwitchRow({ label, hint, checked, onChange, icon, isMobile }) {
 
 /**
  * What this device does when a call rings: sounds on or off, how loud the
- * ringtone is, whether the phone vibrates, and a button to hear it. Everything
- * applies at once and is remembered on this device only.
+ * ringtone is, whether the phone vibrates, and a button to hear it; and whether
+ * the single-letter keys of the call screen work. Everything applies at once
+ * and is remembered on this device only.
  */
 export const CallSoundsSettingsPanel = memo(function CallSoundsSettingsPanel({ onDone, variant = "desktop" }) {
   const prefs = useCallSoundPrefs();
   const [testFailed, setTestFailed] = useState(false);
   const isMobile = variant === "mobile";
   const soundsOn = prefs.enabled;
+  const letterKeysOn = useCallShortcutsEnabled();
 
   const playTest = async () => {
     setTestFailed(false);
@@ -127,6 +131,15 @@ export const CallSoundsSettingsPanel = memo(function CallSoundsSettingsPanel({ o
           </p>
         ) : null}
       </div>
+
+      <SwitchRow
+        label="Call keyboard shortcuts"
+        hint="M, V, S, P and F mute, switch the camera, share the screen, float the video and go full screen while a call has the focus. Esc, ? and Shift+H are not affected."
+        checked={letterKeysOn}
+        onChange={setCallShortcutsEnabled}
+        isMobile={isMobile}
+        icon={<Keyboard size={18} className="shrink-0" />}
+      />
 
       <p className="text-[11px] text-slate-500 dark:text-slate-400">
         These settings are for this device only. A call can only ring out loud after you have tapped or typed

@@ -1133,13 +1133,13 @@ label:hover .sb-dash-br {
 
 .sb-markdown a,
 .sb-markdown-inline a {
-  color: #38bdf8;
+  color: #0369a1;
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 
 .sb-link {
-  color: #38bdf8;
+  color: #0369a1;
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -1157,19 +1157,42 @@ label:hover .sb-dash-br {
 }
 
 .sb-mention-active {
-  color: #38bdf8;
+  color: #0369a1;
   cursor: pointer;
   transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .sb-mention-active:hover {
   background-color: rgba(56, 189, 248, 0.15);
-  color: #0ea5e9;
+  color: #075985;
 }
 
 .dark .sb-mention-active:hover {
   background-color: rgba(56, 189, 248, 0.18);
   color: #7dd3fc;
+}
+
+/* Links and mentions read as sky-700 on light surfaces (5.9:1 on white) and
+   sky-400 on dark ones. In your own bubble, whose colour follows the accent,
+   a fixed blue cannot be readable for every accent, so they take the bubble's
+   text colour (the underline marks a link, the weight a mention). */
+.dark .sb-markdown a,
+.dark .sb-markdown-inline a,
+.dark .sb-link,
+.dark .sb-mention-active {
+  color: #38bdf8;
+}
+
+.sb-own-bubble .sb-markdown a,
+.sb-own-bubble .sb-markdown-inline a,
+.sb-own-bubble .sb-link,
+.sb-own-bubble .sb-mention-active,
+.sb-own-bubble .sb-mention-active:hover {
+  color: inherit;
+}
+
+.sb-own-bubble .sb-mention-active {
+  font-weight: 600;
 }
 
 .sb-mention-loading {

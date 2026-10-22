@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { getLinkPreviewPrefs, subscribeLinkPreviewPrefs } from "../../utils/linkPreviewPrefs.js";
 import { findPreviewUrl } from "../../utils/linkPreviewUrl.js";
 import { loadLinkPreview, peekLinkPreview } from "../../utils/linkPreviewStore.js";
+import { useKeepAtBottomOnGrowth } from "./useKeepAtBottomOnGrowth.js";
 
 /** { serverEnabled, choice, enabled }: whether link previews are shown on this device. */
 export function useLinkPreviewPrefs() {
@@ -42,14 +43,20 @@ function useSeenOnce(elementRef, active) {
  * @param {object}  options
  * @param {string}  options.html        the message body as shown (see utils/markdown.js)
  * @param {{current: Element|null}} options.elementRef  what to wait for: the message text
+ * @param {{current: Element|null}} [options.bubbleRef]  the message bubble: a card that arrives
+ *                                      after the message is in place must not push the end of a
+ *                                      chat that is scrolled to the bottom out of view
  * @param {boolean} [options.skip]      true for a message that must never get a card
  */
-export function useLinkPreview({ html, elementRef, skip = false }) {
+export function useLinkPreview({ html, elementRef, bubbleRef = null, skip = false }) {
   const prefs = useLinkPreviewPrefs();
   const active = prefs.enabled && !skip;
   const url = useMemo(() => (active ? findPreviewUrl(html) : ""), [active, html]);
   const seen = useSeenOnce(elementRef, Boolean(url));
   const [loaded, setLoaded] = useState(null); // { url, preview }
+  // Only a message with a link can gain a card, so only those are watched.
+  const noRef = useRef(null);
+  useKeepAtBottomOnGrowth(bubbleRef || noRef, Boolean(bubbleRef) && Boolean(url));
 
   useEffect(() => {
     if (!url || !seen || peekLinkPreview(url) !== undefined) return undefined;

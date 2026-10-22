@@ -83,7 +83,7 @@ For calls between different networks, enable the bundled relay: `docker compose 
 The documentation lives in [`docs/`](docs/) (VitePress, English and Persian). Run `npm run docs:dev` to browse it locally.
 
 - [Calls & Video Messages](docs/Calls-and-Video-Messages.md)
-- [Message Menu](docs/Message-Menu.md), [Reactions](docs/Reactions.md), [Selecting Messages](docs/Selecting-Messages.md), [Pinned Messages and Chats](docs/Pinned-Messages-and-Chats.md), [GIFs](docs/Saved-GIFs.md)
+- [Message Menu](docs/Message-Menu.md), [Reactions](docs/Reactions.md), [Selecting Messages](docs/Selecting-Messages.md), [Pinned Messages and Chats](docs/Pinned-Messages-and-Chats.md), [GIFs](docs/Saved-GIFs.md), [Link Previews](docs/Link-Previews.md)
 - [End-to-End Encryption Protocol](docs/E2EE-Protocol.md) (for native app developers)
 - [Deployment Script](docs/Deployment-Script.md)
 - [Install via Docker](docs/Installation-Docker.md)

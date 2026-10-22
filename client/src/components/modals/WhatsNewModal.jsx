@@ -241,7 +241,7 @@ export default function WhatsNewModal({
       >
         <div className="flex items-start justify-between gap-4 border-b border-emerald-100/70 px-6 py-5 dark:border-emerald-500/20">
           <div>
-            <p className="text-[10px] uppercase tracking-[0.28em] text-emerald-500/80">
+            <p className="text-[10px] uppercase tracking-[0.28em] text-emerald-600 dark:text-emerald-400">
               What's New
             </p>
             <h3 id="whats-new-modal-title" className="mt-2 text-2xl font-bold text-emerald-700 dark:text-emerald-200">

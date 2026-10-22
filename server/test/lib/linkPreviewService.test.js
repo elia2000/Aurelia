@@ -5,8 +5,10 @@ import {
   HTML_MAX_BYTES,
   IMAGE_ROUTE_PREFIX,
   MAX_CACHED_IMAGES,
+  MAX_FETCHES_PER_OWNER,
   MAX_PARALLEL_FETCHES,
   NEGATIVE_TTL_MS,
+  TRANSIENT_NEGATIVE_TTL_MS,
   POSITIVE_TTL_MS,
   LinkPreviewError,
   allowPrivateForTests,
@@ -39,7 +41,7 @@ const OG = (extra = "") =>
    <meta property="og:site_name" content="Example">
    ${extra}`;
 
-function setup({ pages = {}, images = {}, dns = DNS, now } = {}) {
+function setup({ pages = {}, images = {}, dns = DNS, now, serviceOptions = {} } = {}) {
   const clock = { at: 1_000_000 };
   const resolve = makeResolver(dns);
   const transport = makeTransport(({ url }) => {
@@ -47,11 +49,14 @@ function setup({ pages = {}, images = {}, dns = DNS, now } = {}) {
       const page = pages[url];
       return typeof page === "function" ? page() : page;
     }
-    if (url in images) return images[url];
+    if (url in images) {
+      const image = images[url];
+      return typeof image === "function" ? image() : image;
+    }
     return { status: 404, headers: { "content-type": "text/html" }, body: "nope" };
   });
-  const service = createLinkPreviewService({ resolve, transport, now: now || (() => clock.at) });
-  return { service, transport, resolve, clock };
+  const service = createLinkPreviewService({ resolve, transport, now: now || (() => clock.at), ...serviceOptions });
+  return { service, transport, resolve, clock, dns };
 }
 
 const codeOf = async (promise) => {
@@ -318,6 +323,41 @@ describe("the cache", () => {
     expect(transport.requests).toHaveLength(1);
   });
 
+  test("a timeout or a name that does not resolve is only remembered for a minute, not an hour", async () => {
+    // A slow name server must not turn into "no preview for this site for an hour".
+    expect(TRANSIENT_NEGATIVE_TTL_MS).toBeLessThanOrEqual(NEGATIVE_TTL_MS / 10);
+    const dns = { ...DNS };
+    delete dns["example.com"];
+    const { service, transport, clock } = setup({ pages: { [PAGE]: htmlResponse(OG()) }, dns });
+    expect(await codeOf(service.getPreview(PAGE))).toBe("dns_failed");
+    dns["example.com"] = [PUBLIC_IP];
+    clock.at += TRANSIENT_NEGATIVE_TTL_MS - 1;
+    expect(await codeOf(service.getPreview(PAGE))).toBe("dns_failed"); // still the remembered answer
+    expect(transport.requests).toHaveLength(0);
+    clock.at += 2;
+    expect((await service.getPreview(PAGE)).title).toBe("The title");
+  });
+
+  test("a site that did not answer in time is asked again after a minute", async () => {
+    let slow = true;
+    const { service, clock } = setup({
+      pages: { [PAGE]: () => (slow ? new Promise(() => {}) : htmlResponse(OG())) },
+      serviceOptions: { buildTimeoutMs: 40 },
+    });
+    expect(await codeOf(service.getPreview(PAGE))).toBe("timeout");
+    slow = false;
+    clock.at += TRANSIENT_NEGATIVE_TTL_MS + 1;
+    expect((await service.getPreview(PAGE)).title).toBe("The title");
+  });
+
+  test("a failure that is the site's own doing (no title, wrong type) still waits the full hour", async () => {
+    const { service, transport, clock } = setup({ pages: { [PAGE]: htmlResponse("") } });
+    expect(await codeOf(service.getPreview(PAGE))).toBe("no_preview");
+    clock.at += TRANSIENT_NEGATIVE_TTL_MS + 1;
+    expect(await codeOf(service.getPreview(PAGE))).toBe("no_preview");
+    expect(transport.requests).toHaveLength(1);
+  });
+
   test("a link that may not be fetched costs nothing and is never cached", async () => {
     const { service, transport, resolve } = setup();
     for (const link of ["http://127.0.0.1/", "ftp://example.com/", "http://user:pw@example.com/", "http://example.com:8080/", "nonsense"]) {
@@ -411,6 +451,107 @@ describe("limits on fetching", () => {
     }
     expect(service.stats().active).toBe(MAX_PARALLEL_FETCHES);
     expect(await codeOf(service.getPreview(`https://example.com/p${MAX_PARALLEL_FETCHES}`))).toBe("busy");
+  });
+});
+
+describe("a tarpit site cannot hold a fetch slot for long", () => {
+  const IMAGES = `<meta property="og:image" content="https://cdn.example.com/a.png">
+                  <meta name="twitter:image" content="https://cdn.example.com/b.png">`;
+  const hang = () => new Promise(() => {});
+
+  test("the page and its pictures share ONE deadline, not 5 s each", async () => {
+    const { service, transport } = setup({
+      pages: { [PAGE]: htmlResponse(OG(IMAGES)) },
+      images: { "https://cdn.example.com/a.png": hang, "https://cdn.example.com/b.png": hang },
+      serviceOptions: { buildTimeoutMs: 300 },
+    });
+    const started = Date.now();
+    const preview = await service.getPreview(PAGE);
+    const took = Date.now() - started;
+    expect(preview.title).toBe("The title");
+    expect(preview.image).toBeNull(); // the text is kept, the picture is given up on
+    expect(took).toBeLessThan(700); // two separate 300 ms deadlines would be 900 ms
+    expect(transport.requests.length).toBeGreaterThanOrEqual(2);
+    expect(service.stats().active).toBe(0);
+  });
+
+  test("the slot is free again once the shared deadline has passed", async () => {
+    const { service } = setup({
+      pages: { [PAGE]: htmlResponse(OG(IMAGES)) },
+      images: { "https://cdn.example.com/a.png": hang, "https://cdn.example.com/b.png": hang },
+      serviceOptions: { buildTimeoutMs: 200 },
+    });
+    const pending = service.getPreview(PAGE);
+    expect(service.stats().active).toBe(1);
+    await pending;
+    expect(service.stats().active).toBe(0);
+  });
+
+  test("the page itself gets no more than the whole deadline", async () => {
+    const { service } = setup({ pages: { [PAGE]: hang }, serviceOptions: { buildTimeoutMs: 150 } });
+    const started = Date.now();
+    expect(await codeOf(service.getPreview(PAGE))).toBe("timeout");
+    expect(Date.now() - started).toBeLessThan(600);
+  });
+});
+
+describe("one person cannot take the whole pool", () => {
+  const never = () => new Promise(() => {});
+  const pagesFor = (count) => Object.fromEntries(Array.from({ length: count }, (_, i) => [`https://example.com/p${i}`, never]));
+
+  test(`a person has at most ${MAX_FETCHES_PER_OWNER} fetches running; others are told it is busy`, async () => {
+    expect(MAX_FETCHES_PER_OWNER).toBeLessThan(MAX_PARALLEL_FETCHES);
+    const { service, transport } = setup({ pages: pagesFor(MAX_FETCHES_PER_OWNER + 2), serviceOptions: { buildTimeoutMs: 400 } });
+    const running = [];
+    for (let i = 0; i < MAX_FETCHES_PER_OWNER; i += 1) {
+      running.push(service.getPreview(`https://example.com/p${i}`, { owner: "alice" }).catch(() => {}));
+    }
+    const before = transport.requests.length;
+    expect(await codeOf(service.getPreview(`https://example.com/p${MAX_FETCHES_PER_OWNER}`, { owner: "alice" }))).toBe("busy");
+    expect(transport.requests.length).toBe(before); // nothing was fetched for it
+
+    // Somebody else is not affected.
+    running.push(service.getPreview(`https://example.com/p${MAX_FETCHES_PER_OWNER + 1}`, { owner: "bob" }).catch(() => {}));
+    expect(service.stats().active).toBe(MAX_FETCHES_PER_OWNER + 1);
+    await Promise.all(running);
+  });
+
+  test("a refused request does not use up the person's rate allowance", async () => {
+    let admitted = 0;
+    const admit = () => (admitted += 1, true);
+    const { service } = setup({ pages: pagesFor(MAX_FETCHES_PER_OWNER + 1), serviceOptions: { buildTimeoutMs: 300 } });
+    const running = [];
+    for (let i = 0; i < MAX_FETCHES_PER_OWNER; i += 1) {
+      running.push(service.getPreview(`https://example.com/p${i}`, { owner: "alice", admit }).catch(() => {}));
+    }
+    expect(admitted).toBe(MAX_FETCHES_PER_OWNER);
+    expect(await codeOf(service.getPreview(`https://example.com/p${MAX_FETCHES_PER_OWNER}`, { owner: "alice", admit }))).toBe("busy");
+    expect(admitted).toBe(MAX_FETCHES_PER_OWNER);
+    await Promise.all(running);
+  });
+
+  test("the person can fetch again as soon as one of theirs has finished", async () => {
+    const { service } = setup({
+      pages: { ...pagesFor(MAX_FETCHES_PER_OWNER), [PAGE]: htmlResponse(OG()) },
+      serviceOptions: { buildTimeoutMs: 120 },
+    });
+    const running = [];
+    for (let i = 0; i < MAX_FETCHES_PER_OWNER; i += 1) {
+      running.push(service.getPreview(`https://example.com/p${i}`, { owner: "alice" }).catch(() => {}));
+    }
+    await Promise.all(running); // all timed out
+    expect((await service.getPreview(PAGE, { owner: "alice" })).title).toBe("The title");
+  });
+
+  test("a request that only joins a running fetch does not count against the person", async () => {
+    const { service } = setup({ pages: pagesFor(MAX_FETCHES_PER_OWNER), serviceOptions: { buildTimeoutMs: 200 } });
+    const running = [];
+    for (let i = 0; i < MAX_FETCHES_PER_OWNER; i += 1) {
+      running.push(service.getPreview(`https://example.com/p${i}`, { owner: "alice" }).catch(() => {}));
+    }
+    const joined = service.getPreview("https://example.com/p0", { owner: "alice" }).catch((error) => error.code);
+    expect(await joined).toBe("timeout");
+    await Promise.all(running);
   });
 });
 

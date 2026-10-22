@@ -43,7 +43,7 @@ This document defines the design language, UI patterns, color system, typography
 ### Primary & Accent Colors
 - **Primary / Active Accent**: `emerald` (`emerald-500`, `emerald-600`, `emerald-700`, dark: `emerald-200`/`emerald-400`).
   - Brand identity, active connections, selection highlights, message sent states, online status indicators.
-  - The accent can be any colour (colour of the day, custom). `colorScale` (`client/src/utils/themeColor.js`) guards every scale against the pair table in `client/src/utils/themeContrast.js` (4.5:1 text, 3:1 icons/rings/bold fill labels, light and dark). When you add a new accent combination (for example `text-emerald-600` on a new surface), add its pair to that table; `themeContrast.test.js` sweeps ~230 colours through it.
+  - The accent can be any colour (colour of the day, custom). `colorScale` (`client/src/utils/themeColor.js`) guards every scale against the pair table in `client/src/utils/themeContrast.js` (4.5:1 text, 3:1 icons/rings/bold fill labels, light and dark). When you add a new accent combination (for example `text-emerald-600` on a new surface), add its pair to that table; `themeContrast.test.js` sweeps ~230 colours through it. Shades have jobs: `500` is a fill, icon or dot colour (never a text colour: text is `600`/`700` on light surfaces and `200`-`400` on dark ones), keyboard focus rings are `500`, and a small badge with a white label (unread counter) uses the `600` fill. Do not put a fixed colour (a hard-coded blue link) on a surface that follows the accent.
 - **Destructive / Alert Accent**: `rose` (`rose-500`, `rose-600`, dark: `rose-300`/`rose-400`).
   - Warnings, delete message scopes, leave group confirmation, destructive buttons, error badges.
 - **Secondary Highlights / Badges**: `amber` (`amber-500`), `sky` (`sky-500`), `indigo` (`indigo-500`).
@@ -89,6 +89,18 @@ This document defines the design language, UI patterns, color system, typography
 - Dynamic color background is computed via `getAvatarStyle(color)`.
 - Online indicator dot: `h-3.5 w-3.5 rounded-full border-2 border-white bg-emerald-500 dark:border-slate-900`.
 - Badges: Use shared components (`VerifiedBadge.jsx`, `UserRoleBadge.jsx`).
+
+### Link Preview Card
+- `components/chat/linkPreview/LinkPreviewCard.jsx`, under the text of a message: 2px accent bar, site name (`text-xs`, semibold), bold title, two-line description (`line-clamp-2`) and an optional 64px rounded picture. It is `data-no-select` so it stays out of selected and copied text.
+- The picture is always one of our own server's (`/api/link-preview/image/:id`), never the linked site's: opening a chat must not contact that site.
+- The card arrives after the message (the server has to fetch the page). `useKeepAtBottomOnGrowth` (via `useLinkPreview`'s `bubbleRef`) keeps a chat that was scrolled to the bottom at the bottom when the bubble grows; somebody reading further up is never moved.
+- Its keyboard focus ring is `outline-emerald-700` (`dark:outline-emerald-300`), not the usual 500: it is drawn on a bubble, and your own bubble is tinted with the accent (500 measured 1.7:1 there). The `ring-on-bubble` pairs of `themeContrast.js` guard it.
+
+### Call Screen
+- The call card is always dark. Text on it is `slate-300`/`slate-400` or lighter (`slate-500` is 4.2:1 on `slate-950`: not for text); anything that sits on the live video rather than on the card needs its own backing, because a bright picture is the worst case. The "You are sharing your screen" banner is `bg-rose-950/90` with `text-rose-50` (see `sharing-banner` in `themeContrast.js`); it stays above the call settings' click-catcher, and the settings panel sits above it.
+- The small pictures stack down the right edge, so anything that runs full width at the top (the trust warning with its Review button) keeps a `7rem` right margin whenever there is a tile.
+- Sharing starting or stopping is announced through the card's live region (`useAnnouncer`), whichever way it was made. A button that goes away when it is pressed (the banner's Stop sharing, the pill's Minimise/Expand) hands the focus to its neighbour instead of dropping it on `<body>`.
+- The single-letter keys (M V S P F) can be switched off per device (`callShortcutPrefs.js`, shown in the call settings and in *Settings → Call sounds*) and act only while the focus is on the call card or on `<body>`; Esc, ? and Shift+H are not single letters.
 
 ### Selection & Text Interaction
 - Content selection is restricted by default (`user-select: none`).

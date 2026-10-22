@@ -317,6 +317,47 @@ describe("rate limits", () => {
   });
 });
 
+describe("when the server is busy", () => {
+  const stubbed = (code) => ({
+    getPreview: async () => {
+      throw new LinkPreviewError(code, `internal detail about ${code} 10.0.0.1`);
+    },
+    getImage: () => null,
+  });
+  const ask = (as) => as.get(`/api/link-preview?url=${encodeURIComponent("https://example.com/")}`);
+
+  test("\"busy\" is a 503 the app does not mistake for the person's own rate limit", async () => {
+    const { as } = setup({ service: stubbed("busy") });
+    const res = await ask(as("alice"));
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe("busy");
+    expect(res.headers["retry-after"]).toBe("5");
+    expect(JSON.stringify(res.body)).not.toContain("10.0.0.1");
+  });
+
+  test("a person's own limit stays a 429 \"rate_limited\"", async () => {
+    const { as } = setup({ service: stubbed("rate_limited") });
+    const res = await ask(as("alice"));
+    expect(res.status).toBe(429);
+    expect(res.body.code).toBe("rate_limited");
+  });
+
+  test("the person is passed to the service, so one account cannot take the whole pool", async () => {
+    const seen = [];
+    const service = {
+      getPreview: async (_url, options) => {
+        seen.push(options.owner);
+        throw new LinkPreviewError("no_preview");
+      },
+      getImage: () => null,
+    };
+    const { as } = setup({ service });
+    await ask(as("alice"));
+    await ask(as("bob"));
+    expect(seen).toEqual([ALICE.id, BOB.id]);
+  });
+});
+
 describe("the picture", () => {
   const link = "https://example.com/article";
   const png = pngBytes(64, 48);

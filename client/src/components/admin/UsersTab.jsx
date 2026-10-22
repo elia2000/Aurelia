@@ -234,7 +234,7 @@ const UsersTab = forwardRef(function UsersTab({ currentUser, active = true, onMu
                       </div>
                       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
                         {u.online
-                          ? <span className="font-semibold text-emerald-500">online</span>
+                          ? <span className="font-semibold text-emerald-600 dark:text-emerald-400">online</span>
                           : <span className="text-slate-400 dark:text-slate-500">Last seen {u.last_seen ? fmtDate(u.last_seen) : "—"}</span>}
                         <span className="text-slate-400 dark:text-slate-500">Joined {fmtDate(u.created_at)}</span>
                       </div>
@@ -303,7 +303,7 @@ const UsersTab = forwardRef(function UsersTab({ currentUser, active = true, onMu
                         </td>
                         <td className="px-4 py-2.5 text-[11px]">
                           {u.online
-                            ? <span className="font-semibold text-emerald-500">online</span>
+                            ? <span className="font-semibold text-emerald-600 dark:text-emerald-400">online</span>
                             : <span className="text-slate-400 dark:text-slate-500">{u.last_seen ? fmtDate(u.last_seen) : "—"}</span>}
                         </td>
                         <td className="px-4 py-2.5 text-[11px] text-slate-400 dark:text-slate-500">{fmtDate(u.created_at)}</td>

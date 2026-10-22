@@ -8,13 +8,23 @@ import { describeSurface } from "../../calls/screenShareText.js";
 /**
  * Stays on the call while a screen is shared, whatever else is hidden: there
  * must never be doubt about what the other person can see.
+ *
+ * It sits straight on top of the other person's video once the details have
+ * faded out, so its backing is dark and nearly opaque whatever the picture is
+ * (a white wall measured 1.4:1 with the old translucent rose): text on it is
+ * 13:1 or better over the brightest frame, see "sharing-banner" in
+ * utils/themeContrast.js. It is above the call settings' click-catcher (z-30),
+ * so "Stop sharing" works while the settings are open, and CallOverlay lifts
+ * the settings panel clear of it.
  */
-export function ScreenSharingBanner({ surface, onStop }) {
+export function ScreenSharingBanner({ surface, onStop, bannerRef }) {
   return (
     <div
-      role="status"
+      ref={bannerRef}
+      role="group"
+      aria-label="Screen sharing"
       data-screen-banner
-      className="relative z-20 mx-4 mb-1 mt-2 flex items-center gap-3 rounded-2xl border border-rose-400/40 bg-rose-500/20 py-2 pl-3 pr-2 text-left text-rose-50 shadow-lg backdrop-blur"
+      className="relative z-35 mx-4 mb-1 mt-2 flex items-center gap-3 rounded-2xl border border-rose-400/50 bg-rose-950/90 py-2 pl-3 pr-2 text-left text-rose-50 shadow-lg backdrop-blur"
     >
       <span aria-hidden="true" className="relative flex h-2.5 w-2.5 shrink-0">
         <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75 motion-reduce:animate-none" />
@@ -22,10 +32,11 @@ export function ScreenSharingBanner({ surface, onStop }) {
       </span>
       <span className="min-w-0 flex-1">
         <span className="block text-sm font-semibold leading-tight">You are sharing your screen</span>
-        <span className="block truncate text-[11px] text-rose-100/80">{describeSurface(surface)}</span>
+        <span className="block truncate text-[11px] text-rose-100">{describeSurface(surface)}</span>
       </span>
       <button
         type="button"
+        data-screen-stop
         onClick={onStop}
         className="shrink-0 rounded-full bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-rose-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-200"
       >

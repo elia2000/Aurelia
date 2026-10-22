@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
 import { CALL_SHORTCUTS } from "../../calls/shortcuts.js";
+import { setCallShortcutsEnabled } from "../../calls/callShortcutPrefs.js";
+import { useCallShortcutsEnabled } from "../../calls/useCallShortcutPrefs.js";
 
 /** Whether this device has a mouse or a keyboard worth telling about: a phone or tablet with only a touch screen does not. */
 function hasFineInput() {
@@ -24,13 +26,40 @@ function Keys({ keys }) {
 }
 
 /**
- * The cheat sheet of the call's keyboard shortcuts, folded away in the settings.
+ * The switch for the single-letter keys (M, V, S, P, F) on this device. On by
+ * default. Turning them off leaves Esc, ? and Shift+H alone (see callShortcutPrefs.js).
+ */
+function LetterKeysSwitch({ enabled }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={enabled}
+      data-shortcuts-switch
+      onClick={() => setCallShortcutsEnabled(!enabled)}
+      className="flex w-full items-center gap-3 rounded-xl py-2 text-left text-sm text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+    >
+      <span className="min-w-0 flex-1">
+        <span className="block">Single-key shortcuts</span>
+        <span className="block text-[11px] text-slate-400">M, V, S, P and F, while this call has the focus. For this device.</span>
+      </span>
+      <span aria-hidden="true" className={`relative h-6 w-11 shrink-0 rounded-full transition ${enabled ? "bg-emerald-500" : "bg-slate-600"}`}>
+        <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${enabled ? "left-[22px]" : "left-0.5"}`} />
+      </span>
+    </button>
+  );
+}
+
+/**
+ * The cheat sheet of the call's keyboard shortcuts, folded away in the settings,
+ * with the per-device switch for the single-letter keys at its top.
  * The ? key opens it (`reveal`): it is then scrolled into view and its heading
  * takes the focus, so a screen reader reads it out.
  */
 export function ShortcutsSection({ reveal = false }) {
   const detailsRef = useRef(null);
   const summaryRef = useRef(null);
+  const lettersOn = useCallShortcutsEnabled();
   useEffect(() => {
     if (!reveal) return;
     detailsRef.current?.scrollIntoView?.({ block: "nearest" });
@@ -45,6 +74,12 @@ export function ShortcutsSection({ reveal = false }) {
       >
         Keyboard shortcuts
       </summary>
+      <LetterKeysSwitch enabled={lettersOn} />
+      {lettersOn ? null : (
+        <p className="pb-1 text-[11px] text-slate-400">
+          The letter keys are off. Esc, ? and Shift+H still work.
+        </p>
+      )}
       <ul className="space-y-1.5 pb-1 pt-1">
         {CALL_SHORTCUTS.map((shortcut) => (
           <li key={shortcut.id} className="flex items-center justify-between gap-3 text-xs text-slate-200">

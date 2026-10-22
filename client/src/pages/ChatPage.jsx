@@ -2143,7 +2143,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   const statusValue = user.status || "online";
   const statusTextClass =
     statusValue === "online"
-      ? "font-semibold text-emerald-500 dark:text-emerald-300"
+      ? "font-semibold text-emerald-600 dark:text-emerald-300"
       : "";
 
   const parsePresenceDate = (value) => {

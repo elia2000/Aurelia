@@ -19,6 +19,9 @@ export const CALL_SHORTCUTS = Object.freeze([
 ]);
 
 const LETTER_ACTIONS = Object.freeze({ m: "mute", v: "camera", s: "screen", p: "pip", f: "fullscreen" });
+/** The shortcuts that are a single letter with no modifier: the ones a person can switch off (see callShortcutPrefs.js). */
+export const LETTER_SHORTCUT_IDS = Object.freeze(Object.values(LETTER_ACTIONS));
+const LETTER_SHORTCUT_SET = new Set(LETTER_SHORTCUT_IDS);
 const QUESTION_MARKS = new Set(["?", "؟"]); // the Persian one too
 
 // Input types that take no typing: letters pass through a focused checkbox, slider or button.
@@ -48,6 +51,19 @@ export function windowOnTop(doc, callCard = null) {
 }
 
 /**
+ * True when the keyboard focus is where the call's keys apply: inside the call
+ * card, or nowhere in particular (on the bare page). With the focus on the chat
+ * list, a message or any other control behind the card, a letter belongs to
+ * that, not to the call (WCAG 2.1.4: a single-key shortcut must be active only
+ * while its component has focus, or be switchable).
+ */
+export function focusIsOnCall(doc, callCard = null) {
+  const focused = doc?.activeElement;
+  if (!focused || focused === doc.body || focused === doc.documentElement) return true;
+  return Boolean(callCard && typeof callCard.contains === "function" && callCard.contains(focused));
+}
+
+/**
  * The shortcut a key press stands for, or null. Nothing with Ctrl, Cmd or Alt
  * (those belong to the browser and the system), no repeats (holding M must not
  * flap the microphone), and no half-typed composition. Letters are matched on
@@ -72,14 +88,26 @@ export function shortcutFor(event) {
  * `getActions()` returns `{ [id]: (event) => boolean | void }`; an action that
  * returns false (or is missing) declined, and the key goes on to whoever else
  * wants it. `getCard()` is the call card, `doc` the document.
+ * `lettersEnabled()` says whether the single-letter keys work at all (the
+ * per-device switch); when it says no, M, V, S, P and F pass untouched while
+ * Escape, ? and Shift+H are as always. Everything but Escape (which minimises
+ * the call from anywhere, so that it never also closes the chat behind it)
+ * acts only while the focus is on the call card or on the bare page.
  * @returns {(event: KeyboardEvent) => boolean} whether the key was taken
  */
-export function createShortcutHandler({ getActions, getCard = () => null, doc = typeof document === "undefined" ? null : document }) {
+export function createShortcutHandler({
+  getActions,
+  getCard = () => null,
+  lettersEnabled = () => true,
+  doc = typeof document === "undefined" ? null : document,
+}) {
   return function onKeyDown(event) {
     if (event.defaultPrevented) return false;
     const id = shortcutFor(event);
     if (!id) return false;
+    if (LETTER_SHORTCUT_SET.has(id) && !lettersEnabled()) return false;
     if (isTypingTarget(event.target) || isTypingTarget(doc?.activeElement)) return false;
+    if (id !== "minimise" && !focusIsOnCall(doc, getCard())) return false;
     if (windowOnTop(doc, getCard())) return false;
     const action = getActions()?.[id];
     if (!action || action(event) === false) return false;

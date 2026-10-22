@@ -12,9 +12,15 @@
  *   linkPreview/cache.js        in-memory cache with expiry
  *
  * This file puts them together and owns the caches: a result is kept 24 hours
- * (a failure 1 hour), so one site is not fetched again and again, and the
- * pictures are kept in memory and served from our own address
- * (/api/link-preview/image/:id), never hot-linked.
+ * (a failure 1 hour, a timeout or a name that did not resolve 1 minute, so a
+ * slow moment is not remembered as "this site has no preview"), so one site is
+ * not fetched again and again, and the pictures are kept in memory and served
+ * from our own address (/api/link-preview/image/:id), never hot-linked.
+ *
+ * One preview (the page and up to two pictures) has ONE deadline and uses one
+ * of MAX_PARALLEL_FETCHES slots; a single person may hold at most
+ * MAX_FETCHES_PER_OWNER of them, so a site that answers slowly on purpose
+ * cannot take the whole pool.
  */
 
 import crypto from "node:crypto";
@@ -28,11 +34,19 @@ export { LinkPreviewError };
 export const HTML_MAX_BYTES = 512 * 1024;
 export const POSITIVE_TTL_MS = 24 * 60 * 60 * 1000;
 export const NEGATIVE_TTL_MS = 60 * 60 * 1000;
+// Failures that say something about the moment, not about the site.
+export const TRANSIENT_NEGATIVE_TTL_MS = 60 * 1000;
+const TRANSIENT_CODES = new Set(["timeout", "dns_failed", "network"]);
 export const IMAGE_ROUTE_PREFIX = "/api/link-preview/image/";
 export const MAX_CACHED_PREVIEWS = 1000;
 export const MAX_CACHED_IMAGES = 300;
 export const MAX_CACHED_IMAGE_BYTES = 48 * 1024 * 1024;
 export const MAX_PARALLEL_FETCHES = 8;
+export const MAX_FETCHES_PER_OWNER = 2;
+// The page and its pictures together. (A picture is worth less than the rest
+// of the pool: with under MIN_IMAGE_BUDGET_MS left it is not tried.)
+export const BUILD_TIMEOUT_MS = 5000;
+const MIN_IMAGE_BUDGET_MS = 100;
 const MAX_IMAGE_CANDIDATES = 2;
 const IMAGE_ID_PATTERN = /^[a-f0-9]{32}$/;
 
@@ -62,6 +76,7 @@ export function allowPrivateForTests(env = process.env) {
  * @param {Function} [options.transport]    HTTP transport for the guarded fetcher (tests)
  * @param {boolean}  [options.allowPrivate] TEST HOOK, see allowPrivateForTests
  * @param {() => number} [options.now]
+ * @param {number}   [options.buildTimeoutMs]  the one deadline of a preview (default 5 s)
  */
 export function createLinkPreviewService({
   fetcher = null,
@@ -69,6 +84,7 @@ export function createLinkPreviewService({
   transport,
   allowPrivate = false,
   now = () => Date.now(),
+  buildTimeoutMs = BUILD_TIMEOUT_MS,
 } = {}) {
   const fetchGuarded = fetcher || createGuardedFetcher({ resolve, transport, allowPrivate });
   const previews = createTtlCache({ maxEntries: MAX_CACHED_PREVIEWS, now });
@@ -79,13 +95,15 @@ export function createLinkPreviewService({
     now,
   });
   const inflight = new Map(); // key -> Promise
+  const activeByOwner = new Map(); // owner -> number of fetches running
   let active = 0;
 
-  async function fetchImage(candidate) {
+  async function fetchImage(candidate, timeoutMs) {
     const response = await fetchGuarded(candidate, {
       maxBytes: PREVIEW_IMAGE_MAX_BYTES,
       accept: IMAGE_ACCEPT,
       mustFit: true,
+      timeoutMs,
     });
     const info = readPreviewImage(response.body);
     if (!info) return null;
@@ -95,10 +113,14 @@ export function createLinkPreviewService({
   }
 
   async function build(url) {
+    // One clock for the page and its pictures: a site that is slow on purpose
+    // gets buildTimeoutMs of a slot in all, not that long for every request.
+    const startedAt = performance.now();
     const page = await fetchGuarded(url.href, {
       maxBytes: HTML_MAX_BYTES,
       accept: PAGE_ACCEPT,
       contentTypes: ["text/html"],
+      timeoutMs: buildTimeoutMs,
     });
     const html = decodeHtml(page.body, page.headers?.["content-type"]);
     const fields = parsePreviewFields(html, page.url.href);
@@ -108,8 +130,10 @@ export function createLinkPreviewService({
 
     let image = null;
     for (const candidate of fields.imageCandidates.slice(0, MAX_IMAGE_CANDIDATES)) {
+      const left = buildTimeoutMs - (performance.now() - startedAt);
+      if (left < Math.min(MIN_IMAGE_BUDGET_MS, buildTimeoutMs / 2)) break; // text only
       try {
-        image = await fetchImage(candidate);
+        image = await fetchImage(candidate, left);
       } catch {
         image = null; // a picture that cannot be fetched is not a reason to lose the text
       }
@@ -130,18 +154,28 @@ export function createLinkPreviewService({
     };
   }
 
-  async function load(url, key) {
+  async function load(url, key, owner) {
     active += 1;
+    if (owner != null) activeByOwner.set(owner, (activeByOwner.get(owner) || 0) + 1);
     try {
       const built = await build(url);
       previews.set(key, { ok: true, ...built }, POSITIVE_TTL_MS);
       return built.preview;
     } catch (error) {
       const failure = error instanceof LinkPreviewError ? error : new LinkPreviewError("network");
-      previews.set(key, { ok: false, code: failure.code }, NEGATIVE_TTL_MS);
+      previews.set(
+        key,
+        { ok: false, code: failure.code },
+        TRANSIENT_CODES.has(failure.code) ? TRANSIENT_NEGATIVE_TTL_MS : NEGATIVE_TTL_MS,
+      );
       throw failure;
     } finally {
       active -= 1;
+      if (owner != null) {
+        const left = (activeByOwner.get(owner) || 1) - 1;
+        if (left > 0) activeByOwner.set(owner, left);
+        else activeByOwner.delete(owner);
+      }
     }
   }
 
@@ -151,11 +185,13 @@ export function createLinkPreviewService({
      * @param {object} [options]
      * @param {() => boolean} [options.admit]  asked only when a site would really be contacted;
      *                                         false -> LinkPreviewError "rate_limited"
+     * @param {string} [options.owner]         who asks (a user id): at most MAX_FETCHES_PER_OWNER of
+     *                                         one owner's fetches run at once, more -> "busy"
      * @returns {Promise<{ url, title, description, siteName, image: {url, width, height} | null }>}
      * @throws LinkPreviewError  "invalid_url" for a link that is not allowed, any other code
      *                           when no preview can be made
      */
-    async getPreview(rawUrl, { admit = null } = {}) {
+    async getPreview(rawUrl, { admit = null, owner = null } = {}) {
       const url = checkLinkUrl(rawUrl, { allowPrivate });
       const key = url.href;
 
@@ -169,10 +205,14 @@ export function createLinkPreviewService({
       const running = inflight.get(key);
       if (running) return running;
 
+      // "busy" costs the caller nothing: it is asked before the rate allowance is.
       if (active >= MAX_PARALLEL_FETCHES) throw new LinkPreviewError("busy", "Too many previews are loading.");
+      if (owner != null && (activeByOwner.get(owner) || 0) >= MAX_FETCHES_PER_OWNER) {
+        throw new LinkPreviewError("busy", "This person already has previews loading.");
+      }
       if (typeof admit === "function" && !admit()) throw new LinkPreviewError("rate_limited");
 
-      const promise = load(url, key).finally(() => inflight.delete(key));
+      const promise = load(url, key, owner).finally(() => inflight.delete(key));
       inflight.set(key, promise);
       return promise;
     },

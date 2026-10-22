@@ -696,7 +696,7 @@ export default function ChatProfileModal({
                         <p
                           className={`truncate text-xs ${
                             memberIsOnline
-                              ? "font-semibold text-emerald-500 dark:text-emerald-300"
+                              ? "font-semibold text-emerald-600 dark:text-emerald-300"
                               : "text-slate-500 dark:text-slate-400"
                           }`}
                         >
