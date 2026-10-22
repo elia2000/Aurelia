@@ -116,6 +116,15 @@ A device that learns that another device of the same person answered (`call_acce
 
 These are not required for interoperability, but they are what the web client does to save battery and data: Opus mono at about 24 kbps with `usedtx=1;useinbandfec=1`, `a=ptime:40`, a negotiated data channel (`id: 0`) for in-call state `{t:"state", muted, video}`, hardware-friendly video codecs first (H.264 baseline, then VP8), at most about 640×360 at 24 fps and 600 kbps with downward adaptation, and releasing the camera when the app is in the background.
 
+### Screen sharing
+
+Screen sharing changes neither the handshake nor the authentication, and needs no renegotiation:
+
+- **An extra video line in the first offer.** Every call's first offer has one more `m=video` section for the screen, created by the caller right after the others and **two-way (`sendrecv`) with no track**, so no RTP is sent while nobody shares. The order is fixed: `audio`, then (video calls) the camera's `video`, then the screen's `video`; in a voice call the screen's line is the only `video`. The callee's answer keeps the offer's order, and both sides find the screen line **by position** (the second `video` section of a video call, the first of a voice call), never by a track label. An answerer that does not know about the line may answer it `recvonly`, `inactive` or with port 0: the call connects all the same, and the screen cannot be shared.
+- **Same transport, same fingerprint.** `bundlePolicy` is `max-bundle`, so the extra section joins the `BUNDLE` group of the audio and carries the same `a=fingerprint` as every other section (one value for the whole session): it is carried by the one DTLS session whose fingerprint is authenticated in the sealed SDP. The emoji code and the keys come from the transcript above (call id, both users and devices, kind, commitment, both ephemeral keys), which contains no media description at all, so the extra line changes neither.
+- **In-band messages** on the negotiated data channel (`id: 0`). The `state` message gains `screen: true` ("this app can show a shared screen"); a peer that does not send it (an older app) is never offered a share. Sharing is announced with `{t:"screen", on:true, w, h}` (`w` and `h`, the size of the capture, are optional) and ended with `{t:"screen", on:false}`; a share that is going on is announced again after the connection comes back. A receiver treats the screen line's picture as a screen **only while `on` is exactly `true`**, ignores everything on a line it did not negotiate, ignores messages longer than 256 bytes, and clamps the sizes to whole numbers between 1 and 16384.
+- **Starting and stopping** are `replaceTrack(captureTrack)` and `replaceTrack(null)` on the screen line's sender, together with the message above. The sender sets `contentHint = "detail"` (text), at most 15 fps, about 2.5 Mbit/s, `degradationPreference = "maintain-resolution"` and scales a capture larger than 1920×1080 down. Screen audio is never captured.
+
 ## Video messages
 
 ### Sending

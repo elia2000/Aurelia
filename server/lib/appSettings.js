@@ -261,6 +261,18 @@ export const SETTING_DEFS = [
     max: 200,
   },
 
+  // ── Link previews ─────────────────────────────────────────────────────────────
+  {
+    key: "LINK_PREVIEWS",
+    type: TYPE_BOOL,
+    label: "Link previews",
+    description:
+      "Show a title, description and picture under messages that contain a link. The server fetches the linked page itself (only public web servers, with strict limits), so the people reading never contact that site. Off by default.",
+    group: "client",
+    envKey: "LINK_PREVIEWS",
+    defaultVal: false,
+  },
+
   // ── Remote Channel ────────────────────────────────────────────────────────────
   {
     key: "REMOTE_CHANNEL",

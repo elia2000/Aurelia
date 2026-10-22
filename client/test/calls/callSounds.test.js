@@ -254,6 +254,41 @@ describe("autoplay rules", () => {
     expect(target.armed).toBe(false);
   });
 
+  test("a ring that began silent is heard from the first tap on, not from its next round", async () => {
+    const { env, sounds } = setup({ audio: { allowed: false }, activation: false });
+    const target = makeTarget();
+    sounds.armUnlock(target);
+    sounds.startRingtone();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(env.oscillators()).toHaveLength(0);
+
+    env.allow();
+    target.fire("pointerdown");
+    await flush();
+    expect(env.oscillators()).toHaveLength(4);
+
+    // The rounds go on from the tap (every 3 s) with no second schedule in between.
+    await vi.advanceTimersByTimeAsync(2900);
+    expect(env.oscillators()).toHaveLength(4);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(env.oscillators()).toHaveLength(8);
+  });
+
+  test("a ring that is already audible is not restarted by the tap that puts an interrupted context right", async () => {
+    const { env, sounds } = setup({ activation: true });
+    const target = makeTarget();
+    sounds.armUnlock(target);
+    sounds.startRingtone();
+    await flush();
+    expect(env.oscillators()).toHaveLength(4);
+    env.context.setState("interrupted");
+    expect(target.armed).toBe(true);
+    target.fire("pointerdown");
+    await flush();
+    expect(env.context.state).toBe("running");
+    expect(env.oscillators()).toHaveLength(4);
+  });
+
   test("listens for taps, key presses and touches", () => {
     const { sounds } = setup({ activation: false });
     const target = makeTarget();
@@ -431,6 +466,53 @@ describe("vibration", () => {
     expect(vibrate).toHaveBeenLastCalledWith(SOUNDS.connect.buzz);
     await sounds.playEnded("ended");
     expect(vibrate).toHaveBeenLastCalledWith(SOUNDS.ended.buzz);
+  });
+
+  describe("on the real navigator", () => {
+    const withNavigator = (navigatorStub) => {
+      vi.stubGlobal("navigator", navigatorStub);
+      vi.stubGlobal("document", { hidden: false });
+      const env = makeFakeAudio();
+      return createCallSounds({
+        getPrefs: () => ({ enabled: true, volume: 70, vibrate: true }),
+        subscribePrefs: () => () => {},
+        getContextClass: () => env.Context,
+        hasActivation: () => true,
+      });
+    };
+    afterEach(() => vi.unstubAllGlobals());
+
+    test("buzzes with the ringing pattern once the person has touched the page, and cancels with the ring", async () => {
+      const vibrate = vi.fn(() => true);
+      const stop = withNavigator({ vibrate, userActivation: { hasBeenActive: true } }).startRingtone();
+      expect(vibrate).toHaveBeenCalledWith(SOUNDS.ringtone.vibration);
+      stop();
+      expect(vibrate).toHaveBeenLastCalledWith(0);
+    });
+
+    test("does not ask the browser to vibrate before the first tap (Chrome would only warn)", async () => {
+      const vibrate = vi.fn(() => true);
+      withNavigator({ vibrate, userActivation: { hasBeenActive: false } }).startRingtone()();
+      expect(vibrate).not.toHaveBeenCalled();
+    });
+
+    test("does not vibrate a hidden page (the notification does)", async () => {
+      const vibrate = vi.fn(() => true);
+      const sounds = withNavigator({ vibrate, userActivation: { hasBeenActive: true } });
+      vi.stubGlobal("document", { hidden: true });
+      sounds.startRingtone()();
+      expect(vibrate).not.toHaveBeenCalledWith(SOUNDS.ringtone.vibration);
+    });
+
+    test("a browser without vibration (or one that throws) is fine", async () => {
+      withNavigator({}).startRingtone()();
+      withNavigator({
+        vibrate: () => {
+          throw new Error("no");
+        },
+        userActivation: { hasBeenActive: true },
+      }).startRingtone()();
+    });
   });
 
   test("a ringing phone that is not vibrating (no support) is fine", async () => {

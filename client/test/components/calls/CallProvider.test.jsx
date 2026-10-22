@@ -58,6 +58,7 @@ vi.mock("../../../src/e2ee/services.js", () => ({
 
 import { CallProvider } from "../../../src/calls/CallProvider.jsx";
 import { CALL_EVENT, REALTIME_OPEN_EVENT } from "../../../src/calls/callContext.js";
+import { setPictureInPictureArmed } from "../../../src/calls/pip.js";
 import { useDeviceRegistration } from "../../../src/e2ee/useDeviceRegistration.js";
 import { CHAT_PAGE_CONFIG } from "../../../src/settings/chatPageConfig.js";
 
@@ -149,6 +150,93 @@ describe("CallProvider", () => {
     hideDocument(false);
     document.dispatchEvent(new Event("visibilitychange"));
     expect(manager.setPageHidden).toHaveBeenLastCalledWith(false);
+  });
+
+  describe("the page is hidden but the call floats in picture in picture", () => {
+    let floating = null;
+    beforeEach(() => {
+      floating = null;
+      Object.defineProperty(document, "pictureInPictureElement", { configurable: true, get: () => floating });
+      setPictureInPictureArmed(false);
+    });
+    afterEach(() => {
+      delete document.pictureInPictureElement;
+      setPictureInPictureArmed(false);
+      vi.useRealTimers();
+    });
+    const callVideo = () => {
+      const video = document.createElement("video");
+      video.dataset.view = "remote";
+      return video;
+    };
+
+    test("is still being watched: the camera stays on", async () => {
+      const manager = await mount();
+      floating = callVideo();
+      hideDocument(true);
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(manager.setPageHidden).toHaveBeenLastCalledWith(false);
+    });
+
+    test("opening the window after the page went away brings the camera back, closing it releases it again", async () => {
+      const manager = await mount();
+      hideDocument(true);
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(manager.setPageHidden).toHaveBeenLastCalledWith(true);
+      floating = callVideo();
+      document.dispatchEvent(new Event("enterpictureinpicture"));
+      expect(manager.setPageHidden).toHaveBeenLastCalledWith(false);
+      floating = null;
+      document.dispatchEvent(new Event("leavepictureinpicture"));
+      expect(manager.setPageHidden).toHaveBeenLastCalledWith(true);
+    });
+
+    test("a window that is not the call's counts for nothing", async () => {
+      const manager = await mount();
+      floating = document.createElement("video"); // a video in the chat
+      hideDocument(true);
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(manager.setPageHidden).toHaveBeenLastCalledWith(true);
+    });
+
+    test("where the browser may open the window by itself the camera waits a moment, and is released if it did not", async () => {
+      const manager = await mount();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }); // after mounting: that waits on real timers
+      manager.setPageHidden.mockClear();
+      setPictureInPictureArmed(true);
+      hideDocument(true);
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(manager.setPageHidden).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(800);
+      expect(manager.setPageHidden).toHaveBeenLastCalledWith(true);
+    });
+
+    test("and is kept when the window did open in that moment", async () => {
+      const manager = await mount();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }); // after mounting: that waits on real timers
+      manager.setPageHidden.mockClear();
+      setPictureInPictureArmed(true);
+      hideDocument(true);
+      document.dispatchEvent(new Event("visibilitychange"));
+      floating = callVideo();
+      document.dispatchEvent(new Event("enterpictureinpicture"));
+      await vi.advanceTimersByTimeAsync(800);
+      expect(manager.setPageHidden).not.toHaveBeenCalledWith(true);
+      expect(manager.setPageHidden).toHaveBeenLastCalledWith(false);
+    });
+
+    test("coming back during that moment cancels it", async () => {
+      const manager = await mount();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }); // after mounting: that waits on real timers
+      manager.setPageHidden.mockClear();
+      setPictureInPictureArmed(true);
+      hideDocument(true);
+      document.dispatchEvent(new Event("visibilitychange"));
+      hideDocument(false);
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(800);
+      expect(manager.setPageHidden).not.toHaveBeenCalledWith(true);
+    });
   });
 
   test("registers no device itself: that no longer depends on calls", async () => {

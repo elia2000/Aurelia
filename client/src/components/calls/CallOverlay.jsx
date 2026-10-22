@@ -9,6 +9,9 @@ import {
   Minimize2,
   Phone,
   PhoneOff,
+  PictureInPicture2,
+  ScreenShare,
+  ScreenShareOff,
   ShieldOff,
   SlidersHorizontal,
   Video,
@@ -19,8 +22,16 @@ import {
 import Avatar from "../common/Avatar.jsx";
 import SafetyNumberModal from "./SafetyNumberModal.jsx";
 import CallSettingsMenu from "./CallSettingsMenu.jsx";
+import { ScreenPreviewTile, ScreenSharingBanner, SharingTheirScreenLabel } from "./ScreenShareParts.jsx";
+import { QualityIndicator } from "./QualityParts.jsx";
+import { SCREEN_ERROR_TEXT, shareScreenHint } from "../../calls/screenShareText.js";
 import { guessDefaultRoute, nextQuickRoute } from "../../calls/audioDevices.js";
 import { useAudioDevices } from "../../calls/useAudioDevices.js";
+import { usePictureInPicture } from "../../calls/usePictureInPicture.js";
+import { useFullscreen } from "../../calls/useFullscreen.js";
+import { exitFullscreen } from "../../calls/fullscreen.js";
+import { useCallShortcuts } from "../../calls/useCallShortcuts.js";
+import { useAnnouncer } from "../../calls/useAnnouncer.js";
 import { loadFit, objectFitFor, saveFit } from "../../calls/pictureFit.js";
 import { CALL_PHASE, isFailureReason } from "../../calls/callManager.js";
 import { useCalls } from "../../calls/callContext.js";
@@ -83,12 +94,24 @@ function useElapsed(since, active) {
 const MAIN_PICTURE = "absolute inset-0 z-0 h-full w-full";
 // How long a video call keeps its name, buttons and notes on screen without a touch.
 const AUTO_HIDE_MS = 5_000;
+// How long "picture in picture is not available" stays up.
+const PIP_NOTE_MS = 4_000;
 // Fades the details of a video call in and out of the way of the picture.
 const chromeClass = (hidden) =>
   `transition-opacity duration-200 motion-reduce:transition-none ${hidden ? "pointer-events-none opacity-0" : "opacity-100"}`;
 const TILE_PICTURE =
   "absolute right-4 z-20 h-32 w-24 rounded-2xl border border-white/20 object-cover shadow-lg md:h-28 md:w-20";
+// A shared screen is never cropped, in a tile as well as on the whole screen.
+const TILE_SCREEN = TILE_PICTURE.replace("object-cover", "bg-black object-contain");
 const TILE_TOP = { top: "calc(max(1rem, env(safe-area-inset-top)) + 3.5rem)" };
+// The tiles stack down the right edge, 0.5rem apart (a tile is 8rem tall, 7rem on a computer).
+// Every class is written out so that Tailwind finds it.
+const TILE_BELOW = [
+  "",
+  "top-[calc(max(1rem,env(safe-area-inset-top))_+_12rem)] md:top-[calc(max(1rem,env(safe-area-inset-top))_+_11rem)]",
+  "top-[calc(max(1rem,env(safe-area-inset-top))_+_20.5rem)] md:top-[calc(max(1rem,env(safe-area-inset-top))_+_18.5rem)]",
+  "top-[calc(max(1rem,env(safe-area-inset-top))_+_29rem)] md:top-[calc(max(1rem,env(safe-area-inset-top))_+_26rem)]",
+];
 
 function useStream(ref, stream) {
   useEffect(() => {
@@ -99,7 +122,7 @@ function useStream(ref, stream) {
   }, [ref, stream]);
 }
 
-function RoundButton({ label, onClick, active = false, danger = false, accept = false, children, size = "h-14 w-14", buttonRef, expanded }) {
+function RoundButton({ label, onClick, active = false, danger = false, accept = false, children, size = "h-14 w-14", buttonRef, expanded, disabled = false, hint, shortcut }) {
   const tone = danger
     ? "bg-rose-600 text-white hover:bg-rose-500 shadow-[0_0_14px_rgba(244,63,94,0.35)]"
     : accept
@@ -112,12 +135,13 @@ function RoundButton({ label, onClick, active = false, danger = false, accept = 
       ref={buttonRef}
       type="button"
       onClick={onClick}
+      disabled={disabled}
       aria-label={label}
       aria-pressed={expanded === undefined && active && !danger && !accept ? true : undefined}
       aria-expanded={expanded}
       aria-haspopup={expanded === undefined ? undefined : "true"}
-      title={label}
-      className={`inline-flex ${size} items-center justify-center rounded-full transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ${tone}`}
+      title={hint || (shortcut ? `${label} (${shortcut})` : label)}
+      className={`inline-flex ${size} items-center justify-center rounded-full transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 disabled:cursor-not-allowed disabled:opacity-50 ${tone}`}
     >
       {children}
     </button>
@@ -125,14 +149,15 @@ function RoundButton({ label, onClick, active = false, danger = false, accept = 
 }
 
 export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
-  const { state, minimized, setMinimized, accept, decline, hangup, dismiss, setMuted, setCameraEnabled, setQuality, setMicrophone } = useCalls();
+  const { state, minimized, setMinimized, accept, decline, hangup, dismiss, setMuted, setCameraEnabled, setQuality, setMicrophone, screenSupported, toggleScreenShare, stopScreenShare } = useCalls();
   const [safetyOpen, setSafetyOpen] = useState(false);
   const [copyState, setCopyState] = useState("idle"); // idle | copied | failed
   const [swapped, setSwapped] = useState(false); // your own picture fills the screen
+  const [screenSwapped, setScreenSwapped] = useState(false); // their camera fills the screen, the shared screen is a tile
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chromeHidden, setChromeHidden] = useState(false); // the details are out of the way of the picture
   const [fit, setFit] = useState(() => loadFit());
-  const [pictureSize, setPictureSize] = useState({ remote: null, local: null });
+  const [pictureSize, setPictureSize] = useState({ remote: null, local: null, screen: null });
   const [box, setBox] = useState(null);
   const hideTimer = useRef(null);
   // A click or tap that hid the details: moving the mouse does not bring them back.
@@ -145,11 +170,12 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
     setAudioElement(el);
   }, []);
   const remoteVideoRef = useRef(null);
+  const screenVideoRef = useRef(null);
   const remoteAudioRef = useRef(null);
   const localVideoRef = useRef(null);
   const dialogRef = useRef(null);
 
-  const { phase, peer, kind, muted, cameraOn, remoteCameraOn, remoteMuted, sas, trust, relayed, networkPaused, cameraBlocked, connectingSlow, relayCheck, connectionDetails } = state;
+  const { phase, peer, kind, muted, cameraOn, remoteCameraOn, remoteMuted, sas, trust, relayed, networkPaused, cameraBlocked, connectingSlow, relayCheck, connectionDetails, reconnecting, connectionQuality, connectionStats, connectionLimit } = state;
   // A new report starts with a fresh button.
   useEffect(() => setCopyState("idle"), [connectionDetails]);
   const active = phase && phase !== CALL_PHASE.IDLE;
@@ -167,13 +193,28 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
   // sending. The choice is kept while the call is minimised, and given up when
   // there is no picture of yours any more.
   const canSwap = kind === "video" && cameraOn && connected;
-  const swappedView = swapped && canSwap && showLocalVideo;
+  // The other person shares their screen: it fills the screen (all of it, never
+  // cropped) and their camera becomes a tile. Tapping the tile swaps the two.
+  // This works in a voice call too, where there is no camera to swap.
+  const { screenSharing, screenSurface, screenStream, screenError, screenAvailable, remoteScreenOn, remoteScreenStream } = state;
+  const screenOn = connected && Boolean(remoteScreenOn && remoteScreenStream);
+  const viewingScreen = screenOn && !minimized;
+  const canSwapScreen = screenOn && kind === "video" && remoteCameraOn;
+  const screenSwappedView = screenSwapped && canSwapScreen && viewingScreen;
+  // Your own picture can only fill the screen while a shared screen does not.
+  const swappedView = swapped && canSwap && showLocalVideo && !viewingScreen;
   useEffect(() => {
     if (!canSwap) setSwapped(false);
   }, [canSwap]);
+  useEffect(() => {
+    if (!canSwapScreen) setScreenSwapped(false);
+  }, [canSwapScreen]);
+  // Why the Share screen button is off, if it is.
+  const shareHint = shareScreenHint({ connected, available: screenAvailable });
   useStream(remoteAudioRef, active ? state.remoteStream : null);
   useStream(remoteVideoRef, showRemoteVideo ? state.remoteStream : null);
   useStream(localVideoRef, showLocalVideo ? state.localStream : null);
+  useStream(screenVideoRef, viewingScreen ? remoteScreenStream : null);
 
   // Where the sound goes and which microphone is used.
   const audioDevices = useAudioDevices({
@@ -188,7 +229,8 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
   const quickRoute = routes.length >= 2 ? nextQuickRoute(routes, currentRoute?.kind) : null;
   const hasAudioChoices = routes.length > 0 || audioDevices.model.canPickInput || audioDevices.model.canPickOutput;
   const inCallScreen = phase === CALL_PHASE.CONNECTING || connected;
-  const showSettingsButton = inCallScreen && (hasAudioChoices || kind === "video");
+  // Once connected the settings always have something to show: the connection and the shortcuts.
+  const showSettingsButton = inCallScreen && (hasAudioChoices || kind === "video" || connected);
   useEffect(() => {
     if (!inCallScreen || minimized) setSettingsOpen(false);
   }, [inCallScreen, minimized]);
@@ -230,8 +272,9 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
     const stops = [];
     if (showRemoteVideo && remoteVideoRef.current) stops.push(watch(remoteVideoRef.current, "remote"));
     if (showLocalVideo && localVideoRef.current) stops.push(watch(localVideoRef.current, "local"));
+    if (viewingScreen && screenVideoRef.current) stops.push(watch(screenVideoRef.current, "screen"));
     return () => stops.forEach((stop) => stop());
-  }, [showRemoteVideo, showLocalVideo]);
+  }, [showRemoteVideo, showLocalVideo, viewingScreen]);
   const chooseFit = useCallback((choice) => {
     setFit(choice);
     saveFit(choice);
@@ -246,8 +289,8 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
   // exception to a click: what a click hid stays hidden until the next click or
   // a key press. They stay while something needs reading or choosing, and
   // while there is no picture to look at instead.
-  const videoOnScreen = kind === "video" && connected && !minimized && (showRemoteVideo || swappedView);
-  const mustStay = settingsOpen || safetyOpen || trust?.status === TRUST.DEVICES_ADDED || Boolean(networkPaused);
+  const videoOnScreen = connected && !minimized && (viewingScreen || (kind === "video" && (showRemoteVideo || swappedView)));
+  const mustStay = settingsOpen || safetyOpen || trust?.status === TRUST.DEVICES_ADDED || Boolean(networkPaused) || Boolean(reconnecting);
   const hideChrome = chromeHidden && videoOnScreen && !settingsOpen && !safetyOpen;
   const armHide = useCallback(() => {
     clearTimeout(hideTimer.current);
@@ -297,6 +340,109 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [hideChrome, wake]);
+  // ── picture in picture, full screen and the keyboard (see pip.js, shortcuts.js) ──
+  const [announcement, say] = useAnnouncer();
+  const [pipNote, setPipNote] = useState(false); // the browser would not open the window: said for a few seconds
+  const [shortcutsHelp, setShortcutsHelp] = useState(false); // the ? key opened the settings on the shortcuts
+  const pipNoteTimer = useRef(null);
+  useEffect(() => () => clearTimeout(pipNoteTimer.current), []);
+  useEffect(() => {
+    if (!settingsOpen) setShortcutsHelp(false);
+  }, [settingsOpen]);
+  // The picture that would float: their screen while it fills the screen, otherwise their camera.
+  const pipTargetKey = viewingScreen && !(screenSwappedView && showRemoteVideo) ? "screen" : showRemoteVideo ? "remote" : null;
+  const pip = usePictureInPicture({
+    targetKey: pipTargetKey,
+    getTarget: () => (pipTargetKey === "screen" ? screenVideoRef.current : pipTargetKey === "remote" ? remoteVideoRef.current : null),
+    kind,
+    muted,
+    cameraOn,
+    onToggleMicrophone: () => setMuted(!muted),
+    onToggleCamera: () => setCameraEnabled(!cameraOn),
+    onHangup: hangup,
+  });
+  const { toggle: togglePipWindow } = pip;
+  const togglePip = useCallback(async () => {
+    const result = await togglePipWindow();
+    if (result === "failed") {
+      clearTimeout(pipNoteTimer.current);
+      setPipNote(true);
+      pipNoteTimer.current = setTimeout(() => setPipNote(false), PIP_NOTE_MS);
+    } else {
+      say(result === "entered" ? "Picture in picture on" : "Picture in picture off");
+    }
+  }, [togglePipWindow, say]);
+  const fullscreen = useFullscreen(dialogRef);
+  // The safety number opens in its own window, which a card in full screen would hide.
+  useEffect(() => {
+    if (safetyOpen) void exitFullscreen(dialogRef.current);
+  }, [safetyOpen]);
+
+  // Keys: only while the card is on screen (a minimised call leaves them to the chat). An action
+  // that returns false is not available right now, and its key goes on to whoever else wants it.
+  const callOn = Boolean(active) && phase !== CALL_PHASE.INCOMING && phase !== CALL_PHASE.ENDED;
+  const canShare = screenSupported && inCallScreen && (screenSharing || Boolean(state.screenBusy) || !shareHint);
+  useCallShortcuts({
+    enabled: Boolean(active) && !minimized,
+    getCard: () => dialogRef.current,
+    actions: {
+      mute: () => {
+        if (!callOn) return false;
+        wake();
+        say(muted ? "Microphone on" : "Microphone muted");
+        setMuted(!muted);
+      },
+      camera: () => {
+        if (!callOn || kind !== "video") return false;
+        wake();
+        say(cameraOn ? "Camera off" : "Camera on");
+        setCameraEnabled(!cameraOn);
+      },
+      screen: () => {
+        if (!canShare) return false;
+        wake();
+        if (screenSharing) say("Stopped sharing your screen");
+        toggleScreenShare();
+      },
+      pip: () => {
+        if (!pip.available) return false;
+        wake();
+        void togglePip();
+      },
+      fullscreen: () => {
+        if (!fullscreen.supported) return false;
+        wake();
+        void fullscreen.toggle().then((result) => {
+          if (result !== "failed") say(result === "entered" ? "Full screen on" : "Full screen off");
+        });
+      },
+      // Escape closes the settings (and the safety number) first: only then the call.
+      minimise: () => {
+        if (!callOn || settingsOpen || safetyOpen) return false;
+        setMinimized(true);
+      },
+      hangup: () => {
+        if (!callOn) return false;
+        hangup();
+      },
+      help: () => {
+        if (!showSettingsButton) return false;
+        wake();
+        if (settingsOpen) {
+          closeSettings();
+        } else {
+          setShortcutsHelp(true);
+          setSettingsOpen(true);
+        }
+      },
+    },
+  });
+  // A dropped connection says so even if the details were out of the way.
+  useEffect(() => {
+    if (reconnecting) wake();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reconnecting]);
+
   const onStageClick = (event) => {
     // While the settings or the safety number are open, a tap belongs to them.
     if (!videoOnScreen || settingsOpen || safetyOpen) return;
@@ -358,6 +504,33 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
   // is off the screen is simply black.
   const videoStage = kind === "video" && connected;
 
+  // ── where each picture sits: "main", or the number of its tile down the right edge ──
+  const ownTile = showLocalVideo || (videoStage && !cameraOn && !minimized); // your picture, or the black tile that stands in for it
+  const slots = {};
+  let tiles = 0;
+  if (viewingScreen) {
+    slots.screen = screenSwappedView ? tiles++ : "main";
+    slots.remote = screenSwappedView ? "main" : showRemoteVideo ? tiles++ : undefined;
+    if (showLocalVideo) slots.local = tiles++;
+  } else if (swappedView) {
+    slots.local = "main";
+    slots.remote = tiles++;
+  } else {
+    slots.remote = "main";
+    if (ownTile) slots.local = tiles++;
+  }
+  if (screenSharing && !minimized) slots.preview = tiles++;
+  const place = (slot, tile = TILE_PICTURE, main = mainPicture) =>
+    slot === "main"
+      ? { className: main, style: undefined }
+      : { className: `${tile} ${TILE_BELOW[slot] || ""}`, style: slot === 0 ? TILE_TOP : undefined };
+  const placed = {
+    remote: place(slots.remote),
+    local: place(slots.local),
+    // Whatever the other person shares is never cropped, on the whole screen or in a tile.
+    screen: place(slots.screen, TILE_SCREEN, `${MAIN_PICTURE} object-contain`),
+  };
+
   let statusText = "";
   if (ended) statusText = END_MESSAGES[state.endReason] || "Call ended";
   else if (incoming) statusText = kind === "video" ? "Incoming video call" : "Incoming voice call";
@@ -399,6 +572,18 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
           <span className="min-w-0 max-w-[30vw] truncate text-xs tabular-nums opacity-90" title={statusText}>
             {statusText}
           </span>
+          {screenSharing ? (
+            // The call is out of sight: sharing still has to be obvious, and one tap from stopping.
+            <button
+              type="button"
+              onClick={stopScreenShare}
+              aria-label="Stop sharing"
+              title="You are sharing your screen. Stop sharing"
+              className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full bg-rose-600 px-2.5 text-xs font-semibold hover:bg-rose-500"
+            >
+              <ScreenShareOff size={14} aria-hidden="true" /> Sharing
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={() => setMinimized(false)}
@@ -434,19 +619,32 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
         onClick={onStageClick}
         onKeyDown={wake}
         onPointerMove={(event) => event.pointerType === "mouse" && !pinnedHidden.current && wake()}
-        className={`fixed inset-0 z-[340] flex flex-col overflow-hidden ${videoStage ? "bg-black" : "bg-slate-950"} text-slate-50 outline-none md:inset-auto md:bottom-6 md:right-6 md:h-[560px] md:w-[360px] md:rounded-3xl md:border md:border-emerald-500/30 md:shadow-2xl md:shadow-emerald-500/20`}
+        className={`fixed inset-0 z-[340] flex flex-col overflow-hidden ${videoStage || viewingScreen ? "bg-black" : "bg-slate-950"} text-slate-50 outline-none md:inset-auto md:bottom-6 md:right-6 ${viewingScreen ? "md:h-[min(80vh,760px)] md:w-[min(92vw,1180px)]" : "md:h-[560px] md:w-[360px]"} md:rounded-3xl md:border md:border-emerald-500/30 md:shadow-2xl md:shadow-emerald-500/20 [&:fullscreen]:rounded-none [&:fullscreen]:border-0`}
       >
         {showRemoteVideo ? (
           <video
             ref={remoteVideoRef}
             data-view="remote"
-            data-slot={swappedView ? "tile" : "main"}
-            data-fit={swappedView ? undefined : mainFit}
+            data-slot={slots.remote === "main" ? "main" : "tile"}
+            data-fit={slots.remote === "main" ? mainFit : undefined}
             autoPlay
             playsInline
             muted
-            className={swappedView ? TILE_PICTURE : mainPicture}
-            style={swappedView ? TILE_TOP : undefined}
+            className={placed.remote.className}
+            style={placed.remote.style}
+          />
+        ) : null}
+        {viewingScreen ? (
+          <video
+            ref={screenVideoRef}
+            data-view="screen"
+            data-slot={slots.screen === "main" ? "main" : "tile"}
+            data-fit={slots.screen === "main" ? "contain" : undefined}
+            autoPlay
+            playsInline
+            muted
+            className={placed.screen.className}
+            style={placed.screen.style}
           />
         ) : null}
         <div
@@ -454,37 +652,70 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
           className={`absolute inset-0 z-[5] bg-linear-to-b from-slate-950/70 via-transparent to-slate-950/80 ${chromeClass(hideChrome)}`}
         />
 
+        {/* What a key press did, for screen readers (the buttons can be out of the way, and inert, when it happens). */}
+        <p role="status" className="sr-only">
+          {announcement}
+        </p>
+
         <div
           data-chrome="header"
           inert={hideChrome}
           className={`relative z-10 flex items-start justify-between gap-2 px-4 ${chromeClass(hideChrome)}`}
           style={{ paddingTop: "max(1rem, env(safe-area-inset-top))" }}
         >
-          <button
-            type="button"
-            onClick={() => setSafetyOpen(true)}
-            disabled={!sas}
-            className="inline-flex max-w-[78%] items-center gap-2 whitespace-nowrap rounded-full border border-emerald-400/40 bg-slate-900/70 px-3 py-1.5 text-xs font-semibold text-emerald-200 backdrop-blur transition hover:border-emerald-300 disabled:cursor-default"
-            aria-label="End-to-end encrypted. Verify security."
-          >
-            <Lock size={13} aria-hidden="true" />
-            <span>{sas ? "Encrypted" : "End-to-end encrypted"}</span>
-            {sas ? <span className="text-base leading-none tracking-wide">{sas.join("")}</span> : null}
-          </button>
-          <button
-            type="button"
-            onClick={() => setMinimized(true)}
-            aria-label="Minimise call"
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/10 hover:bg-white/20"
-          >
-            <Minimize2 size={16} />
-          </button>
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSafetyOpen(true)}
+              disabled={!sas}
+              className="inline-flex min-w-0 items-center gap-2 whitespace-nowrap rounded-full border border-emerald-400/40 bg-slate-900/70 px-3 py-1.5 text-xs font-semibold text-emerald-200 backdrop-blur transition hover:border-emerald-300 disabled:cursor-default"
+              aria-label="End-to-end encrypted. Verify security."
+            >
+              <Lock size={13} aria-hidden="true" />
+              {/* On the narrowest phones the emoji code keeps the room (the button's name still says it). */}
+              <span className={sas ? "max-[359px]:hidden" : undefined}>{sas ? "Encrypted" : "End-to-end encrypted"}</span>
+              {sas ? <span className="text-base leading-none tracking-wide">{sas.join("")}</span> : null}
+            </button>
+            {connected ? (
+              <QualityIndicator
+                rank={connectionQuality}
+                reconnecting={reconnecting}
+                relayed={relayed}
+                onClick={() => setSettingsOpen(true)}
+              />
+            ) : null}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {pip.available ? (
+              <button
+                type="button"
+                onClick={togglePip}
+                aria-label="Picture in picture"
+                aria-pressed={pip.inPip}
+                title="Picture in picture (P)"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/10 hover:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+              >
+                <PictureInPicture2 size={16} />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setMinimized(true)}
+              aria-label="Minimise call"
+              title="Minimise call (Esc)"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/10 hover:bg-white/20"
+            >
+              <Minimize2 size={16} />
+            </button>
+          </div>
         </div>
 
         {trustWarning ? (
           <p
             data-chrome="warning"
             inert={hideChrome}
+            // The small pictures down the right edge must not sit on top of the words.
+            style={tiles > 0 && !viewingScreen ? { marginRight: "7rem" } : undefined}
             className={`relative z-10 mx-4 mt-3 flex items-start gap-2 rounded-xl border border-amber-400/40 bg-amber-500/15 px-3 py-2 text-xs text-amber-100 ${chromeClass(hideChrome)}`}
           >
             <ShieldOff size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
@@ -507,7 +738,7 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
           inert={hideChrome}
           className={`relative z-10 flex min-h-0 flex-1 flex-col items-center justify-center-safe gap-3 overflow-y-auto px-6 text-center ${chromeClass(hideChrome)}`}
         >
-          {!showRemoteVideo && !videoStage ? (
+          {!showRemoteVideo && !videoStage && !viewingScreen ? (
             <Avatar
               src={peer?.avatarUrl || peer?.avatar_url}
               name={peerName}
@@ -527,6 +758,7 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
           >
             {statusText}
           </p>
+          {viewingScreen ? <SharingTheirScreenLabel waiting={!pictureSize.screen} /> : null}
           {ended && connectionDetails?.length ? (
             <details className="max-w-[18rem] text-left text-xs text-slate-400">
               <summary className="cursor-pointer text-center">Technical details</summary>
@@ -547,7 +779,7 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
           {/* Hints that appear while the call goes on are announced (the region
               exists from the start, so screen readers notice what is added). */}
           <div aria-live="polite" className="flex flex-col items-center gap-3">
-            {videoStage && !remoteCameraOn ? (
+            {videoStage && !remoteCameraOn && !viewingScreen ? (
               <p className="inline-flex items-center gap-1.5 text-sm text-slate-400">
                 <VideoOff size={16} aria-hidden="true" /> Camera off
               </p>
@@ -580,6 +812,17 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
                     : "The camera could not be started, so you are not sending video."}
               </p>
             ) : null}
+            {screenError && !ended ? (
+              <p className="max-w-[18rem] text-xs text-amber-200">{SCREEN_ERROR_TEXT[screenError] || SCREEN_ERROR_TEXT.failed}</p>
+            ) : null}
+            {pipNote && !ended ? (
+              <p className="max-w-[18rem] text-xs text-amber-200">Picture in picture is not available right now.</p>
+            ) : null}
+            {connected && reconnecting ? (
+              <p className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/20 px-3 py-1 text-xs text-amber-100">
+                <WifiOff size={12} aria-hidden="true" /> Reconnecting…
+              </p>
+            ) : null}
           </div>
           {connected && remoteMuted ? (
             <p className="text-xs text-slate-400">{peerName} is muted</p>
@@ -595,7 +838,7 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
         </div>
 
         {/* The small tile. It is you; after a swap it is the other person. */}
-        {videoStage && !cameraOn && !minimized ? (
+        {videoStage && !cameraOn && !minimized && !viewingScreen ? (
           <div
             className="absolute right-4 z-20 flex h-32 w-24 items-center justify-center rounded-2xl border border-white/10 bg-black text-slate-500 shadow-lg md:h-28 md:w-20"
             style={TILE_TOP}
@@ -620,15 +863,15 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
             <video
               ref={localVideoRef}
               data-view="local"
-              data-slot={swappedView ? "main" : "tile"}
-              data-fit={swappedView ? mainFit : undefined}
+              data-slot={slots.local === "main" ? "main" : "tile"}
+              data-fit={slots.local === "main" ? mainFit : undefined}
               autoPlay
               playsInline
               muted
-              className={`${swappedView ? mainPicture : TILE_PICTURE} -scale-x-100`}
-              style={swappedView ? undefined : TILE_TOP}
+              className={`${placed.local.className} -scale-x-100`}
+              style={placed.local.style}
             />
-            {canSwap ? (
+            {canSwap && !viewingScreen ? (
               <button
                 type="button"
                 data-keep-chrome
@@ -640,6 +883,28 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
             ) : null}
           </>
         ) : null}
+
+        {canSwapScreen && viewingScreen ? (
+          // The tile at the top is the one that is not full screen: tapping it swaps the two.
+          <button
+            type="button"
+            data-keep-chrome
+            onClick={() => setScreenSwapped(!screenSwappedView)}
+            aria-label={screenSwappedView ? "Show the shared screen full screen" : "Show their camera full screen"}
+            className="absolute right-4 z-30 h-32 w-24 rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 md:h-28 md:w-20"
+            style={TILE_TOP}
+          />
+        ) : null}
+        {screenSharing && !minimized ? (
+          <ScreenPreviewTile
+            stream={screenStream}
+            surface={screenSurface}
+            className={`absolute right-4 z-20 h-32 w-24 md:h-28 md:w-20 ${TILE_BELOW[slots.preview] || ""}`}
+            style={slots.preview === 0 ? TILE_TOP : undefined}
+          />
+        ) : null}
+        {/* Whoever shares always sees that they do, however the other details are hidden. */}
+        {screenSharing && !ended ? <ScreenSharingBanner surface={screenSurface} onStop={stopScreenShare} /> : null}
 
         <CallSettingsMenu
           open={settingsOpen && inCallScreen}
@@ -659,14 +924,21 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
           quality={state.quality || "auto"}
           onQuality={setQuality}
           videoStats={state.videoStats}
+          screenStats={viewingScreen ? state.screenStats : null}
           fit={fit}
           onFit={chooseFit}
+          connection={
+            connected
+              ? { rank: connectionQuality, reconnecting, relayed, stats: connectionStats, limit: connectionLimit }
+              : null
+          }
+          showShortcuts={shortcutsHelp}
         />
 
         <div
           data-chrome="controls"
           inert={hideChrome}
-          className={`relative z-10 flex items-center justify-center gap-3 px-6 pt-4 ${chromeClass(hideChrome)}`}
+          className={`relative z-10 flex flex-wrap items-center justify-center gap-3 px-6 pt-4 ${chromeClass(hideChrome)}`}
           style={{ paddingBottom: "max(1.5rem, env(safe-area-inset-bottom))" }}
         >
           {ended ? (
@@ -692,17 +964,33 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
             </>
           ) : (
             <>
-              <RoundButton size="h-12 w-12" label={muted ? "Unmute microphone" : "Mute microphone"} active={muted} onClick={() => setMuted(!muted)}>
+              <RoundButton size="h-12 w-12" label={muted ? "Unmute microphone" : "Mute microphone"} shortcut="M" active={muted} onClick={() => setMuted(!muted)}>
                 {muted ? <MicOff size={22} /> : <Mic size={22} />}
               </RoundButton>
               {kind === "video" ? (
                 <RoundButton
                   size="h-12 w-12"
                   label={cameraOn ? "Turn camera off" : "Turn camera on"}
+                  shortcut="V"
                   active={!cameraOn}
                   onClick={() => setCameraEnabled(!cameraOn)}
                 >
                   {cameraOn ? <Video size={22} /> : <VideoOff size={22} />}
+                </RoundButton>
+              ) : null}
+              {screenSupported && (phase === CALL_PHASE.CONNECTING || connected) ? (
+                // Hidden where the browser cannot capture a screen (phones). Off until the call is up
+                // and the other app has said it can show one, with the reason in its title.
+                <RoundButton
+                  size="h-12 w-12"
+                  label={screenSharing ? "Stop sharing" : "Share screen"}
+                  shortcut="S"
+                  hint={screenSharing ? undefined : shareHint || undefined}
+                  active={screenSharing || state.screenBusy}
+                  disabled={!screenSharing && !state.screenBusy && Boolean(shareHint)}
+                  onClick={toggleScreenShare}
+                >
+                  {screenSharing ? <ScreenShareOff size={22} /> : <ScreenShare size={22} />}
                 </RoundButton>
               ) : null}
               {quickRoute && inCallScreen ? (
@@ -728,7 +1016,7 @@ export default function CallOverlay({ user, autoHideMs = AUTO_HIDE_MS }) {
                   <SlidersHorizontal size={22} />
                 </RoundButton>
               ) : null}
-              <RoundButton label={phase === CALL_PHASE.OUTGOING ? "Cancel call" : "End call"} danger onClick={hangup}>
+              <RoundButton label={phase === CALL_PHASE.OUTGOING ? "Cancel call" : "End call"} shortcut="Shift+H" danger onClick={hangup}>
                 <PhoneOff size={22} />
               </RoundButton>
             </>

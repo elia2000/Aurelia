@@ -124,6 +124,17 @@ nano .env
 
 :::
 
+## Theme colour and readability {#theme-colour}
+
+`THEME_DEFAULT`, `THEME_PALETTE` and *Settings → Appearance* accept **any** colour, so Aurelle checks every one of them before it paints with it. The pairs of colours the interface really puts together (white text on buttons, badges and the unread counter, accent text and chips on white, on the light-tinted areas and on the dark panels, text in your own message bubbles, focus rings, icons and dots, the encrypted chip on the call screen) are measured against the WCAG minimums, in light **and** dark mode: **4.5:1 for text, 3:1 for icons, rings and the bold label on a filled button**.
+
+- A colour that already passes is used exactly as it is.
+- A colour that does not (a bright yellow, cyan or white, a very dark navy or black) is **eased**: only its lightness changes, in small fixed steps, only for the shades that fail, and its hue stays. So the colour you pick can look a little deeper or lighter in the app than the swatch you picked it from; the swatches in *Appearance* already show the eased colour.
+- Easing depends on the colour alone, never on the day, the device or the order of choices: the same colour looks the same for everybody, and with **Random** everybody still shares the colour of the day.
+- The built-in green follows the same rules, so it reads like any other accent.
+
+The audit table lives in `client/src/utils/themeContrast.js`; `client/test/utils/themeContrast.test.js` runs all 30 palette colours and about 200 more (every hue, extreme lightness and saturation, `#fff`, `#000`, `#ff0`, `#0ff`) through it. When you add a new accent-coloured combination to the interface, add its pair to that table.
+
 ## Calls
 
 Settings for [voice and video calls](./Calls-and-Video-Messages.md). They are read by the server at request time; a restart is needed after editing `.env`.

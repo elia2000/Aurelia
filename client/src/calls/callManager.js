@@ -35,6 +35,13 @@ import {
   isQualityChoice,
 } from "./mediaTuning.js";
 import { loadQuality, saveQuality } from "./callQuality.js";
+import {
+  initialQualityState,
+  nextConnectionQuality,
+  qualityReportLine,
+  roundConnectionStats,
+  sameConnectionStats,
+} from "./connectionQuality.js";
 import { ScreenShare, canShareScreen, locateVideoLines } from "./screenShare.js";
 
 export const CALL_PHASE = Object.freeze({
@@ -76,6 +83,28 @@ function mediaErrorReason(error) {
   return "failed";
 }
 
+// What is shared, by this person and by the other one. Nothing is once the call is over.
+const screenIdleState = () => ({
+  screenSharing: false, // this person is sending their screen
+  screenSurface: null, // what is shared: "monitor" | "window" | "browser"
+  screenBusy: false, // the picker is open / the share is starting
+  screenError: null, // "cancelled" | "unsupported" | "unavailable" | "failed": a small hint that clears itself
+  screenStream: null, // what this person shares (a preview must not be shown for a whole shared screen)
+  screenAvailable: false, // the screen line is negotiated and the other app can show a shared screen
+  remoteScreenOn: false, // the other person shares their screen and its picture is here
+  remoteScreenStream: null, // a stream with only the shared screen's picture
+  remoteScreenSize: null, // {w, h} as announced (clamped)
+  screenStats: null, // {width, height, fps} of the shared screen that arrives
+});
+
+// How good the connection is, from the stats of the running call. Nothing once the call is over.
+const connectionIdleState = () => ({
+  connectionQuality: null, // 0 (poor) to 3 (excellent): see connectionQuality.js; null until the first stats arrive
+  connectionStats: null, // {rttMs, lossPct, jitterMs, availableKbps} as last measured
+  connectionLimit: null, // which number holds the level back: "rtt" | "loss" | "jitter" | "bitrate" (null: none does)
+  reconnecting: false, // the media path dropped ("disconnected") and is being set up again
+});
+
 const idleState = () => ({
   phase: CALL_PHASE.IDLE,
   callId: null,
@@ -100,17 +129,10 @@ const idleState = () => ({
   audioDeviceError: null, // why the last microphone switch did not work
   quality: "auto", // what this person asked to watch: "auto" or one level
   videoStats: null, // {width, height, fps} of the picture that arrives
-  screenSharing: false, // this person is sending their screen
-  screenSurface: null, // what is shared: "monitor" | "window" | "browser"
-  screenBusy: false, // the picker is open / the share is starting
-  screenError: null, // "cancelled" | "unsupported" | "unavailable" | "failed": a small hint that clears itself
-  screenAvailable: false, // the screen line is negotiated and the other app can show a shared screen
-  remoteScreenOn: false, // the other person shares their screen and its picture is here
-  remoteScreenStream: null, // a stream with only the shared screen's picture
-  remoteScreenSize: null, // {w, h} as announced (clamped)
-  screenStats: null, // {width, height, fps} of the shared screen that arrives
+  ...screenIdleState(),
   networkPaused: false,
   relayed: false,
+  ...connectionIdleState(),
   localStream: null,
   remoteStream: null,
   connectedAt: null,
@@ -1004,6 +1026,10 @@ export class CallManager {
       call.ice.pairs = [];
       call.ice.generation += 1;
       call.restarts = 0;
+      if (this.#state.reconnecting) this.#set({ reconnecting: false });
+      // The path came back after a break: the other side may have missed the
+      // last announcement of a share that is still going on.
+      if (call.screen?.sharing) call.screen.announce();
       if (this.#state.phase !== CALL_PHASE.CONNECTED) {
         this.#set({ phase: CALL_PHASE.CONNECTED, connectedAt: Date.now(), connectingSlow: false });
         this.#api.markCallConnected(call.id).catch(() => {});
@@ -1012,13 +1038,20 @@ export class CallManager {
         this.#syncWakeLock(call);
       }
     } else if (state === "disconnected") {
+      this.#noteReconnecting();
       clearTimeout(call.disconnectTimer);
       call.disconnectTimer = setTimeout(() => this.#recoverConnection(call), DISCONNECT_GRACE_MS);
     } else if (state === "failed") {
+      this.#noteReconnecting();
       clearTimeout(call.disconnectTimer);
       void this.#snapshotPairs(call);
       this.#recoverConnection(call);
     }
+  }
+
+  /** A call that was up lost its path and is trying to get it back (the indicator says so). */
+  #noteReconnecting() {
+    if (this.#state.phase === CALL_PHASE.CONNECTED && !this.#state.reconnecting) this.#set({ reconnecting: true });
   }
 
   async #recoverConnection(call) {
@@ -1117,6 +1150,10 @@ export class CallManager {
       ice.pairs.forEach((pair) => lines.push(`  ${pair}`));
     }
     if (call.pc) lines.push(`Connection: ${call.pc.connectionState}, ICE: ${call.pc.iceConnectionState}`);
+    // A call that broke after it worked: how it was doing before.
+    if (call.lastSample) {
+      lines.push(qualityReportLine({ rank: this.#state.connectionQuality, stats: roundConnectionStats(call.lastSample), relayed: call.lastSample.relayed }));
+    }
     return lines;
   }
 
@@ -1541,6 +1578,65 @@ export class CallManager {
     if (call && !this.#isStale(call)) this.#sendMediaState(call);
   }
 
+  // ── screen sharing (see screenShare.js) ───────────────────────────────────
+  /** Whether this browser can capture a screen (phones cannot) and screen sharing is switched on. */
+  get canShareScreen() {
+    return this.#opts.screenSharing !== false && typeof this.#opts.getDisplayMedia === "function";
+  }
+
+  /**
+   * Starts sharing the screen: the browser asks which one. `replace` picks
+   * another source while one is already shared.
+   * @returns {Promise<void>}
+   */
+  startScreenShare({ replace = false } = {}) {
+    return this.#screenWanted(true, { replace });
+  }
+
+  /** Stops sharing (the capture is released and the other side is told). */
+  stopScreenShare() {
+    return this.#screenWanted(false);
+  }
+
+  /** Starts, or stops, whichever the last request did not ask for: two quick presses end in the second. */
+  toggleScreenShare() {
+    const screen = this.#call?.screen;
+    return this.#screenWanted(!(screen && screen.wanted));
+  }
+
+  #screenWanted(on, options) {
+    const call = this.#call;
+    // Only a call whose media is up can carry a screen.
+    if (!call?.screen || this.#isStale(call) || this.#state.phase !== CALL_PHASE.CONNECTED) return Promise.resolve();
+    return call.screen.want(on, options);
+  }
+
+  /** The size and frame rate of the shared screen that arrives, for the settings. */
+  #noteScreenStats(call, sample) {
+    const seen = this.#state.remoteScreenOn ? sample.screenIncoming || null : null;
+    const shown = this.#state.screenStats;
+    if (seen?.width !== shown?.width || seen?.height !== shown?.height || seen?.fps !== shown?.fps) {
+      this.#set({ screenStats: seen });
+    }
+    // A poor network lowers the frame rate and then the bitrate of the shared screen; the voice is never touched.
+    void call.screen?.adapt(sample);
+  }
+
+  /** Updates the connection indicator and the numbers behind it from one stats sample. */
+  #noteConnectionQuality(call, sample) {
+    call.lastSample = sample;
+    // A picture is being sent (a camera or a screen): it needs more bandwidth than a voice does.
+    const video = Boolean(call.localStream?.getVideoTracks().length) || Boolean(call.screen?.sharing);
+    const next = nextConnectionQuality(call.linkQuality, sample, { video });
+    call.linkQuality = next.state;
+    const stats = roundConnectionStats(sample);
+    const patch = {};
+    if (next.rank !== this.#state.connectionQuality) patch.connectionQuality = next.rank;
+    if (next.limitedBy !== this.#state.connectionLimit) patch.connectionLimit = next.limitedBy;
+    if (!sameConnectionStats(stats, this.#state.connectionStats)) patch.connectionStats = stats;
+    if (Object.keys(patch).length) this.#set(patch);
+  }
+
   #sendMediaState(call) {
     this.#sendChannel(call, {
       t: "state",
@@ -1582,8 +1678,14 @@ export class CallManager {
       if (this.#isStale(call) || call.pageHidden) return;
       try {
         const report = await call.pc.getStats();
-        const sample = summarizeStats([...report.values()]);
+        // The shared screen has its own line: its picture is told apart from the camera's.
+        const sample = summarizeStats([...report.values()], {
+          screenTrackId: call.screen?.receiverTrackId ?? null,
+          screenMid: call.screen?.mid ?? null,
+        });
         if (sample.relayed !== this.#state.relayed) this.#set({ relayed: sample.relayed });
+        this.#noteScreenStats(call, sample);
+        this.#noteConnectionQuality(call, sample);
         // What is arriving, for the quality menu.
         const seen = this.#state.remoteCameraOn ? sample.incoming || null : null;
         const shown = this.#state.videoStats;
@@ -1662,6 +1764,8 @@ export class CallManager {
       videoSender: null,
       videoSuppressed: { user: false, hidden: false, network: false },
       adaptation: initialAdaptation(),
+      linkQuality: initialQualityState(), // what the connection indicator shows (see connectionQuality.js)
+      lastSample: null, // the latest stats, for the report of a call that breaks
       peerQuality: "auto", // what the other person asked to watch: what this device sends
       captureProfile: "auto", // what the camera was last asked for
       calleeDeviceId: null,
@@ -1712,6 +1816,8 @@ export class CallManager {
     call.done = true;
     [call.ringTimer, call.iceTimer, call.disconnectTimer, call.failTimer, call.connectWatchdog, call.slowTimer, ...(call.pairTimers || [])].forEach(clearTimeout);
     clearInterval(call.statsTimer);
+    // The capture stops with the call (and the browser's "sharing" indicator goes away).
+    call.screen?.dispose();
     try {
       call.dc?.close();
     } catch (_) {}
@@ -1757,6 +1863,8 @@ export class CallManager {
       remoteStream: null,
       cameraOn: false,
       remoteCameraOn: false,
+      ...screenIdleState(),
+      ...connectionIdleState(),
     });
     this.#lingerTimer = setTimeout(() => {
       if (this.#call === call) {

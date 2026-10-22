@@ -43,6 +43,7 @@ This document defines the design language, UI patterns, color system, typography
 ### Primary & Accent Colors
 - **Primary / Active Accent**: `emerald` (`emerald-500`, `emerald-600`, `emerald-700`, dark: `emerald-200`/`emerald-400`).
   - Brand identity, active connections, selection highlights, message sent states, online status indicators.
+  - The accent can be any colour (colour of the day, custom). `colorScale` (`client/src/utils/themeColor.js`) guards every scale against the pair table in `client/src/utils/themeContrast.js` (4.5:1 text, 3:1 icons/rings/bold fill labels, light and dark). When you add a new accent combination (for example `text-emerald-600` on a new surface), add its pair to that table; `themeContrast.test.js` sweeps ~230 colours through it.
 - **Destructive / Alert Accent**: `rose` (`rose-500`, `rose-600`, dark: `rose-300`/`rose-400`).
   - Warnings, delete message scopes, leave group confirmation, destructive buttons, error badges.
 - **Secondary Highlights / Badges**: `amber` (`amber-500`), `sky` (`sky-500`), `indigo` (`indigo-500`).

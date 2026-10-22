@@ -23,9 +23,11 @@ function fakeSounds() {
   };
 }
 
-async function mount(initial) {
+async function mount(initial, options = {}) {
   const sounds = fakeSounds();
-  const hook = await renderHook((props) => useCallSounds(props.state, sounds), { initialProps: { state: initial } });
+  const hook = await renderHook((props) => useCallSounds(props.state, { sounds, ...options }), {
+    initialProps: { state: initial },
+  });
   const go = (state) => act(async () => hook.rerender({ state }));
   return { sounds, go, hook };
 }
@@ -184,6 +186,11 @@ describe("page load and unmount", () => {
     expect(off).not.toHaveBeenCalled();
     await hook.unmount();
     expect(off).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not listen for a tap where calls cannot happen", async () => {
+    const { sounds } = await mount({ phase: "idle" }, { enabled: false });
+    expect(sounds.armUnlock).not.toHaveBeenCalled();
   });
 
   test("unmounting while ringing stops the ring", async () => {

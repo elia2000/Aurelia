@@ -3,6 +3,8 @@ import { Check } from "../../icons/lucide.js";
 import { DEFAULT_FIXED_LEVEL, FIXED_LEVELS } from "../../calls/mediaTuning.js";
 import { FIT_CHOICES } from "../../calls/pictureFit.js";
 import { isDefaultOutput } from "../../calls/audioDevices.js";
+import { ConnectionSection } from "./QualityParts.jsx";
+import { ShortcutsSection } from "./ShortcutsParts.jsx";
 
 function Row({ checked, onClick, children, hint }) {
   return (
@@ -96,7 +98,8 @@ const describePicture = (stats) =>
 
 /**
  * The call's settings: where the sound goes, which microphone, and (video
- * calls) how sharp the picture you watch should be.
+ * calls) how sharp the picture you watch should be. Below the choices: how the
+ * connection is doing, in numbers, and the keyboard shortcuts of the call.
  */
 export default function CallSettingsMenu({
   open,
@@ -109,15 +112,18 @@ export default function CallSettingsMenu({
   quality,
   onQuality,
   videoStats,
+  screenStats,
   fit,
   onFit,
+  connection,
+  showShortcuts = false,
 }) {
   const panelRef = useRef(null);
 
   useEffect(() => {
     if (!open) return undefined;
-    // Keyboard users land on the first choice, and Escape closes the menu.
-    panelRef.current?.querySelector('[role="radio"]')?.focus();
+    // Keyboard users land on the first choice, and Escape closes the menu. The ? key lands on the shortcuts instead.
+    if (!showShortcuts) panelRef.current?.querySelector('[role="radio"]')?.focus();
     const onKey = (event) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       // Escape belongs to whatever is on top of the call (the safety number, say).
@@ -129,12 +135,13 @@ export default function CallSettingsMenu({
     };
     document.addEventListener("keydown", onKey, true);
     return () => document.removeEventListener("keydown", onKey, true);
-  }, [open, onClose]);
+  }, [open, onClose, showShortcuts]);
 
   if (!open) return null;
   const { model, routeKind, inputId, outputId, outputError, deviceError } = audio;
   const hasAudio = model.routes.length > 0 || model.canPickInput || model.canPickOutput;
   const picture = describePicture(videoStats);
+  const sharedScreen = describePicture(screenStats);
 
   return (
     <>
@@ -207,7 +214,24 @@ export default function CallSettingsMenu({
             </Section>
           </>
         ) : null}
-        {!hasAudio && !showQuality ? <p className="px-3 py-2 text-sm text-slate-400">Nothing to change.</p> : null}
+        {sharedScreen ? (
+          // Their shared screen always shows whole; it has no quality or picture choice to make.
+          <div role="group" aria-label="Shared screen" className="space-y-0.5">
+            <p className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Shared screen</p>
+            <p className="px-3 pb-1 text-[11px] text-slate-400">{sharedScreen}</p>
+          </div>
+        ) : null}
+        {connection ? (
+          <ConnectionSection
+            rank={connection.rank}
+            reconnecting={connection.reconnecting}
+            relayed={connection.relayed}
+            stats={connection.stats}
+            limit={connection.limit}
+          />
+        ) : null}
+        <ShortcutsSection reveal={showShortcuts} />
+        {!hasAudio && !showQuality && !sharedScreen && !connection ? <p className="px-3 py-2 text-sm text-slate-400">Nothing to change.</p> : null}
       </div>
     </>
   );

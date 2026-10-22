@@ -7,6 +7,7 @@ import { fetchAppInfo } from './api/appMetaApi.js'
 import { setMaxReactionsPerUser } from './utils/reactionStore.js'
 import { setPinLimits } from './utils/pinLimits.js'
 import { setNameLimits } from './utils/nameLimits.js'
+import { setLinkPreviewsServerEnabled } from './utils/linkPreviewPrefs.js'
 import { setChatPageConfig } from './settings/chatPageConfig.js'
 import InstallBar from './components/pwa/InstallBar.jsx'
 import NewVersionBanner from './components/pwa/NewVersionBanner.jsx'
@@ -740,6 +741,7 @@ export default function App() {
         setPinLimits({ messages: data?.maxPinnedMessages, chats: data?.maxPinnedChats })
         setThemePalette(data?.themePalette)
         setThemeDefault(data?.themeDefault)
+        setLinkPreviewsServerEnabled(data?.linkPreviewsEnabled)
         setChatPageConfig({
           messageFetchLimit: data?.chatMessageFetchLimit,
           messagePageSize: data?.chatMessagePageSize,

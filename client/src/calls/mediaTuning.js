@@ -202,6 +202,7 @@ export function summarizeStats(reports, screen = {}) {
   let lossPct = 0;
   let relayed = false;
   let availableKbps = null;
+  let jitterMs = null;
   const byId = new Map(reports.map((r) => [r.id, r]));
 
   const pair = selectedCandidatePair(reports, byId);
@@ -219,6 +220,11 @@ export function summarizeStats(reports, screen = {}) {
       lossPct = Math.max(lossPct, r.fractionLost * 100);
       if (rttMs === null && typeof r.roundTripTime === "number") rttMs = r.roundTripTime * 1000;
     }
+    // The voice's jitter, as heard here and as the other side hears it. A picture's own jitter is
+    // not counted: its packets leave a frame at a time, which looks uneven on a perfect line.
+    if ((r.type === "inbound-rtp" || r.type === "remote-inbound-rtp") && (r.kind === "audio" || r.mediaType === "audio") && typeof r.jitter === "number") {
+      jitterMs = Math.max(jitterMs ?? 0, r.jitter * 1000);
+    }
     // The picture that is arriving: what the person is watching.
     if (r.type === "inbound-rtp" && (r.kind === "video" || r.mediaType === "video") && r.frameWidth > 0 && r.frameHeight > 0) {
       const picture = { width: r.frameWidth, height: r.frameHeight, fps: Math.round(r.framesPerSecond || 0) };
@@ -233,6 +239,7 @@ export function summarizeStats(reports, screen = {}) {
     lossPct,
     relayed,
     availableKbps,
+    jitterMs,
     ...(incoming ? { incoming } : {}),
     ...(screenIncoming ? { screenIncoming } : {}),
   };

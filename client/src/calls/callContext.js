@@ -26,6 +26,10 @@ const fallback = Object.freeze({
   setCameraEnabled: () => {},
   setQuality: () => {},
   setMicrophone: async () => false,
+  screenSupported: false,
+  startScreenShare: async () => {},
+  stopScreenShare: async () => {},
+  toggleScreenShare: async () => {},
   inCall: false,
 });
 

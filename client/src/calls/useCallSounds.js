@@ -13,13 +13,15 @@ import { callSounds as defaultSounds, loopSoundFor, transitionSoundFor } from ".
  * what the person is in (an invitation then never reaches the screen).
  *
  * @param {{phase: string, ringing?: boolean, endReason?: string|null}} state
- * @param {ReturnType<import("./callSounds.js").createCallSounds>} [sounds]
+ * @param {object} [options]
+ * @param {boolean} [options.enabled]  false where calls cannot happen at all: nothing then listens for a tap
+ * @param {ReturnType<import("./callSounds.js").createCallSounds>} [options.sounds]
  */
-export function useCallSounds(state, sounds = defaultSounds) {
+export function useCallSounds(state, { enabled = true, sounds = defaultSounds } = {}) {
   const { phase, ringing, endReason } = state;
 
   // Audio may start only after the first tap or key press: listen for it.
-  useEffect(() => sounds.armUnlock(), [sounds]);
+  useEffect(() => (enabled ? sounds.armUnlock() : undefined), [enabled, sounds]);
 
   const loop = loopSoundFor(phase, Boolean(ringing));
   useEffect(() => {

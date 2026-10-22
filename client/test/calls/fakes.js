@@ -485,7 +485,9 @@ export class FakeServer {
     });
     const api = this.apiFor(user);
     const getUserMedia = managerOptions.getUserMedia || makeGetUserMedia();
-    const ctx = { user, identity, record, api, directory, trust, store, getUserMedia, pc: null };
+    // A computer: it can share its screen (pass getDisplayMedia: null for a phone).
+    const getDisplayMedia = managerOptions.getDisplayMedia === undefined ? makeGetDisplayMedia() : managerOptions.getDisplayMedia;
+    const ctx = { user, identity, record, api, directory, trust, store, getUserMedia, getDisplayMedia, pc: null };
     const manager = new CallManager({
       selfUser: user,
       api,
@@ -496,6 +498,7 @@ export class FakeServer {
         return ctx.pc;
       },
       getUserMedia,
+      getDisplayMedia,
       createMediaStream: () => new FakeStream(),
       getVideoCodecs: () => [{ mimeType: "video/VP9" }, { mimeType: "video/H264", sdpFmtpLine: "profile-level-id=42e01f" }],
       requestWakeLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),

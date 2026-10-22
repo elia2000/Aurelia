@@ -4,13 +4,20 @@ import {
   DEFAULT_FIXED_LEVEL,
   FIXED_LEVELS,
   QUALITY_CHOICES,
+  SCREEN_CONTENT_HINT,
+  SCREEN_PROFILES,
   VIDEO_TIERS,
   captureVideoConstraints,
+  encodingForScreen,
   encodingForTier,
+  getScreenProfile,
   initialAdaptation,
+  initialScreenAdaptation,
   isQualityChoice,
+  nextScreenProfile,
   nextVideoTier,
   orderVideoCodecs,
+  screenCaptureRequest,
   summarizeStats,
   tuneOpusSdp,
 } from "../../src/calls/mediaTuning.js";
@@ -148,7 +155,19 @@ describe("summarizeStats", () => {
     expect(viaTransport.rttMs).toBeCloseTo(400);
   });
   test("handles an empty report", () => {
-    expect(summarizeStats([])).toEqual({ rttMs: null, lossPct: 0, relayed: false, availableKbps: null });
+    expect(summarizeStats([])).toEqual({ rttMs: null, lossPct: 0, relayed: false, availableKbps: null, jitterMs: null });
+  });
+  test("reads the voice's jitter in milliseconds, from both directions, and ignores the picture's", () => {
+    const out = summarizeStats([
+      { id: "a", type: "inbound-rtp", kind: "audio", jitter: 0.012 },
+      { id: "b", type: "remote-inbound-rtp", kind: "audio", jitter: 0.031, fractionLost: 0 },
+      // Video arrives a frame at a time, so its jitter looks high even on a perfect line.
+      { id: "v", type: "inbound-rtp", kind: "video", jitter: 0.2, frameWidth: 640, frameHeight: 360 },
+      { id: "w", type: "remote-inbound-rtp", kind: "video", jitter: 0.3, fractionLost: 0 },
+    ]);
+    expect(out.jitterMs).toBeCloseTo(31);
+    expect(summarizeStats([{ id: "o", type: "inbound-rtp", mediaType: "audio", jitter: 0.004 }]).jitterMs).toBeCloseTo(4);
+    expect(summarizeStats([{ id: "v", type: "inbound-rtp", kind: "video", jitter: 0.2 }]).jitterMs).toBeNull();
   });
 });
 
@@ -304,5 +323,114 @@ describe("the picture that arrives", () => {
   });
   test("is absent while no picture arrives", () => {
     expect(summarizeStats([{ id: "v", type: "inbound-rtp", kind: "video", frameWidth: 0, frameHeight: 0 }])).not.toHaveProperty("incoming");
+  });
+});
+
+describe("the screen is told apart from the camera in the stats", () => {
+  const camera = { id: "cam", type: "inbound-rtp", kind: "video", trackIdentifier: "t-cam", mid: "1", frameWidth: 640, frameHeight: 360, framesPerSecond: 24 };
+  const screen = { id: "scr", type: "inbound-rtp", kind: "video", trackIdentifier: "t-scr", mid: "2", frameWidth: 1920, frameHeight: 1080, framesPerSecond: 9.6 };
+
+  test("by the id of the receiving track", () => {
+    const sample = summarizeStats([camera, screen], { screenTrackId: "t-scr" });
+    expect(sample.incoming).toEqual({ width: 640, height: 360, fps: 24 });
+    expect(sample.screenIncoming).toEqual({ width: 1920, height: 1080, fps: 10 });
+  });
+
+  test("or by the mid of its line", () => {
+    const sample = summarizeStats([screen, camera], { screenMid: "2" });
+    expect(sample.incoming).toEqual({ width: 640, height: 360, fps: 24 });
+    expect(sample.screenIncoming).toEqual({ width: 1920, height: 1080, fps: 10 });
+  });
+
+  test("without a screen line everything is the camera's, as before", () => {
+    const sample = summarizeStats([camera]);
+    expect(sample.incoming).toEqual({ width: 640, height: 360, fps: 24 });
+    expect(sample).not.toHaveProperty("screenIncoming");
+    expect(summarizeStats([screen], { screenTrackId: "t-scr" })).not.toHaveProperty("incoming");
+    expect(summarizeStats([camera], null).incoming).toBeTruthy();
+  });
+});
+
+describe("a shared screen is sent for detail", () => {
+  test("it is captured without sound at a low frame rate, and asks the browser not to offer this tab", () => {
+    const request = screenCaptureRequest();
+    expect(request.audio).toBe(false);
+    expect(request.video.frameRate).toEqual({ ideal: 15, max: 15 });
+    expect(request.selfBrowserSurface).toBe("exclude");
+    expect(SCREEN_CONTENT_HINT).toBe("detail");
+  });
+
+  test("the best level is 15 fps at about 2.5 Mbps and the levels only get lighter", () => {
+    expect(SCREEN_PROFILES[0]).toMatchObject({ id: "full", maxFramerate: 15, maxBitrate: 2_500_000 });
+    for (let i = 1; i < SCREEN_PROFILES.length; i += 1) {
+      expect(SCREEN_PROFILES[i].maxFramerate).toBeLessThanOrEqual(SCREEN_PROFILES[i - 1].maxFramerate);
+      expect(SCREEN_PROFILES[i].maxBitrate).toBeLessThanOrEqual(SCREEN_PROFILES[i - 1].maxBitrate);
+    }
+    expect(SCREEN_PROFILES.every((p) => p.maxFramerate > 0 && p.maxBitrate > 0)).toBe(true); // never "off"
+    expect(getScreenProfile("nonsense")).toBe(SCREEN_PROFILES[0]);
+  });
+
+  test("a picture up to Full HD is sent as it is, a bigger one is scaled down to fit", () => {
+    expect(encodingForScreen("full", { width: 1920, height: 1080 })).toMatchObject({ scaleResolutionDownBy: 1, maxFramerate: 15, maxBitrate: 2_500_000, active: true });
+    expect(encodingForScreen("full", { width: 1280, height: 720 }).scaleResolutionDownBy).toBe(1);
+    expect(encodingForScreen("full", { width: 3840, height: 2160 }).scaleResolutionDownBy).toBe(2);
+    expect(encodingForScreen("full", { width: 2560, height: 1440 }).scaleResolutionDownBy).toBe(1.33);
+    expect(encodingForScreen("full", { width: 3440, height: 1440 }).scaleResolutionDownBy).toBe(1.79); // ultra-wide: by the long side
+    expect(encodingForScreen("full", { width: 1080, height: 1920 }).scaleResolutionDownBy).toBe(1); // upright stays upright
+    expect(encodingForScreen("full", {}).scaleResolutionDownBy).toBe(1);
+    expect(encodingForScreen("full").scaleResolutionDownBy).toBe(1);
+  });
+
+  test("the lowest levels also shrink the picture, never enlarge it", () => {
+    expect(encodingForScreen("floor", { width: 800, height: 600 }).scaleResolutionDownBy).toBe(2);
+    expect(encodingForScreen("thin", { width: 800, height: 600 }).scaleResolutionDownBy).toBe(1.5);
+    expect(encodingForScreen("full", { width: 320, height: 200 }).scaleResolutionDownBy).toBe(1);
+  });
+});
+
+describe("adapting a shared screen to the network", () => {
+  const good = { lossPct: 0, rttMs: 40, availableKbps: 8000 };
+  const bad = { lossPct: 15, rttMs: 700, availableKbps: 200 };
+  const run = (start, sample, steps) => {
+    let id = start;
+    let state = initialScreenAdaptation();
+    for (let i = 0; i < steps; i += 1) ({ profile: id, state } = nextScreenProfile(id, sample, state));
+    return id;
+  };
+
+  test("a bad sample lowers it at once, one level at a time, down to a floor", () => {
+    expect(run("full", bad, 1)).toBe("smooth");
+    expect(run("full", bad, 2)).toBe("light");
+    expect(run("full", bad, 50)).toBe(SCREEN_PROFILES.at(-1).id);
+  });
+
+  test("the frame rate falls before the bitrate", () => {
+    const [full, smooth, light, lean] = SCREEN_PROFILES;
+    expect(smooth.maxFramerate).toBeLessThan(full.maxFramerate);
+    expect(smooth.maxBitrate).toBe(full.maxBitrate);
+    expect(light.maxBitrate).toBe(full.maxBitrate);
+    expect(lean.maxBitrate).toBeLessThan(light.maxBitrate);
+  });
+
+  test("a link that cannot carry the level (but is not lossy) lowers it after two samples", () => {
+    const narrow = { lossPct: 0, rttMs: 50, availableKbps: 800 };
+    expect(run("full", narrow, 1)).toBe("full");
+    expect(run("full", narrow, 2)).toBe("smooth");
+  });
+
+  test("it climbs back only after a run of good samples and room for the next level", () => {
+    expect(run("light", good, 3)).toBe("light");
+    expect(run("light", good, 4)).toBe("smooth");
+    expect(run("light", { ...good, availableKbps: 2600 }, 4)).toBe("light"); // not 1.3 x the next level
+    expect(run("light", { lossPct: 0, rttMs: 40, availableKbps: null }, 4)).toBe("smooth"); // benefit of the doubt
+    expect(run("full", good, 20)).toBe("full");
+  });
+
+  test("a bad sample in the middle starts the count again", () => {
+    let state = initialScreenAdaptation();
+    let id = "light";
+    for (const sample of [good, good, good, bad]) ({ profile: id, state } = nextScreenProfile(id, sample, state));
+    expect(id).toBe("lean");
+    expect(state.good).toBe(0);
   });
 });

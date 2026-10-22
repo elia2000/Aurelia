@@ -8,6 +8,21 @@
   --font-fa: 'Vazirmatn', 'DM Sans', system-ui, sans-serif;
 
   --shadow-glow: 0 20px 60px -30px color-mix(in srgb, var(--color-emerald-500) 80%, transparent);
+
+  /* The built-in green: Tailwind's emerald run through the contrast guard of
+     the theme colour (client/src/utils/themeContrast.js), so that it reads like
+     every other accent: colorScale("#10b981"). A unit test keeps these in step. */
+  --color-emerald-50: #f0fef7;
+  --color-emerald-100: #d9f7e7;
+  --color-emerald-200: #b4ebcf;
+  --color-emerald-300: #82d9b0;
+  --color-emerald-400: #40bf8c;
+  --color-emerald-500: #15a372;
+  --color-emerald-600: #1c7b57;
+  --color-emerald-700: #086746;
+  --color-emerald-800: #0a5036;
+  --color-emerald-900: #063623;
+  --color-emerald-950: #002114;
 }
 
 /*
@@ -1581,4 +1596,67 @@ img.emoji-jumbo {
   height: 3.4rem;
   margin: 0.1rem 0.12rem;
   vertical-align: middle;
+}
+
+/* A slider in the emerald of the app that reads in both themes (the browser's
+   own accent-colour slider draws a heavy dark track on a light card). Set the
+   position with style={{ "--p": value / max }}, a number from 0 to 1. */
+.aurelle-range {
+  --range-fill: var(--color-emerald-500, #10b981);
+  --range-rest: var(--color-slate-200, #e2e8f0);
+  --range-thumb: 1.25rem;
+  width: 100%;
+  height: 1.5rem;
+  background: transparent;
+  appearance: none;
+  cursor: pointer;
+}
+.dark .aurelle-range {
+  --range-rest: var(--color-slate-700, #334155);
+}
+.aurelle-range:disabled {
+  cursor: not-allowed;
+}
+.aurelle-range:focus-visible {
+  outline: 2px solid var(--range-fill);
+  outline-offset: 2px;
+  border-radius: 9999px;
+}
+.aurelle-range::-webkit-slider-runnable-track {
+  height: 0.5rem;
+  border-radius: 9999px;
+  background: linear-gradient(
+    to right,
+    var(--range-fill) calc(var(--range-thumb) / 2 + (100% - var(--range-thumb)) * var(--p, 0)),
+    var(--range-rest) 0
+  );
+}
+.aurelle-range::-webkit-slider-thumb {
+  width: var(--range-thumb);
+  height: var(--range-thumb);
+  margin-top: -0.375rem;
+  border: 2px solid var(--range-fill);
+  border-radius: 9999px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.25);
+  appearance: none;
+}
+.aurelle-range::-moz-range-track {
+  height: 0.5rem;
+  border-radius: 9999px;
+  background: var(--range-rest);
+}
+.aurelle-range::-moz-range-progress {
+  height: 0.5rem;
+  border-radius: 9999px;
+  background: var(--range-fill);
+}
+.aurelle-range::-moz-range-thumb {
+  box-sizing: border-box;
+  width: var(--range-thumb);
+  height: var(--range-thumb);
+  border: 2px solid var(--range-fill);
+  border-radius: 9999px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.25);
 }

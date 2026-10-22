@@ -14,7 +14,7 @@ Aurelle is a fork of [Songbird](https://github.com/bllackbull/Songbird) (MIT) th
 
 ## Key Features
 
-- 📞 **Encrypted calls**: one-to-one voice and video calls, end-to-end encrypted, peer-to-peer, with a verification emoji code and safety numbers
+- 📞 **Encrypted calls**: one-to-one voice and video calls, end-to-end encrypted, peer-to-peer, with a verification emoji code and safety numbers, and screen sharing
 - ⭕ **Round video messages**: record up to 60 s, encrypted on your device; recipients download and decrypt only when they press play
 - 🔋 **Light on battery and data**: Opus DTX at 24 kbps, hardware-friendly codecs, adaptive video that falls back to audio-only, camera released in the background
 - 🛡️ **High-security option**: route every call through your own relay so peers never learn each other's IP address

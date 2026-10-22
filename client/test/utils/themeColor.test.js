@@ -101,8 +101,22 @@ describe("colour scale", () => {
   test("a very light colour is eased so that white text on it stays readable", () => {
     const scale = colorScale("#fff200");
     expect(luminance(scale[500])).toBeLessThan(luminance("#fff200"));
-    const contrast = (1.05) / (luminance(scale[600]) + 0.05);
-    expect(contrast).toBeGreaterThan(3);
+    expect(1.05 / (luminance(scale[500]) + 0.05)).toBeGreaterThanOrEqual(3); // a bold white label on the accent
+    expect(1.05 / (luminance(scale[600]) + 0.05)).toBeGreaterThanOrEqual(4.5); // small white text, accent text on white
+  });
+
+  test("a colour dark enough for its own pairs is kept exactly, a pale one is eased in lightness only", () => {
+    expect(colorScale("#7c3aed")[500]).toBe("#7c3aed");
+    expect(colorScale("#fff200")[500]).not.toBe("#fff200");
+    // eased means darker here, not another colour: the hue stays yellow (red and green high, blue low)
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(colorScale("#fff200")[500].slice(i, i + 2), 16));
+    expect(Math.min(r, g)).toBeGreaterThan(b + 40);
+  });
+
+  test("a dark colour is lifted a little so that it still shows on a dark panel", () => {
+    const s = colorScale("#000000");
+    expect(s[500]).not.toBe("#000000");
+    expect((luminance(s[500]) + 0.05) / (luminance("#0f172a") + 0.05)).toBeGreaterThanOrEqual(3);
   });
 
   test("white and black do not break it", () => {
@@ -129,10 +143,13 @@ describe("applying a colour", () => {
     expect(root.vars.size).toBe(0);
   });
 
-  test("also updates the browser's theme colour", () => {
+  test("also updates the browser's theme colour, to the accent as the app really paints it", () => {
     const meta = { content: "#10b981", setAttribute(k, v) { this[k] = v; } };
     applyThemeColor("#db2777", { root: fakeRoot(), meta });
     expect(meta.content).toBe("#db2777");
+    applyThemeColor("#fff200", { root: fakeRoot(), meta });
+    expect(meta.content).toBe(colorScale("#fff200")[500]);
+    expect(meta.content).not.toBe("#fff200");
   });
 });
 

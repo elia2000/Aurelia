@@ -60,6 +60,9 @@ function registerAppRoutes(app, deps) {
       // How many GIFs one person can keep in their own collection.
       maxSavedGifs: clampMaxSavedGifs(getSetting("MAX_SAVED_GIFS")),
       fileUploadEnabled: Boolean(getSetting("FILE_UPLOAD")),
+      // Link previews are made by the server for people who opted in (the admin
+      // switch is off by default); the client shows no card when this is false.
+      linkPreviewsEnabled: Boolean(getSetting("LINK_PREVIEWS")),
       // Voice/video calls are switched with CALLS_ENABLED; the client hides the
       // call buttons when this is false.
       callsEnabled: (typeof callsConfig === "function" ? callsConfig() : callsConfig)?.enabled !== false,

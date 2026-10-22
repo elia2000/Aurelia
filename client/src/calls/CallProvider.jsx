@@ -8,6 +8,7 @@ import {
 } from "react";
 import { CallManager, CALL_PHASE } from "./callManager.js";
 import { useCallSounds } from "./useCallSounds.js";
+import { callPipActive, pictureInPictureArmed } from "./pip.js";
 import { endCallBeacon } from "../api/e2eeApi.js";
 import { getE2eeServices, isCallingSupported } from "../e2ee/services.js";
 import { CALL_EVENT, CallContext, IDLE_CALL_SNAPSHOT, REALTIME_OPEN_EVENT } from "./callContext.js";
@@ -24,6 +25,8 @@ const appNotificationsOn = () => {
 };
 
 const BROADCAST_NAME = "aurelle-calls";
+// A browser that opens picture in picture by itself does so just after the tab goes away.
+const PIP_GRACE_MS = 700;
 
 const noopSubscribe = () => () => {};
 const idleSnapshot = IDLE_CALL_SNAPSHOT;
@@ -110,18 +113,34 @@ export function CallProvider({ user, children }) {
     // down (a network switch, a laptop waking up) is only found by asking.
     window.addEventListener(REALTIME_OPEN_EVENT, checkPending);
 
+    // A page that is hidden but shows the call in a picture-in-picture window is still
+    // being watched: the camera stays on. Where the browser may open that window by
+    // itself it is given a moment to, so that the camera is not released for nothing.
+    let hideTimer = null;
+    const syncHidden = () => {
+      clearTimeout(hideTimer);
+      if (!document.hidden || callPipActive()) next.setPageHidden(false);
+      else if (pictureInPictureArmed()) {
+        hideTimer = setTimeout(() => next.setPageHidden(document.hidden && !callPipActive()), PIP_GRACE_MS);
+      } else next.setPageHidden(true);
+    };
     const onVisibility = () => {
-      next.setPageHidden(document.hidden);
+      syncHidden();
       if (!document.hidden) checkPending();
     };
     const onPageHide = () => next.hangupOnUnload(endCallBeacon);
     document.addEventListener("visibilitychange", onVisibility);
+    document.addEventListener("enterpictureinpicture", syncHidden, true);
+    document.addEventListener("leavepictureinpicture", syncHidden, true);
     window.addEventListener("pagehide", onPageHide);
 
     return () => {
       window.removeEventListener(CALL_EVENT, onEvent);
       window.removeEventListener(REALTIME_OPEN_EVENT, checkPending);
+      clearTimeout(hideTimer);
       document.removeEventListener("visibilitychange", onVisibility);
+      document.removeEventListener("enterpictureinpicture", syncHidden, true);
+      document.removeEventListener("leavepictureinpicture", syncHidden, true);
       window.removeEventListener("pagehide", onPageHide);
       next.dispose();
       channel?.close();
@@ -132,7 +151,7 @@ export function CallProvider({ user, children }) {
   // Sounds and vibration for the call's phases (ring, ringback, connect, end):
   // see useCallSounds.js. Only while something is actually ringing.
   const phase = state.phase;
-  useCallSounds(state);
+  useCallSounds(state, { enabled: supported && Boolean(userId) });
 
   // Background alert for an incoming call while the tab is hidden. The
   // notification is closed whenever the call stops ringing here, however that
@@ -176,6 +195,11 @@ export function CallProvider({ user, children }) {
       setCameraEnabled: (enabled) => manager?.setCameraEnabled(enabled),
       setQuality: (choice) => manager?.setQuality(choice),
       setMicrophone: (deviceId) => manager?.setMicrophone(deviceId) ?? Promise.resolve(false),
+      // Sharing the screen (computers only). toggleScreenShare is what the S key will call.
+      screenSupported: Boolean(manager?.canShareScreen),
+      startScreenShare: (options) => manager?.startScreenShare(options) ?? Promise.resolve(),
+      stopScreenShare: () => manager?.stopScreenShare() ?? Promise.resolve(),
+      toggleScreenShare: () => manager?.toggleScreenShare() ?? Promise.resolve(),
       // A call that has just ended only lingers on screen; a new one may start.
       inCall: phase !== CALL_PHASE.IDLE && phase !== CALL_PHASE.ENDED,
     }),

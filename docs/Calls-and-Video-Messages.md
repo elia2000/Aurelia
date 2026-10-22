@@ -89,14 +89,112 @@ Video calls say *video call* (*Outgoing video call*, *Missed video call*). Good 
 - **Swap the pictures.** The other person fills the screen and you are the small tile. Tap your own tile to put yourself full screen and the other person in the tile; tap again to swap back. The swap is there once the call is connected, and it stays if you minimise the call and open it again.
 - **A clear view.** Click or tap the picture to hide the name, the emoji code and the buttons; click or tap again to bring them back. They also hide by themselves after 5 seconds, come back when you move the mouse or press a key, and stay while a warning or the call settings are open, while you move through the buttons with the keyboard, or when there is no picture to look at. If you hid them with a mouse click, moving the mouse does not bring them back: click the picture again or press a key.
 
+### Sharing your screen
+
+On a computer you can show your screen to the person you are talking to, in a voice call or a video call.
+
+- **Start.** Press **Share screen** (the monitor button between the camera and the sliders). Your browser asks what to share: the entire screen, one window or one browser tab. While the call is still connecting the button is there but off, and its tooltip says why; it stays off if the other person's app is too old to show a shared screen. The button does not exist on phones and tablets: their browsers cannot capture the screen. They can still *watch* one.
+- **While you share.** A red banner at the bottom of the call says **You are sharing your screen**, what is shared, and has a **Stop sharing** button; it stays on screen even when the other details hide. If you minimise the call, the small pill at the top shows a **Sharing** button that stops it. A small tile in the corner reminds you what you share. For an entire screen or a window it is a still label rather than a live picture: a live copy would show the call inside the call, over and over. Only another browser tab (this one is never offered) is previewed live.
+- **Stopping.** Press **Stop sharing**, or the browser's own *Stop sharing* bar. The picture also stops when the call ends. Picking another source while sharing replaces the share without a gap.
+- **What the other person sees.** Your screen fills their call screen, **never cropped** (the *Picture* choice in the settings only applies to the cameras), under the label **Sharing their screen**. In a voice call the call screen turns into the same black stage; on a computer the call card grows to make room. If they also have their camera on, it is a small tile (yours is another one under it). Tap the tile to swap the camera and the screen; tap again to swap back. The name, emoji code and buttons hide after a few seconds, exactly as in a video call. The settings show the size and frame rate of the shared screen that arrives.
+- **Camera and screen together.** Both can be on at the same time, and both people can share at once (each sees the other's). Turning the camera off or on does not touch the screen, and neither does hiding the tab: unlike the camera, the screen is not paused when the page is in the background.
+- **Sound.** The sound of the shared screen is **not** sent. Only the microphone is.
+- **Quality.** The screen is sent for detail (text stays sharp): at most 15 frames a second and about 2.5 Mbit/s, scaled down when it is larger than 1920×1080. On a poor connection Aurelle lowers the frame rate first, then the bitrate and, last, the size, but the screen is never given up for the voice and the voice is never touched.
+- **If it does not start.** Closing the picker or refusing the permission shows a small hint on the call (and clears itself); the call carries on. On macOS the browser needs *Screen Recording* permission in the system settings. Hanging up while the picker is open leaves nothing running.
+- **Privacy and security.** Sharing needs no new negotiation and no new connection: the screen travels on a line that was set up (empty) in the call's first offer, under the same end-to-end authenticated DTLS session as the voice and the camera. Nothing is sent on that line until someone shares. Older versions of the app (which have no such line) still connect: they simply cannot show a screen, and the button stays off. See the [protocol notes](./E2EE-Protocol.md#screen-sharing).
+
 ### Sound and video quality during a call
 
-The sliders button next to the microphone and camera buttons opens the call's settings. It only appears when there is something to choose.
+The sliders button next to the microphone and camera buttons opens the call's settings. While the call is still connecting it only appears when there is something to choose. Once the call is connected it is always there: below the choices it shows how the [connection](#connection-quality) is doing and the [keyboard shortcuts](#keyboard-shortcuts).
 
 - **On a computer:** pick the *Speaker* and the *Microphone* when the computer has more than one. The speaker choice is remembered on that device. The speaker list appears only where the browser lets a page choose the speaker (Chrome and Edge do; other browsers vary), and the microphone list only when there is more than one.
 - **On an Android phone (Chrome):** the browser cannot pick a speaker like a computer, but it lists the phone's ways of playing a call: *Speaker*, *Phone earpiece*, *Bluetooth*, *Wired headset*. They appear as a *Sound* choice, and a speaker button next to the microphone button flips between the loudspeaker and the earpiece like in a phone call. Aurelle switches by opening the matching microphone entry, which is how Chrome routes a call's sound. This depends on the phone and browser: if they list fewer than two ways, no sound choice is shown. An iPhone or iPad with iOS 26 or newer lists its speakers the same way, if Safari allows it; on older ones use the system's audio output switcher. The call plays through the loudspeaker by default.
 - **Video quality** (video calls): *Auto* keeps the call smooth: it starts at 360p, climbs up to 720p while the connection is healthy, steps down when it is not and, in the worst case, pauses the picture to keep the voice going. Or pick one fixed level: 240p (saves data), 360p, 480p, 720p HD or 1080p Full HD. Your choice is what *you* watch: the other person's phone sends you that quality (it cannot exceed what their camera and connection can do). A fixed level is kept even when the network is poor, so choose *Auto* if the picture freezes. The menu shows the size and frame rate that is arriving. Your choice is remembered on that device.
 - **Picture.** Chooses how the picture sits on the screen: *Auto* fills the screen unless that would cut off a lot (a wide picture on an upright phone is shown whole), *Fill the screen* (the edges may be cut off) or *Show the whole picture* (with bars at the sides or at the top and bottom).
+
+### Connection quality
+
+Voice and video calls show a small **signal icon** with four bars in the header, next to the lock badge. It tells you how good the connection is, so that you know whether a choppy voice is your network or theirs:
+
+| Bars | Level | Colour |
+|---|---|---|
+| 4 | **Excellent** | light green |
+| 3 | **Good** | light green |
+| 2 | **Fair** | amber |
+| 1 | **Poor** | red |
+
+Hover over the icon (or open it with a screen reader) to read *Connection: Good*. Before the first measurement it reads *Connection: Checking…* and the bars are dim.
+
+- **How it is measured.** Every 5 seconds the app reads its own connection statistics (they never leave your device) and takes the **worst** of these numbers, so a fine round trip does not hide heavy loss:
+
+  | | Excellent | Good | Fair | Poor |
+  |---|---|---|---|---|
+  | Round-trip time | under 150 ms | under 300 ms | under 600 ms | 600 ms or more |
+  | Lost packets | under 1 % | under 3 % | under 8 % | 8 % or more |
+  | Jitter of the voice | under 30 ms | under 60 ms | under 120 ms | 120 ms or more |
+  | Bandwidth to send with (while a camera or screen is sent) | 500 kbit/s or more | 200 kbit/s or more | 60 kbit/s or more | less |
+
+  In a voice call the bandwidth only counts when it is tiny (under 50 kbit/s is *Fair*, under 25 kbit/s *Poor*): a voice needs next to nothing.
+- **No flicker.** The icon only moves after several samples in a row: it drops after **two** worse ones (about 10 seconds) and rises after **three** better ones (about 15 seconds), and one odd sample inside a good stretch changes nothing.
+- **Relayed.** When the call goes through your server's relay the tooltip says so (*Connection: Good · relayed*).
+- **Reconnecting.** When the connection drops (the browser calls it *disconnected*) the bars pulse and the call says **Reconnecting…**; the buttons and the name stay on screen while it lasts. The call carries on by itself if the path comes back. If it does not return within about 25 seconds the call ends as *Connection lost*.
+- **The numbers.** Press the icon (or open the call settings) to see the *Connection* section: round-trip time, packet loss, jitter, outgoing bandwidth and the path (*Direct* or *Relayed through your server*). On a fair or poor connection it adds what holds it back (*Held back by lost packets.*). A call that broke after it had worked also puts the last measured quality, as numbers only, into the **Copy report** under its technical details.
+
+### Picture in picture
+
+Take the other person's video out of the call screen into a small floating window that stays on top of other apps:
+
+- **Start.** Press the small window button in the call header (next to *Minimise*), or press **P**. The button is only there when your browser can do it and the other person's camera or shared screen is on your call screen.
+- **What floats.** Their camera, or their shared screen while it fills your call. If they start or stop sharing while the window is open it follows to the other picture. Your own picture never floats. The call's sound keeps playing from the call, not from the window.
+- **Buttons in the window.** Browsers that support it show the call's own **mute**, **camera** and **hang up** buttons in the window, and the window reflects whether your microphone and camera are on.
+- **On its own.** In a video call, switching to another tab or app can open the window for you, where the browser allows it (Chrome and Edge 134 or newer, which may ask once whether this site may do that, and Safari on a Mac). It closes again when you come back. Browsers that have no such feature are not tried on their own, because they would refuse without a click: press the button before you switch.
+- **The camera stays on.** A page in the background normally lets go of the camera. While the call floats in picture in picture, the camera keeps sending.
+- **It closes** when you press the button (or **P**) again, when the call ends, and when you minimise the call (a minimised call has no picture to float). If the browser says no, the call says *Picture in picture is not available right now.* for a few seconds.
+- **Privacy.** The window shows the picture the call screen already shows, decrypted on this device; nothing new is sent anywhere.
+
+| Browser | Button and **P** | Mute, camera, hang up in the window | Opens by itself |
+|---|---|---|---|
+| Chrome, Edge (computer) | yes | yes | yes (134 or newer) |
+| Safari (Mac) | yes | the window's own controls | where Safari allows |
+| Firefox | no (its own hover button on a video has no call controls) | – | – |
+| Phones and tablets | no | – | – |
+
+### Keyboard shortcuts
+
+On a computer the call screen has these keys:
+
+| Key | What it does |
+|---|---|
+| **M** | Mute or unmute the microphone |
+| **V** | Turn the camera on or off (video calls) |
+| **S** | Share your screen, or stop sharing |
+| **P** | [Picture in picture](#picture-in-picture) |
+| **F** | Full screen for the call card (and back) |
+| **Esc** | Minimise the call. It closes an open menu or the settings first, and does not minimise a call that is ringing for you (its buttons would be gone) |
+| **Shift + H** | End the call (or cancel it while it rings), straight away: a plain **H** does nothing, so it is never one slip of the finger |
+| **?** | Open the settings on this list, and close them again |
+
+- **Only when the keys are yours.** They work while the call card is on screen. They are ignored while you type in the message box or any other field, while a window or menu is open in front of the call (the safety number, a confirmation, a context menu), with **Ctrl**, **Cmd** or **Alt** held, and for a key held down. A **minimised** call leaves every key to the chat.
+- **Other keyboards.** On a layout without Latin letters (Persian, say) the letters work by the physical key: the one marked M on a US keyboard mutes.
+- **Screen readers** are told what a key did (*Microphone muted*, *Camera off*, *Picture in picture on*, *Full screen on* and so on), even when the buttons are hidden for a clear view. A shortcut also brings the buttons back, so you can see the change.
+- **Where to find them.** The call settings list them under *Keyboard shortcuts* (a phone with only a touch screen does not show the list), and the tooltips of the buttons name their key (*Mute microphone (M)*).
+- Full screen is not available where the browser does not offer it (an iPhone, for example); the key then does nothing.
+
+### Ringtone, ringback and vibration
+
+Aurelle makes its call sounds itself, so there is no sound file to download and nothing to license.
+
+| When | What you hear |
+|---|---|
+| Someone calls you | A two-note bell **ringtone**, repeated about every 3 seconds, until you answer or decline, the caller hangs up, the ring times out, or you answer on another device. Phones also vibrate in a ringing pattern. |
+| You call someone and the screen says *Ringing…* | A soft double **ringback tone**, like a telephone's, until they answer or decline or you hang up. It plays for *Ringing…* only: during *Calling…* and *Waiting…* nobody's phone is ringing yet. |
+| The call connects | A short rising blip and a very short buzz. |
+| The call ends | A short sound that says how: one for an ordinary hang-up, and one each for a call that was **declined**, a **busy** line and a call that **could not connect**. A call you declined yourself, one that rang without being answered and one you were not able to place because you are already in a call are silent. |
+
+- **Settings.** *Settings → Call sounds* has **Call sounds** (on or off, on by default), **Ringtone volume** (70% by default), **Vibrate on incoming calls** (only on devices that can vibrate) and **Play test sound**. They are kept on that device only and apply at once, also to a call that is ringing right now. The section is hidden where calls are not available.
+- **After your first tap.** A browser only lets a page make sound once you have tapped or typed in it. Aurelle gets the audio ready at your first tap or key press anywhere in the app, so a call that comes in later can ring. If a call arrives before that, you still get the call screen and the system notification, just no sound. *Play test sound* tells you when the browser refuses.
+- **Speaker.** The ringtone follows the speaker you chose in the call settings where the browser can route a page's sound (Chrome and Edge), and otherwise uses the default speaker. It never touches the sound of the call itself.
+- **Quiet when it should be.** Nothing rings while you are in another call (the caller hears the busy tone), and a call that had already ended when you opened Aurelle makes no sound. A hidden page does not vibrate: the notification does.
 
 ### Video messages
 
@@ -243,8 +341,9 @@ All call settings are environment variables. See [Environment Variables](./Envir
 | Video off by default for voice calls | The camera is never opened. |
 | Hardware-friendly codecs first (H.264, then VP8) | Lower CPU and heat than VP9/AV1 software encoding. |
 | Video capped near 640×360, 24 fps, 600 kbps | Adaptive: it steps down on a poor network and falls back to audio only, then returns. |
-| Camera released when the page is hidden | No capture power draw, and the camera light turns off. |
+| Camera released when the page is hidden | No capture power draw, and the camera light turns off. Not while the call floats in picture in picture. |
 | Screen kept awake only during visible video calls | Voice calls let the screen sleep. |
+| Screen sharing: 15 fps, at most about 2.5 Mbit/s, no sound | Text stays sharp; the frame rate falls first on a poor network. The idle screen line sends nothing. |
 | Batched, encrypted signaling | A handful of small requests per call; no polling. |
 | Round video: 384 px, 24 fps, about 350 kbps | About 3 MB per minute including sound. |
 | Video messages download on demand | Scrolling a chat costs no data. Only a tiny preview is decrypted up front. |
@@ -255,6 +354,8 @@ All call settings are environment variables. See [Environment Variables](./Envir
 - Calls are **one-to-one** and start from a direct chat. Group calls need a media-forwarding server and are not included.
 - Call signaling state lives in the memory of one app process. If you run several app instances behind a load balancer, use sticky routing for `/api/calls`. Restarting the server while a call is running ends it without a line in the chat.
 - Every device of the person you call gets a push notification (if enabled), also when another of their devices has the app open: a phone with the app closed still rings. A chat the callee muted does not ring by push. The ring lasts about 45 seconds. When it ends (answered elsewhere, cancelled, unanswered) the notification is removed, or replaced by a *missed call* one.
+- Picture in picture needs a browser that offers it for a page (Chrome, Edge, Safari on a Mac) and a picture on the call screen, so it ends when the call is minimised. The connection indicator is a guide: it reads the browser's own statistics, and the browser's estimate of the bandwidth is rough.
+- Screen sharing works in one-to-one calls on computers only (a browser must be able to capture the screen), and the sound of the shared screen is not sent. Both people need a version of Aurelle that has it; with an older one the call works and nothing can be shared.
 - Calls are limited per person (12 invitations a minute, 5 per two minutes per conversation) so that nobody can ring someone repeatedly.
 - Keep your device clock roughly right: an invitation whose time is more than ten minutes off from the receiving device is refused, and the call screen then says to check the clock.
 - **Trust in the web app:** like any browser-based end-to-end encryption, the code that does the encryption is delivered by your server. Comparing the emoji code or the safety number detects a tampered *connection or directory*, but a server operator who modifies the web app itself could in principle read future calls. Use verified safety numbers and, for the strongest guarantee, a native client built from audited source. See [End-to-End Encryption Protocol](./E2EE-Protocol.md#threat-model).

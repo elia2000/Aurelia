@@ -79,9 +79,9 @@ export const CallSoundsSettingsPanel = memo(function CallSoundsSettingsPanel({ o
           >
             Ringtone volume
           </label>
-          <output htmlFor="call-sounds-volume" className="text-xs font-semibold tabular-nums text-slate-500 dark:text-slate-400">
+          <span aria-hidden="true" className="text-xs font-semibold tabular-nums text-slate-500 dark:text-slate-400">
             {prefs.volume}%
-          </output>
+          </span>
         </div>
         <input
           id="call-sounds-volume"
@@ -93,7 +93,8 @@ export const CallSoundsSettingsPanel = memo(function CallSoundsSettingsPanel({ o
           disabled={!soundsOn}
           aria-valuetext={`${prefs.volume} percent`}
           onChange={(event) => setCallSoundPrefs({ volume: Number(event.target.value) })}
-          className="mt-3 h-2 w-full cursor-pointer accent-emerald-500 disabled:cursor-not-allowed"
+          style={{ "--p": prefs.volume / 100 }}
+          className="aurelle-range mt-2"
         />
       </div>
 

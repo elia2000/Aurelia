@@ -300,13 +300,22 @@ describe("CallOverlay", () => {
       Object.defineProperty(navigator.mediaDevices, "enumerateDevices", { value: async () => list, configurable: true });
     };
 
-    test("a computer with one microphone and no choice of speaker has no settings button for a voice call", async () => {
+    test("a computer with one microphone and no choice of speaker has no settings button while a voice call connects", async () => {
       withDevices([device("audioinput", "default", "Microphone"), device("audiooutput", "default", "Speakers")]);
-      renderOverlay(connected());
+      renderOverlay({ phase: "connecting", kind: "audio", peer, connectedAt: null });
       await expect.element(page.getByRole("button", { name: "Mute microphone" })).toBeInTheDocument();
       expect(document.querySelector('[aria-label="Call settings"]')).toBeNull();
       expect(document.body.textContent).not.toContain("Switch to");
       expect(page.getByRole("button", { name: "Call settings" }).elements()).toHaveLength(0);
+    });
+
+    test("once connected the same computer's settings have no sound choice, only the connection and the shortcuts", async () => {
+      withDevices([device("audioinput", "default", "Microphone"), device("audiooutput", "default", "Speakers")]);
+      renderOverlay(connected());
+      await page.getByRole("button", { name: "Call settings" }).click();
+      await expect.element(page.getByRole("group", { name: "Connection" })).toBeInTheDocument();
+      expect(page.getByRole("radiogroup").elements()).toHaveLength(0);
+      expect(document.body.textContent).not.toContain("Switch to");
     });
 
     test("with several microphones the settings list them and a click switches the call to that one", async () => {

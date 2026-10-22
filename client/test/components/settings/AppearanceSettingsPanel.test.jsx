@@ -90,6 +90,19 @@ describe("AppearanceSettingsPanel", () => {
     expect(JSON.parse(localStorage.getItem("aurelle-theme-color:alice"))).toEqual({ mode: "default" });
   });
 
+  test("the swatches show the accent as the app really paints it, eased when the colour would be hard to read", async () => {
+    setThemePalette(["#ffff00", "#2563eb"]);
+    render(<App />);
+    const swatchOf = (hex) => document.querySelector(`[aria-label="Use ${hex}"]`);
+    const rgb = (hex) => `rgb(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(", ")})`;
+    expect(accentOf("#ffff00")).not.toBe("#ffff00");
+    await expect.poll(() => swatchOf("#ffff00").style.background).toBe(rgb(accentOf("#ffff00")));
+    expect(swatchOf("#2563eb").style.background).toBe(rgb("#2563eb")); // a colour that is readable as it is stays as it is
+    await page.getByRole("button", { name: "Use #ffff00" }).click();
+    await expect.poll(accent).toBe(accentOf("#ffff00")); // and what the swatch showed is what the app now uses
+    expect(rgb(accent())).toBe(swatchOf("#ffff00").style.background);
+  });
+
   test("a colour of your own can be picked", async () => {
     render(<App />);
     const input = page.getByLabelText("Pick your own colour");

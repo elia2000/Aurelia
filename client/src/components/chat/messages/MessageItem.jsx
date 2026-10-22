@@ -23,6 +23,8 @@ import { isUnsupportedMessage } from "../../../utils/messageKind.js";
 import HeartBurst from "../reactions/HeartBurst.jsx";
 import { useHeartReaction } from "../../../hooks/chat/useHeartReaction.js";
 import { isMessageSelectable } from "../../../utils/batchMessages.js";
+import { useLinkPreview } from "../../../hooks/chat/useLinkPreview.js";
+import LinkPreviewCard from "../linkPreview/LinkPreviewCard.jsx";
 
 // Encrypted round video messages pull in the decryption code, so they load on demand.
 const VideoNoteBubble = lazy(() => import("../videoNote/VideoNoteBubble.jsx"));
@@ -370,6 +372,23 @@ export const MessageItem = memo(function MessageItem({
   }, [bodyText, messageIdentity, msg?._edited, msg?.edited]);
   const hasMarkdownCodeBlock =
     typeof markdownHtml === "string" && markdownHtml.includes("sb-code-block");
+  // A card under the text for the first link, when link previews are on. The
+  // server makes it, so this browser never contacts the linked site. Never for
+  // an encrypted message, one still being sent, or a line that is not a text
+  // message; it stays out of selected text and reply quotes.
+  const linkPreview = useLinkPreview({
+    html: markdownHtml,
+    elementRef: messageBodyRef,
+    skip:
+      isCallEntry ||
+      isUnsupported ||
+      isVideoNote ||
+      isSending ||
+      isFailed ||
+      Boolean(msg?._systemEvent) ||
+      Boolean(msg?.e2ee) ||
+      normalizedBodyText.startsWith("sb-enc-v1:"),
+  });
 
   useEffect(() => {
     const container = messageBodyRef.current;
@@ -987,7 +1006,8 @@ export const MessageItem = memo(function MessageItem({
         : "row";
   // A call entry (or a note about a message this app cannot show) puts the
   // time on its own line under its content.
-  const metaVariant = isCallEntry || isUnsupported ? "row" : bodyMetaVariant;
+  // A link preview card ends the bubble, so the time gets its own row under it.
+  const metaVariant = isCallEntry || isUnsupported || linkPreview ? "row" : bodyMetaVariant;
   const bodyDirection = getTextDirection(bodyText);
   const metaSide = metaVariant === "inline" && bodyDirection === "rtl" ? "left" : "right";
   const metaSpacer = getMetaSpacer({
@@ -1578,6 +1598,11 @@ export const MessageItem = memo(function MessageItem({
                     __html: String(markdownHtml || ""),
                   }}
                 />
+              ) : null}
+              {linkPreview ? (
+                <div className={hasMediaBubble ? "px-2.5 pb-1" : undefined}>
+                  <LinkPreviewCard url={linkPreview.url} preview={linkPreview.preview} isOwn={isOwn} />
+                </div>
               ) : null}
               {mentionDebugEnabled ? (
                 <div className="sb-mention-debug" aria-hidden="true">

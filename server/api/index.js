@@ -10,6 +10,7 @@ import { registerReactionRoutes } from "./reactions.js";
 import { registerPinRoutes } from "./pins.js";
 import { registerChatPinRoutes } from "./chatPins.js";
 import { registerGifRoutes } from "./gifs.js";
+import { registerLinkPreviewRoutes } from "./linkPreview.js";
 import { registerPushRoutes } from "./push.js";
 import { registerPresenceRoutes } from "./presence.js";
 import { registerProfileRoutes } from "./profile.js";
@@ -35,6 +36,7 @@ function registerApiRoutes(app, deps) {
   registerPinRoutes(app, deps);
   registerChatPinRoutes(app, deps);
   registerGifRoutes(app, deps);
+  registerLinkPreviewRoutes(app, deps);
   registerRemoteUploadRoutes(app, deps);
   registerPushRoutes(app, deps);
   registerE2eeRoutes(app, deps);

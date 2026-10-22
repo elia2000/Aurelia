@@ -324,7 +324,13 @@ export class ScreenShare {
     this.#appliedKey = "";
     await this.#applyEncoding();
     if (this.#track !== track) return; // stopped while the encoder was being set
-    this.#emit({ screenSharing: true, screenBusy: false, screenSurface: surfaceOf(track), screenError: null });
+    this.#emit({
+      screenSharing: true,
+      screenBusy: false,
+      screenSurface: surfaceOf(track),
+      screenStream: stream,
+      screenError: null,
+    });
     this.announce();
   }
 
@@ -343,7 +349,7 @@ export class ScreenShare {
     this.#stream = null;
     track.onended = null;
     this.#appliedKey = "";
-    this.#emit({ screenSharing: false, screenSurface: null, screenBusy: false });
+    this.#emit({ screenSharing: false, screenSurface: null, screenStream: null, screenBusy: false });
     this.#send({ t: "screen", on: false });
     stopStream(stream); // the capture light goes off now
     try {

@@ -1,8 +1,13 @@
 import { memo } from "react";
 import { useThemeSnapshot } from "../../../hooks/useThemeColor.js";
 import { setThemePreference } from "../../../utils/themeStore.js";
-import { DEFAULT_THEME_COLOR, dailyColor } from "../../../utils/themeColor.js";
+import { DEFAULT_THEME_COLOR, colorScale, dailyColor } from "../../../utils/themeColor.js";
 import EmojiSizeSetting from "../common/EmojiSizeSetting.jsx";
+import LinkPreviewsSetting from "../common/LinkPreviewsSetting.jsx";
+
+// What the app really paints with a colour: one that would be hard to read is
+// eased a little (themeColor.js), so the swatches show that, not the raw hex.
+const accentOf = (hex) => colorScale(hex)[500];
 
 const swatch = (selected) =>
   `h-9 w-9 rounded-full border-2 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
@@ -42,7 +47,7 @@ export const AppearanceSettingsPanel = memo(function AppearanceSettingsPanel({ o
           aria-pressed={mode === "inherit"}
           className={`${row} ${mode === "inherit" ? "ring-2 ring-emerald-300" : ""}`}
         >
-          <span className="h-6 w-6 shrink-0 rounded-full" style={{ background: defaultColor }} aria-hidden="true" />
+          <span className="h-6 w-6 shrink-0 rounded-full" style={{ background: accentOf(defaultColor) }} aria-hidden="true" />
           <span className="min-w-0 flex-1">
             Default
             <span className="block text-[11px] font-normal text-slate-500 dark:text-slate-400">{defaultText}</span>
@@ -54,7 +59,7 @@ export const AppearanceSettingsPanel = memo(function AppearanceSettingsPanel({ o
           aria-pressed={mode === "random"}
           className={`${row} ${mode === "random" ? "ring-2 ring-emerald-300" : ""}`}
         >
-          <span className="h-6 w-6 shrink-0 rounded-full" style={{ background: today }} aria-hidden="true" />
+          <span className="h-6 w-6 shrink-0 rounded-full" style={{ background: accentOf(today) }} aria-hidden="true" />
           <span className="min-w-0 flex-1">
             Random
             <span className="block text-[11px] font-normal text-slate-500 dark:text-slate-400">
@@ -68,13 +73,13 @@ export const AppearanceSettingsPanel = memo(function AppearanceSettingsPanel({ o
           aria-pressed={mode === "default"}
           className={`${row} ${mode === "default" ? "ring-2 ring-emerald-300" : ""}`}
         >
-          <span className="h-6 w-6 shrink-0 rounded-full" style={{ background: DEFAULT_THEME_COLOR }} aria-hidden="true" />
+          <span className="h-6 w-6 shrink-0 rounded-full" style={{ background: accentOf(DEFAULT_THEME_COLOR) }} aria-hidden="true" />
           <span className="min-w-0 flex-1">Built-in green</span>
         </button>
       </div>
 
       <div>
-        <p className="mb-2 text-[10px] uppercase tracking-[0.25em] text-emerald-500/80">Colours</p>
+        <p className="mb-2 text-[10px] uppercase tracking-[0.25em] text-emerald-700 dark:text-emerald-300">Colours</p>
         <div className="flex flex-wrap gap-2" role="group" aria-label="Theme colours">
           {palette.map((hex) => (
             <button
@@ -85,7 +90,7 @@ export const AppearanceSettingsPanel = memo(function AppearanceSettingsPanel({ o
               title={hex}
               onClick={() => setThemePreference({ mode: "custom", color: hex })}
               className={swatch(picked === hex)}
-              style={{ background: hex }}
+              style={{ background: accentOf(hex) }}
             />
           ))}
         </div>
@@ -103,6 +108,8 @@ export const AppearanceSettingsPanel = memo(function AppearanceSettingsPanel({ o
       </label>
 
       <EmojiSizeSetting variant={variant} />
+
+      <LinkPreviewsSetting variant={variant} />
 
       {onDone ? (
         <div className="flex items-center justify-end">

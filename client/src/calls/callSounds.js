@@ -179,8 +179,9 @@ const defaultHasActivation = () => {
 const defaultVibrate = (pattern) => {
   try {
     if (typeof globalThis.navigator?.vibrate !== "function") return false;
-    // A hidden page cannot vibrate (the notification does it); cancelling is always fine.
-    if (pattern !== 0 && globalThis.document?.hidden) return false;
+    // A hidden page cannot vibrate (the notification does it), and Chrome
+    // refuses (with a console warning) before the first tap; cancelling is always fine.
+    if (pattern !== 0 && (globalThis.document?.hidden || !defaultHasActivation())) return false;
     return Boolean(globalThis.navigator.vibrate(pattern));
   } catch (_) {
     return false;
@@ -331,7 +332,14 @@ export function createCallSounds({
 
   unlockHandler = () => {
     unlock().then((running) => {
-      if (running) disarm();
+      if (!running) return;
+      disarm();
+      // A ring that has been silent so far (the call came in before anybody
+      // touched the page) is heard from this tap on, not from its next round.
+      if (loop && !loop.audible && !loop.stopped) {
+        clearTimeout(loop.timer);
+        loop.tick();
+      }
     });
   };
 
@@ -444,6 +452,7 @@ export function createCallSounds({
     const play = () => {
       try {
         playVoices(session, current, spec);
+        session.audible = true;
         return true;
       } catch (_) {
         return false; // a context that is closing: nothing to hear, nothing to break
@@ -509,7 +518,18 @@ export function createCallSounds({
   };
 
   const newSession = (extra = {}) => {
-    const session = { stopped: false, timer: null, cycle: 0, bus: null, voices: new Set(), vibrated: false, gesture: false, ...extra };
+    const session = {
+      stopped: false,
+      timer: null,
+      tick: null,
+      cycle: 0,
+      audible: false, // has any of its notes been scheduled yet
+      bus: null,
+      voices: new Set(),
+      vibrated: false,
+      gesture: false,
+      ...extra,
+    };
     sessions.add(session);
     return session;
   };
@@ -526,6 +546,7 @@ export function createCallSounds({
       playCycle(session, spec);
       session.timer = setTimeout(tick, spec.period);
     };
+    session.tick = tick;
     tick();
     return () => endSession(session);
   };
