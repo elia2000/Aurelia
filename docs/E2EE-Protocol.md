@@ -90,7 +90,7 @@ The trust tracker reports what it sees to the app (a lookup that found a device 
 
 | Event | Note |
 |---|---|
-| A device the client has not seen (also a contact's first device after the client pinned them with none) | **Amber** *"Alice added a new device. Verify the safety number"* with a *Verify* button. For a contact who was **verified**: **red** *Safety number changed*, "their new device is blocked until you verify the new number". |
+| A device the client has not seen on a contact it already knows (a contact seen with no device at all is not pinned, so their first device is first contact and raises no note) | **Amber** *"Alice added a new device. Verify the safety number"* with a *Verify* button. For a contact who was **verified**: **red** *Safety number changed*, "their new device is blocked until you verify the new number". |
 | A pinned device is no longer listed | Amber *"Alice removed a device. Verify the safety number"*, or red *Safety number changed* for a verified contact. Dismissible at once: it blocks nothing. |
 | A known device id presents other keys | **Red** *"Alice's security keys changed unexpectedly"*: calls and video messages are blocked, as the rules above say. |
 

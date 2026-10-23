@@ -147,8 +147,9 @@ export function applyTrustEvent(list, event, { now, newId = defaultId }) {
     }
   }
 
-  // Also a contact's first device after we pinned them with none: the trust model asks the
-  // person to accept it like any other new device (calls warn about it), so the chat says so too.
+  // A device added to a contact we already know: the trust model asks the person to accept it
+  // (calls warn about it), so the chat says so too. A contact seen with no device at all is not
+  // pinned (see trust.js), so their first device is first contact and gets no line.
   if (event.status === TRUST.DEVICES_ADDED && added.length) {
     const key = added.slice(0, MAX_DEVICE_IDS);
     const seen = next.find((n) => n.kind === NOTICE_KIND.ADDED && sameIds(n.deviceIds, key));

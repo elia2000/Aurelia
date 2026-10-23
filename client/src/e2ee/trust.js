@@ -97,8 +97,12 @@ export function createTrustTracker(store) {
     }
 
     if (!pin) {
-      // First contact: take what we see as the baseline.
-      await store.putPeer(userId, { devices: current, verifiedNumber: null, updatedAt: Date.now() });
+      // First contact: take what we see as the baseline. A contact who has no
+      // device yet leaves nothing to take: pinning an empty list would make
+      // their very first device look like a new one added to a known person.
+      if (listed.length) {
+        await store.putPeer(userId, { devices: current, verifiedNumber: null, updatedAt: Date.now() });
+      }
       emit({ type: "assessed", userId, status: TRUST.NEW, added: [], removed: [], mismatched: [], listed, known: 0, verified: false });
       return { status: TRUST.NEW, added: [], mismatched: [], verified: false };
     }

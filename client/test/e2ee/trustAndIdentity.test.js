@@ -19,6 +19,18 @@ describe("trust-on-first-use", () => {
     expect((await trust.assess("bob", [bob.record])).status).toBe(TRUST.OK);
   });
 
+  test("a contact seen with no device yet is not pinned: their first device later is first contact, not a new device", async () => {
+    const bob = await makeIdentity("bob");
+    const empty = await trust.assess("bob", []);
+    expect(empty.status).toBe(TRUST.NEW);
+    expect(await store.getPeer("bob")).toBeNull();
+
+    // Bob registers his first device afterwards: that is the baseline, nothing to warn about.
+    expect((await trust.assess("bob", [bob.record])).status).toBe(TRUST.NEW);
+    expect(Object.keys((await store.getPeer("bob")).devices)).toEqual([bob.record.id]);
+    expect((await trust.assess("bob", [bob.record])).status).toBe(TRUST.OK);
+  });
+
   test("a new device is reported on EVERY lookup until the person acknowledges it", async () => {
     const bob1 = await makeIdentity("bob");
     const bob2 = await makeIdentity("bob");
