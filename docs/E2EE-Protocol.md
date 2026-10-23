@@ -7,6 +7,8 @@ This page specifies how Aurelle's end-to-end encrypted **calls** and **video mes
 | Primitives and encodings | `client/src/e2ee/crypto.js`, `client/src/e2ee/encoding.js` |
 | Device keys, directory, trust | `client/src/e2ee/identity.js`, `directory.js`, `trust.js` |
 | Safety number, emoji code | `client/src/e2ee/safetyNumber.js`, `sas.js`, `sasEmoji.js` |
+| Safety number QR code | `client/src/e2ee/safetyQr.js`, `client/src/utils/qr/` |
+| Key-change notices in the chat | `client/src/e2ee/keyChangeNotices.js`, `useKeyChangeTimeline.js` |
 | Call handshake and signaling | `client/src/calls/callCrypto.js`, `callManager.js` |
 | Video message envelope | `client/src/e2ee/videoNoteCrypto.js` |
 | Server | `server/api/e2ee.js`, `server/api/calls.js`, `server/lib/e2eeEnvelope.js` |
@@ -40,7 +42,7 @@ Every app install is a **device** and generates two P-256 key pairs: an **ECDH**
 
 **Trust on first use.** A client remembers the fingerprint `SHA-256(ecdhPublic ‖ ecdsaPublic)` of every device it has seen. A known device id that later presents different keys is a hard error and must block the action.
 
-The first time a person is seen, all of their devices are pinned. After that, a device the client has not seen before is an **added device**, and it is **not trusted until the user acknowledges it**: it is reported again on every lookup, so no code path can consume the warning on the user's behalf. Rules for clients:
+The first time a person is seen, all of their devices are pinned (the web client looks a contact up when a direct chat with them opens, so that is the moment at the latest). After that, a device the client has not seen before is an **added device**, and it is **not trusted until the user acknowledges it**: it is reported again on every lookup, so no code path can consume the warning on the user's behalf. Rules for clients:
 
 - Never send an encrypted message to, or accept a call from, an unacknowledged device of a person the user has **verified**. The user must compare the new safety number first (verifying it also acknowledges the devices it was computed from).
 - For everybody else, ask before sending ("send anyway" acknowledges the devices) and show a warning on calls.
@@ -50,6 +52,49 @@ The first time a person is seen, all of their devices are pinned. After that, a 
 ### Safety number
 
 For each person: `fps` = sorted lowercase hex of the fingerprints of all their devices; `input = utf8("aurelle-safety-v1:" + userId + ":") ‖ utf8(fps.join(","))`; `h = SHA-512(input)`, then 1024 times `h = SHA-512(h ‖ input)`. Take 6 chunks of 5 bytes, interpret each as a big-endian integer, reduce modulo 100000 and pad to 5 digits (30 digits). The safety number is the two 30-digit strings **sorted lexicographically and concatenated** (60 digits, shown in groups of five). Adding or removing a device changes it.
+
+### Safety number QR code {#safety-number-qr-code}
+
+Two people who meet can compare the number by scanning instead of reading it out. The code carries this ASCII text:
+
+```text
+aurelle-sn:1:<ownerUserId>:<aboutUserId>:<60 digits>
+```
+
+| Field | Meaning |
+|---|---|
+| `aurelle-sn` | Fixed prefix. |
+| `1` | Format version. Only the exact text `1` is accepted: any other version is reported as *unsupported* and never guessed at. |
+| `ownerUserId` | The person whose screen shows the code. |
+| `aboutUserId` | The person the code is about (the one who is meant to scan it). |
+| 60 digits | The safety number above, as seen by the owner. |
+
+A user id is 1 to 64 characters of `A-Za-z0-9_-` (never `:`), and the whole text is at most 256 characters (147 bytes with UUID ids). The code is **not a secret**: whoever sees the screen sees the digits, so it adds no information.
+
+**The QR code.** Byte mode (the text as UTF-8, no ECI header), error correction level **M**, the smallest version that fits (version 8, 49×49 modules, for UUID ids), the mask with the lowest penalty, and a quiet zone of four modules. The web client draws it as an inline SVG, **dark on a fixed white square even in dark mode**, because a scanner needs dark on light. The encoder is `client/src/utils/qr/qrEncoder.js` (no dependencies; numeric, alphanumeric and kanji modes are not implemented). It is tested against an independent encoder (same version, level and mask give the same matrix for every level and a range of versions, including 7 and above and 40) and an independent decoder (jsQR).
+
+**Checking a scanned code.** The screen of person A, who is looking at the contact B, judges a scanned or pasted text in this order and stops at the first failure:
+
+1. The text (trimmed) must parse exactly: five `:`-separated fields, the prefix, a version that is digits only, valid ids, 60 ASCII digits. Anything else is *not an Aurelle code*. A version other than `1` is *a different version*.
+2. `owner = A` and `about = B` is A's **own** code: say so, never accept it.
+3. `owner` must be exactly B and `about` exactly A (string equality, no case folding), otherwise *this code is for a different person*, whatever the digits are.
+4. The 60 digits must equal the safety number computed **now** for A and B, otherwise *the numbers do not match, do not trust this contact*.
+
+Only then does the screen say *Safety number matches*. **A match never verifies anybody by itself:** the person presses *Mark as verified*, which is the same `setVerified` call as always (and, as always, accepts the devices the number was computed from). The same four steps apply to a whole code pasted by hand; 60 typed digits (spaces, dashes and line breaks allowed) are compared with step 4 only.
+
+**Scanning** uses the browser's `BarcodeDetector` (format `qr_code`) over a `getUserMedia` stream, preferring the rear camera. The button is only shown where both exist; elsewhere the screen says that scanning is not supported and points to the number and the emoji. The camera is released as soon as a code is read, when scanning is stopped and when the screen closes. No frame leaves the page.
+
+### Key-change notices {#key-change-notices}
+
+The trust tracker reports what it sees to the app (a lookup that found a device added, removed or with changed keys, a device acceptance, a verification) and a client may turn that into notes in the conversation. The web client does, in a direct chat only:
+
+| Event | Note |
+|---|---|
+| A device the client has not seen (also a contact's first device after the client pinned them with none) | **Amber** *"Alice added a new device. Verify the safety number"* with a *Verify* button. For a contact who was **verified**: **red** *Safety number changed*, "their new device is blocked until you verify the new number". |
+| A pinned device is no longer listed | Amber *"Alice removed a device. Verify the safety number"*, or red *Safety number changed* for a verified contact. Dismissible at once: it blocks nothing. |
+| A known device id presents other keys | **Red** *"Alice's security keys changed unexpectedly"*: calls and video messages are blocked, as the rules above say. |
+
+Rules, all on the device: a note is made **once per change** (the unacknowledged device is reported on every lookup, and the lookups are folded into one note; a larger set of unacknowledged devices replaces the open note); it is **settled** when the devices are accepted or the number is verified (it then reads *You accepted…* / *You verified…* and can be dismissed), and a conflict of keys is settled when the keys are consistent again; an open note about a blocked device cannot be dismissed. Notes are kept in the browser per signed-in person and contact (`localStorage`, `aurelle-key-notices:<you>:<contact>`, at most 30), sit in the timeline at the time they were noticed, and are **not messages**: nothing is sent to or stored on the server, they are never counted as unread, selected, forwarded or searched, and they do not appear in the chat list. The server does not announce a new device, so an open chat looks the contact up when it opens, when the window comes back to the front and every two minutes.
 
 ## Calls
 

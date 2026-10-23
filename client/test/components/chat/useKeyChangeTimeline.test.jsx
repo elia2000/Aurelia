@@ -134,15 +134,23 @@ describe("useKeyChangeTimeline - notices made from what the trust tracker sees",
     await expect.element(page.getByText("You verified Bob's new safety number")).toBeInTheDocument();
   });
 
-  test("a note about one person does not show in another person's chat or another account's", async () => {
+  test("notes are kept per contact and per signed-in person", async () => {
     await holder.services.directory.getUserDevices("bob");
     devices = [bob1.record, bob2.record];
     const view = await render(<Harness messages={messages} />);
     await expect.element(page.getByText(/added a new device/)).toBeInTheDocument();
+    expect(stored("me:bob")).toHaveLength(1);
+
+    // Another person's chat does not show Bob's note.
     await view.rerender(<Harness messages={messages} peer={{ id: "carol", username: "carol" }} chatId="chat-2" />);
     await vi.waitFor(() => expect(lines()).toEqual(["hi"]));
+    expect(stored("me:carol")).toHaveLength(0);
+
+    // Another account on the same browser has notes of its own: it never reads "me"'s.
     await view.rerender(<Harness messages={messages} selfUserId="someone-else" />);
-    await vi.waitFor(() => expect(lines()).toEqual(["hi"]));
+    await vi.waitFor(() => expect(stored("someone-else:bob")).toHaveLength(1));
+    expect(stored("someone-else:bob")[0].id).not.toBe(stored("me:bob")[0].id);
+    expect(stored("me:bob")).toHaveLength(1);
   });
 
   test("groups, channels, saved messages and deleted accounts get nothing and look nothing up", async () => {

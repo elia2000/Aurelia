@@ -5,16 +5,7 @@ import { formatRelativeTime, formatShortDate } from "../../../utils/relativeTime
 import ConfirmModal from "../../modals/ConfirmModal.jsx";
 import { InlineError } from "../common/InlineError.jsx";
 
-const METHOD_LABELS = {
-  password: "Signed in with a password",
-  password_2fa: "Signed in with a password and a code",
-  recovery_code: "Signed in with a recovery code",
-  registration: "Signed in when the account was created",
-};
-
-export function methodLabel(session) {
-  return METHOD_LABELS[session?.method] || "";
-}
+import { methodLabel } from "../../../utils/sessionLabels.js";
 
 const isPhone = (session) => /^(Android|iOS)$/.test(session?.os || "");
 
@@ -44,7 +35,6 @@ export function ActiveSessionsSection({ variant = "desktop", now = () => Date.no
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
     // A device may have been signed out elsewhere since the list was drawn.
     const onFocus = () => load();

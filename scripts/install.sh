@@ -3504,6 +3504,9 @@ server {
   client_max_body_size ${MAX_UPLOAD_MB}m;
 ${ssl_block}
 
+  # Aurelle sends its own security headers (Content-Security-Policy, HSTS, X-Frame-Options, ...).
+  # Do not add_header them here: a second Content-Security-Policy is intersected with the app's
+  # and can blank the page. See docs/Security-Headers.md.
   location /api/events {
     proxy_pass http://127.0.0.1:${SERVER_PORT};
     proxy_http_version 1.1;
@@ -3543,6 +3546,9 @@ server {
 ${ssl_block}
 ${acme_block}
 
+  # Aurelle sends its own security headers (Content-Security-Policy, HSTS, X-Frame-Options, ...).
+  # Do not add_header them here: a second Content-Security-Policy is intersected with the app's
+  # and can blank the page. See docs/Security-Headers.md.
   location /api/events {
     proxy_pass http://127.0.0.1:${SERVER_PORT};
     proxy_http_version 1.1;

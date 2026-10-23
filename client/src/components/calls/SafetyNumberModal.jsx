@@ -101,7 +101,7 @@ export default function SafetyNumberModal({ open, onClose, selfUser, peer, chatI
         role="dialog"
         aria-modal="true"
         aria-labelledby="safety-number-title"
-        className="max-h-[calc(100dvh-3rem)] w-full max-w-sm overflow-y-auto rounded-2xl border border-slate-100 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-950"
+        className="flex max-h-[calc(100dvh-3rem)] w-full max-w-sm flex-col rounded-2xl border border-slate-100 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-950"
       >
         <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-300">
           <Lock size={18} />
@@ -109,93 +109,97 @@ export default function SafetyNumberModal({ open, onClose, selfUser, peer, chatI
             Verify security
           </h3>
         </div>
-        <p className={`mt-2 text-sm text-slate-600 dark:text-slate-300 ${hasPersian(peerName) ? "font-fa" : ""}`}>
-          Compare this number with {peerName} in person or over a channel you already trust. If it matches on both
-          screens, your calls and video messages cannot be intercepted.
-        </p>
-
-        {status.loading ? (
-          <div className="mt-6 flex justify-center text-emerald-500">
-            <LoaderCircle className="h-6 w-6 animate-spin" />
-          </div>
-        ) : status.error ? (
-          <p className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-600 dark:border-rose-500/30 dark:bg-rose-900/30 dark:text-rose-200">
-            {status.error}
+        {/* The middle scrolls on a short screen; the buttons below stay in view. */}
+        <div className="min-h-0 flex-1 overflow-y-auto pe-1">
+          <p className={`mt-2 text-sm text-slate-600 dark:text-slate-300 ${hasPersian(peerName) ? "font-fa" : ""}`}>
+            Compare this number with {peerName} in person or over a channel you already trust. If it matches on both
+            screens, your calls and video messages cannot be intercepted.
           </p>
-        ) : (
-          <>
-            {payload ? (
-              <div className="mt-4 flex flex-col items-center gap-2">
-                <div className="w-60 max-w-full rounded-xl border border-slate-200 bg-white shadow-xs dark:border-slate-600">
-                  <SafetyQrCode
-                    payload={payload}
-                    label={`Verification code (QR) for ${peerName}`}
-                    description={`Digits: ${status.groups.join(" ")}`}
-                  />
-                </div>
-                <p className={`text-center text-xs text-slate-500 dark:text-slate-400 ${hasPersian(peerName) ? "font-fa" : ""}`}>
-                  Let {peerName} scan this code, or scan theirs.
-                </p>
-              </div>
-            ) : null}
-            <div
-              dir="ltr"
-              className="mt-4 grid grid-cols-4 gap-x-3 gap-y-2 rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 text-center font-mono text-base font-semibold tracking-wider text-slate-800 dark:border-emerald-500/30 dark:bg-slate-900 dark:text-slate-100"
-              aria-label="Safety number"
-            >
-              {status.groups.map((group, index) => (
-                <span key={index}>{group}</span>
-              ))}
-            </div>
-            {status.pending > 0 ? (
-              <p
-                role="alert"
-                className="mt-3 flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-100"
-              >
-                <ShieldOff size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
-                <span>
-                  {status.wasVerified
-                    ? `${peerName}'s safety number changed because a new device was added. Compare the new number with them, then mark it as verified.`
-                    : `${peerName} has ${status.pending === 1 ? "a new device" : `${status.pending} new devices`} that you have not seen before. Calls and video messages stay cautious about them until you accept.`}
-                </span>
-              </p>
-            ) : null}
-            {status.pending === 0 && status.wasVerified && !status.verified ? (
-              <p
-                role="alert"
-                className="mt-3 flex items-start gap-2 rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-xs text-rose-800 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-100"
-              >
-                <ShieldOff size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
-                <span>
-                  The safety number changed since you verified it, because a device was added or removed. Compare the new number with {peerName}, then mark it as verified again.
-                </span>
-              </p>
-            ) : null}
-            {sas ? (
-              <p className="mt-3 text-center text-xs text-slate-500 dark:text-slate-400">
-                Current call code: <span className="text-base">{sas.join(" ")}</span>
-              </p>
-            ) : null}
-            <p
-              className={`mt-3 flex items-center gap-1.5 text-xs font-semibold ${
-                status.verified ? "text-emerald-600 dark:text-emerald-300" : "text-amber-600 dark:text-amber-300"
-              }`}
-            >
-              {status.verified ? <ShieldCheck size={14} /> : <ShieldOff size={14} />}
-              {status.verified ? "You verified this number." : "Not verified yet."}
-            </p>
-            <SafetyCompare
-              selfUserId={selfUser.id}
-              peerUserId={peer.userId}
-              digits={status.digits}
-              verified={status.verified}
-              onMarkVerified={() => setVerifiedTo(true)}
-              onMatchChange={setMatched}
-            />
-          </>
-        )}
 
-        <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+          {status.loading ? (
+            <div className="mt-6 flex justify-center text-emerald-500">
+              <LoaderCircle className="h-6 w-6 animate-spin" />
+            </div>
+          ) : status.error ? (
+            <p className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-600 dark:border-rose-500/30 dark:bg-rose-900/30 dark:text-rose-200">
+              {status.error}
+            </p>
+          ) : (
+            <>
+              {payload ? (
+                <div className="mt-4 flex flex-col items-center gap-2">
+                  <div className="w-[min(15rem,38dvh)] max-w-full rounded-xl border border-slate-200 bg-white shadow-xs dark:border-slate-600">
+                    <SafetyQrCode
+                      payload={payload}
+                      label={`Verification code (QR) for ${peerName}`}
+                      description={`Digits: ${status.groups.join(" ")}`}
+                    />
+                  </div>
+                  <p className={`text-center text-xs text-slate-500 dark:text-slate-400 ${hasPersian(peerName) ? "font-fa" : ""}`}>
+                    Let {peerName} scan this code, or scan theirs.
+                  </p>
+                </div>
+              ) : null}
+              <div
+                dir="ltr"
+                className="mt-4 grid grid-cols-4 gap-x-3 gap-y-2 rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 text-center font-mono text-base font-semibold tracking-wider text-slate-800 dark:border-emerald-500/30 dark:bg-slate-900 dark:text-slate-100"
+                aria-label="Safety number"
+              >
+                {status.groups.map((group, index) => (
+                  <span key={index}>{group}</span>
+                ))}
+              </div>
+              {status.pending > 0 ? (
+                <p
+                  role="alert"
+                  className="mt-3 flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-100"
+                >
+                  <ShieldOff size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
+                  <span>
+                    {status.wasVerified
+                      ? `${peerName}'s safety number changed because a new device was added. Compare the new number with them, then mark it as verified.`
+                      : `${peerName} has ${status.pending === 1 ? "a new device" : `${status.pending} new devices`} that you have not seen before. Calls and video messages stay cautious about them until you accept.`}
+                  </span>
+                </p>
+              ) : null}
+              {status.pending === 0 && status.wasVerified && !status.verified ? (
+                <p
+                  role="alert"
+                  className="mt-3 flex items-start gap-2 rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-xs text-rose-800 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-100"
+                >
+                  <ShieldOff size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
+                  <span>
+                    The safety number changed since you verified it, because a device was added or removed. Compare the new number with {peerName}, then mark it as verified again.
+                  </span>
+                </p>
+              ) : null}
+              {sas ? (
+                <p className="mt-3 text-center text-xs text-slate-500 dark:text-slate-400">
+                  Current call code: <span className="text-base">{sas.join(" ")}</span>
+                </p>
+              ) : null}
+              <p
+                className={`mt-3 flex items-center gap-1.5 text-xs font-semibold ${
+                  status.verified ? "text-emerald-600 dark:text-emerald-300" : "text-amber-600 dark:text-amber-300"
+                }`}
+              >
+                {status.verified ? <ShieldCheck size={14} /> : <ShieldOff size={14} />}
+                {status.verified ? "You verified this number." : "Not verified yet."}
+              </p>
+              <SafetyCompare
+                selfUserId={selfUser.id}
+                peerUserId={peer.userId}
+                digits={status.digits}
+                verified={status.verified}
+                onMarkVerified={() => setVerifiedTo(true)}
+                onMatchChange={setMatched}
+              />
+            </>
+          )}
+
+        </div>
+
+        <div className="mt-4 flex shrink-0 flex-wrap items-center justify-end gap-2">
           {!status.loading && !status.error && status.pending > 0 && !status.wasVerified ? (
             <button
               type="button"

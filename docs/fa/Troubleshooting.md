@@ -31,6 +31,7 @@
 | ویدیوها پخش نمیشوند | FFmpeg / ترنسکد / Worker | [مشکلات ترنسکد ویدیو](#video-transcoding-issues) |
 | بیلد Docker متوقف به نظر میرسد | دانلود وابستگی ها | [مشکلات بیلد Docker](#docker-build-issues) |
 | خطاهای TLS/گواهینامه | مسیرهای گواهینامه یا تمدید | [مشکلات TLS / گواهینامه](#tls--certificate-problems) |
+| صفحهٔ خالی، یا `Refused to ...` در کنسول مرورگر | Content-Security-Policy | [صفحهٔ خالی / Refused to load](#blank-page-refused-to-load-content-security-policy) |
 | خطای SSL / گواهی CA پایگاه داده PostgreSQL | گواهی SSL / CA دیتابیس ابری | [خطاهای SSL و گواهی CA در PostgreSQL](#postgresql-ssl--ca-certificate-errors) |
 | تماس روی «Connecting» می‌ماند یا شکست می‌خورد | نبودن رله / فایروال | [تماس برقرار نمی‌شود](#calls-not-connecting) |
 | کانال ریموت بازتاب نمیدهد | اعتبارنامه های Telegram / صف | [کانال ریموت](#remote-channel-not-mirroring) |
@@ -201,6 +202,19 @@ docker compose -f docker-compose.yaml build --no-cache --progress=plain
 | هشدار خودامضا (پیشفرض Docker) | با گواهینامه خودامضای پیشفرض موردانتظار است. برای محیط تولید با گواهینامه های واقعی جایگزین کنید. |
 
 برای گزینه های کامل راه اندازی به [گواهینامه های SSL](./SSL-Certificates.md) مراجعه کنید.
+
+## صفحهٔ خالی / «Refused to load» (Content-Security-Policy) {#blank-page-refused-to-load-content-security-policy}
+
+Aurelle با هر صفحه یک Content-Security-Policy سخت‌گیرانه می‌فرستد. اگر صفحه خالی می‌ماند، یا تصویر، ویدیو و آپلود از ذخیره‌سازی ابری یا CDN شما کار نمی‌کند، کنسول مرورگر را باز کنید (`F12`). خطی مثل `Refused to load the image '...' because it violates the following Content Security Policy directive` می‌گوید سیاست چه چیزی را مسدود کرده است.
+
+| بررسی | چه کنید |
+|---|---|
+| فایل‌ها از باکت یا CDN می‌آیند | origin های `STORAGE_ENDPOINT` و `STORAGE_PUBLIC_URL` خودکار مجاز می‌شوند؛ هر میزبان دیگر را در `CSP_EXTRA_SOURCES` (با ویرگول جدا) بنویسید. |
+| همین الان صفحه را لازم دارید | در `.env` مقدار `CSP_MODE=report-only` (یا `off`) بگذارید و ری‌استارت کنید. چیزی مسدود نمی‌شود و کنسول نشان می‌دهد چه چیزی مسدود می‌شد. بعد علت را درست کنید و به `enforce` برگردید. |
+| دو هدر `Content-Security-Policy` در `curl -sI` | Nginx یا CDN شما یکی کنار هدر Aurelle اضافه می‌کند؛ مرورگر هر دو را اعمال می‌کند و سخت‌گیرانه‌تر برنده است. آن را در Nginx/CDN بردارید. |
+| `Refused to execute inline script` | یکی از قابلیت‌های پراکسی (Rocket Loader، Web Analytics، Email Obfuscation در Cloudflare) اسکریپت تزریق می‌کند. آن را برای نام میزبان Aurelle خاموش کنید. |
+
+جزئیات کامل: [هدرهای امنیتی](./Security-Headers.md).
 
 ## خطاهای SSL و گواهی CA در PostgreSQL {#postgresql-ssl--ca-certificate-errors}
 

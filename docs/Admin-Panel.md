@@ -85,9 +85,10 @@ Manage all users in your Aurelle instance:
 - **Create Users**: Create new accounts with username, nickname, password
 - **Edit Users**: 
   - Update username, nickname, avatar
-  - Reset password inline
+  - Reset password inline (signs the user out everywhere)
+  - **Reset two-factor** for a user who lost their authenticator and recovery codes (signs the user out everywhere; recorded in the audit log as `user.reset_2fa`). A key icon next to a name shows who has [two-factor authentication](./Account-Security.md) on. An admin cannot reset the owner's.
   - Change user role (admin/user)
-  - Ban/unban users
+  - Ban/unban users (banning ends all of the user's sessions and closes their live connections at once)
 - **Delete Users**: Permanently remove user accounts
 - **Search & Filter**: Searching and filtering across the entire users dataset
 

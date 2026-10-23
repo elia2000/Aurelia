@@ -147,8 +147,9 @@ export function applyTrustEvent(list, event, { now, newId = defaultId }) {
     }
   }
 
-  // A person's very first device is not a change: there was nothing to compare with.
-  if (event.status === TRUST.DEVICES_ADDED && added.length && Number(event.known) > 0) {
+  // Also a contact's first device after we pinned them with none: the trust model asks the
+  // person to accept it like any other new device (calls warn about it), so the chat says so too.
+  if (event.status === TRUST.DEVICES_ADDED && added.length) {
     const key = added.slice(0, MAX_DEVICE_IDS);
     const seen = next.find((n) => n.kind === NOTICE_KIND.ADDED && sameIds(n.deviceIds, key));
     if (!seen) {

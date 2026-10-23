@@ -32,7 +32,7 @@ Everything here works in the browser and in the installed PWA. The protocol is d
 1. Open a **direct chat** and press the phone (voice) or camera (video) button in the header.
 2. The other person gets an incoming-call screen (and a push notification if the app is closed).
 3. Once connected, both screens show the same **four emoji**. Ask each other to read them out: if they match, nobody is intercepting the call.
-4. Tap the lock badge to open the **safety number**. If the numbers match on both phones, press *Mark as verified*. That contact is then remembered as verified on this device until their devices change. You do not need a call for this: the shield button in the header of a direct chat opens the same screen.
+4. Tap the lock badge to open the **safety number**. If the numbers match on both phones, press *Mark as verified*. That contact is then remembered as verified on this device until their devices change. You do not need a call for this: the shield button in the header of a direct chat opens the same screen. Instead of reading 60 digits you can [scan each other's QR code](#verifying-with-a-qr-code).
 
 While you call, the screen tells you where things stand:
 
@@ -221,6 +221,22 @@ A video message can only be opened by devices that existed when it was sent. A p
 
 :::
 
+### Verifying with a QR code {#verifying-with-a-qr-code}
+
+The safety number screen (the shield in the header of a direct chat, or the lock badge in a call) shows the number as 60 digits **and as a QR code**. When you meet, each of you opens the screen:
+
+1. Press **Scan their code** (it is shown only in browsers that can read QR codes, which today means most Chromium-based browsers and Safari, not Firefox) and point the camera at the other person's code. Allow the camera when the browser asks; the rear camera is used if there is one.
+2. The screen tells you the result:
+   - **Safety number matches**: the same number is on both screens. Press **Mark as verified** to remember it. Nothing is verified until you press the button.
+   - **This code is for a different person**: the code belongs to somebody else, or to another pair of people.
+   - **The numbers do not match - do not trust this contact**: the code is the right person's, but the number differs. Do not rely on this contact until you have found out why (a device was just added on one side, or somebody is in the middle). Open the screen again to reload the numbers and compare the digits.
+   - *This is not an Aurelle safety number code*, *different version of Aurelle* and *This is your own code* explain themselves.
+3. Where the browser cannot scan, the screen says *Scanning is not supported in this browser - compare the number or the emoji instead*. **Type their number** also lets you type or paste the 60 digits (or a whole code) from a message you trust and compares them for you.
+
+The camera is switched off as soon as a code is read, when you press **Stop scanning** and when you close the screen. Nothing you scan leaves your device. The code contains only what the screen already shows (both user ids and the 60 digits), so it is no secret; its format is in the [protocol notes](./E2EE-Protocol.md#safety-number-qr-code).
+
+The shield in the header shows where each contact stands: **plain** (not verified yet), **green with a check** (verified) or **red** (changed: a new device you have not accepted, or a number that no longer matches the one you verified).
+
 ### When a contact gets a new device
 
 A safety number covers **all** of a person's devices, so a new device changes it. Aurelle never accepts a new device silently:
@@ -231,6 +247,21 @@ A safety number covers **all** of a person's devices, so a new device changes it
 - This applies to **your own account** too: a browser you signed in on later is mentioned once, the first time you send from another device.
 
 Someone who clears their browser data or uses private windows registers new devices. Old ones are retired automatically once a person has 20, so nobody gets locked out.
+
+#### Notices in the chat {#key-change-notices}
+
+You do not have to be in a call to hear about it. A direct chat shows a centered line, like "Ada joined the group" does, at the moment the change was noticed:
+
+| You see | Meaning |
+|---|---|
+| **Alice added a new device. Verify the safety number** (amber, *Verify* button) | A contact you have not verified has a device you have not seen. *Verify* opens the safety number screen. |
+| **Safety number changed** (red, *Verify* button) | A contact you **verified** has a new device. It stays blocked (no video messages to it, no calls from it) until you compare the new number and verify it again. |
+| **Alice removed a device. Verify the safety number** (amber, or red for a verified contact) | A device was retired, which also changes the number. Nothing is blocked; the line can be dismissed. |
+| **Alice's security keys changed unexpectedly** (red) | A device you know shows different keys. Calls and video messages are blocked. Check with them in person. |
+
+When you accept the device or verify the new number the line becomes a quiet note ("You verified Alice's new safety number") that you can dismiss with the **×**. A line about a blocked device or conflicting keys cannot be dismissed until it is dealt with. There is one line per change, however often the contact is looked up.
+
+These lines are made **on your device** from what it sees: nothing is sent to or kept on the server, they are not messages (not counted as unread, not selectable or forwardable, not in search, not in the chat list preview) and they are remembered only in this browser, so they are gone if you clear its data. An open chat looks the contact up when it opens, when the window comes back to the front and every two minutes, because the server does not announce new devices. The header shield and the call screen's warning follow the same state.
 
 ## Setting up the relay
 

@@ -479,6 +479,8 @@ describe("Dual Database Driver Regression Tests (SQLite & Postgres)", () => {
         Promise.resolve({
           id: 7,
           username: "banneduser",
+          // The ban is only reported to somebody who knows the password.
+          password_hash: bcrypt.hashSync("password123", 4),
           banned: true,
         }),
       );
@@ -639,7 +641,7 @@ describe("Dual Database Driver Regression Tests (SQLite & Postgres)", () => {
           .send({ username: "testuser", password: "password123" });
 
         // createSession was called with undefined userId, catching the bug/failure
-        expect(createSessionSpy).toHaveBeenCalledWith(undefined, expect.any(String));
+        expect(createSessionSpy).toHaveBeenCalledWith(undefined, expect.any(String), expect.any(Object));
 
         // Case B: createUser returns valid numeric ID
         createSessionSpy.mockClear();
@@ -656,7 +658,7 @@ describe("Dual Database Driver Regression Tests (SQLite & Postgres)", () => {
           .send({ username: "validuser", password: "password123" });
 
         expect(resValid.status).toBe(200);
-        expect(createSessionSpy).toHaveBeenCalledWith(101, expect.any(String));
+        expect(createSessionSpy).toHaveBeenCalledWith(101, expect.any(String), expect.any(Object));
       });
 
       test("POST /api/login handles undefined user.id gracefully or passes valid non-undefined bindings to createSession", async () => {
@@ -687,7 +689,7 @@ describe("Dual Database Driver Regression Tests (SQLite & Postgres)", () => {
           .post("/api/login")
           .send({ username: "noiduser", password: "password123" });
 
-        expect(createSessionSpy).toHaveBeenCalledWith(undefined, expect.any(String));
+        expect(createSessionSpy).toHaveBeenCalledWith(undefined, expect.any(String), expect.any(Object));
 
         // Case B: findUserByUsername returns user with valid id
         createSessionSpy.mockClear();
@@ -709,7 +711,7 @@ describe("Dual Database Driver Regression Tests (SQLite & Postgres)", () => {
           .send({ username: "valididuser", password: "password123" });
 
         expect(resValid.status).toBe(200);
-        expect(createSessionSpy).toHaveBeenCalledWith(55, expect.any(String));
+        expect(createSessionSpy).toHaveBeenCalledWith(55, expect.any(String), expect.any(Object));
       });
     });
 

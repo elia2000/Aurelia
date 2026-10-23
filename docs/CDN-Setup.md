@@ -79,11 +79,11 @@ If you used the deployment script or Certbot for SSL, you already have a valid c
 
 :::
 
-### 5. Preserve real visitor IPs in Nginx (optional)
+### 5. Preserve real visitor IPs in Nginx (recommended)
 
-When traffic comes through Cloudflare, the IP your server sees at the Nginx layer is a Cloudflare edge IP, not the visitor's real IP. However, **Aurelle's Node.js server already handles this correctly** — it has `app.set('trust proxy', 1)` configured, which tells Express to read the real client IP from the `X-Forwarded-For` header that Cloudflare always sends. This means rate limiting and all IP-aware logic in Aurelle work correctly behind a CDN without any extra Nginx configuration.
+When traffic comes through Cloudflare, the IP your server sees at the Nginx layer is a Cloudflare edge IP, not the visitor's real IP. Aurelle's Node.js server runs with `app.set('trust proxy', 1)`, which makes Express use the **last** entry of the `X-Forwarded-For` header: the address Nginx saw connecting. Behind Cloudflare, and without this step, that is the Cloudflare edge address. Rate limiting, the limit on wrong sign-in attempts and [Fail2ban](./Fail2ban.md) then treat all visitors behind the same edge as one client, and the Nginx access log shows Cloudflare addresses too.
 
-The only thing you lose without this step is accurate IPs in your **Nginx access logs**. If that matters to you, add the following inside the `server {}` block in your Nginx config:
+Add the following inside the `server {}` block in your Nginx config (or, so that it survives running the installer again, in a file under `/etc/nginx/conf.d/`, where it applies to every site):
 
 ```nginx
 # Trust Cloudflare's IP ranges and read the real client IP from the header.
@@ -122,6 +122,12 @@ sudo systemctl reload nginx
 :::info
 
 Cloudflare periodically updates its IP ranges. The canonical up-to-date list is at [cloudflare.com/ips](https://www.cloudflare.com/ips/).
+
+:::
+
+:::warning Do not let the CDN add its own Content-Security-Policy
+
+Aurelle already sends a strict `Content-Security-Policy` (and the other [security headers](./Security-Headers.md)). A second one from the CDN is enforced *together* with it and can blank the page. In Cloudflare keep *Transform Rules → Modify Response Header* and *Managed Transforms → Add security headers* from setting a `Content-Security-Policy` for the Aurelle hostname, and turn off *Rocket Loader*, *Email Address Obfuscation* and *Auto Minify* for HTML: they inject inline script, which the policy blocks.
 
 :::
 

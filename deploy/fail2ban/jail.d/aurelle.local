@@ -1,0 +1,92 @@
+# fail2ban jails for an Aurelle host. Copy to /etc/fail2ban/jail.d/aurelle.local,
+# turn on what you use (enabled = true) and read docs/Fail2ban.md first.
+#
+# Before enabling a jail, check that the address it will ban is the visitor's, not
+# your proxy's or your CDN's: banning a CDN or reverse-proxy address locks everybody out.
+
+[DEFAULT]
+# Never ban yourself or your own infrastructure. Add your office / VPN addresses.
+ignoreip = 127.0.0.1/8 ::1
+
+# Ban longer every time the same address comes back.
+bantime.increment = true
+bantime.factor    = 2
+bantime.maxtime   = 1w
+
+# ---------------------------------------------------------------------------
+# Failed sign-ins. The server logs one line per wrong password or wrong 2FA code
+# and then blocks the address+account for 15 minutes itself; this jail adds a
+# firewall ban for the ones that keep coming back.
+# ---------------------------------------------------------------------------
+
+# Installer / manual install with systemd (unit songbird.service).
+[aurelle-auth]
+enabled  = true
+filter   = aurelle-auth
+backend  = systemd
+journalmatch = _SYSTEMD_UNIT=songbird.service
+port     = http,https
+maxretry = 6
+findtime = 15m
+bantime  = 1h
+
+# Docker Compose install: the app's output is in the container's JSON log.
+# `*` matches every container; only lines with `[auth] auth_failed` count.
+# Published Docker ports skip the INPUT chain, so ban in DOCKER-USER.
+[aurelle-auth-docker]
+enabled  = false
+filter   = aurelle-auth
+backend  = auto
+logpath  = /var/lib/docker/containers/*/*-json.log
+port     = http,https
+chain    = DOCKER-USER
+maxretry = 6
+findtime = 15m
+bantime  = 1h
+
+# ---------------------------------------------------------------------------
+# nginx: a flood of error responses (400 403 404 405 408 414 429).
+# Only with nginx writing the real visitor address (not behind a CDN unless the
+# real IP module is configured).
+# ---------------------------------------------------------------------------
+[aurelle-nginx-4xx]
+enabled  = false
+filter   = aurelle-nginx-4xx
+backend  = auto
+logpath  = /var/log/nginx/access.log
+port     = http,https
+maxretry = 200
+findtime = 1m
+bantime  = 1h
+
+# nginx limit_req: needs limit_req_zone / limit_req in your nginx config (the
+# installer does not add them; docs/Fail2ban.md has a snippet). Uses the filter
+# that ships with fail2ban.
+[aurelle-nginx-limit-req]
+enabled  = false
+filter   = nginx-limit-req
+backend  = auto
+logpath  = /var/log/nginx/error.log
+port     = http,https
+maxretry = 30
+findtime = 1m
+bantime  = 1h
+
+# ---------------------------------------------------------------------------
+# coturn: a client that opens an unusual number of TURN sessions. Needs `verbose`
+# in turnserver.conf (the installer's file has `syslog` but not `verbose`) and
+# applies to the TURN ports only. UDP source addresses can be forged, so keep the
+# ban to the TURN ports and the limit high. Change the ports if you changed
+# CALLS_TURN_PORT / the TLS port.
+# ---------------------------------------------------------------------------
+[aurelle-coturn]
+enabled  = false
+filter   = aurelle-coturn
+backend  = systemd
+journalmatch = _SYSTEMD_UNIT=coturn.service
+# One ban rule for UDP and one for TCP, on the TURN ports only.
+action   = %(banaction)s[name=%(__name__)s-udp, port="3478,5349", protocol="udp"]
+           %(banaction)s[name=%(__name__)s-tcp, port="3478,5349", protocol="tcp"]
+maxretry = 60
+findtime = 1m
+bantime  = 30m

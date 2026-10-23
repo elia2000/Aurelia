@@ -18,6 +18,12 @@ Aurelle هم فرانت‌اند ساخته‌شده و هم API را از سر�
 
 :::
 
+:::warning در اینجا هدر امنیتی اضافه نکنید
+
+Aurelle خودش `Content-Security-Policy`، `Strict-Transport-Security`، `X-Frame-Options`، `X-Content-Type-Options`، `Referrer-Policy` و `Permissions-Policy` را می‌فرستد ([هدرهای امنیتی](./Security-Headers.md)). همین هدرها را با `add_header` در این بلوک‌ها **اضافه نکنید**: مرورگر دو هدر `Content-Security-Policy` را با هم اعمال می‌کند، سخت‌گیرانه‌تر برنده است و برنامه ممکن است صفحهٔ خالی شود. Nginx هدرهای برنامه را بدون تغییر عبور می‌دهد.
+
+:::
+
 ## فقط HTTP
 
 اگر هنوز SSL را فعال نمی‌کنید از این استفاده کنید:

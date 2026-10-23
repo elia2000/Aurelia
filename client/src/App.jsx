@@ -836,7 +836,6 @@ export default function App() {
     }
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userState])
 
   function navigate(path, replace = false) {
@@ -1102,7 +1101,7 @@ export default function App() {
                   {...(twoFactor
                     ? {
                         title: 'Two-step verification',
-                        subtitle: 'Your account asks for a second proof that it is you.',
+                        subtitle: 'Second step',
                       }
                     : {})}
                 >

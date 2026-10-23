@@ -79,11 +79,11 @@ Cloudflare این پورت‌های HTTPS را در پلن رایگان پروک
 
 :::
 
-### ۵. حفظ IP واقعی بازدیدکنندگان در Nginx (اختیاری)
+### ۵. حفظ IP واقعی بازدیدکنندگان در Nginx (توصیه‌شده)
 
-وقتی ترافیک از طریق Cloudflare می‌آید، IP‌ای که Nginx می‌بیند یک IP edge Cloudflare است، نه IP واقعی بازدیدکننده. اما **سرور Node.js در Aurelle این موضوع را خودش به درستی مدیریت می‌کند** — تنظیم `app.set('trust proxy', 1)` در آن وجود دارد که به Express می‌گوید IP واقعی کلاینت را از هدر `X-Forwarded-For` بخواند؛ هدری که Cloudflare همیشه ارسال می‌کند. یعنی rate limiting و تمام منطق IP-aware در Aurelle بدون هیچ پیکربندی اضافه‌ای در Nginx، پشت CDN به درستی کار می‌کنند.
+وقتی ترافیک از طریق Cloudflare می‌آید، IP‌ای که Nginx می‌بیند یک IP edge Cloudflare است، نه IP واقعی بازدیدکننده. سرور Node.js در Aurelle با `app.set('trust proxy', 1)` اجرا می‌شود؛ یعنی Express **آخرین** مقدار هدر `X-Forwarded-For` را برمی‌دارد: آدرسی که Nginx دیده است. پشت Cloudflare و بدون این مرحله، آن آدرس همان edge Cloudflare است. در نتیجه rate limiting، محدودیت تلاش‌های ناموفق ورود و [Fail2ban](./Fail2ban.md) همه بازدیدکنندگانِ پشت یک edge را یک کلاینت حساب می‌کنند و لاگ دسترسی Nginx هم آدرس‌های Cloudflare را نشان می‌دهد.
 
-تنها چیزی که بدون این مرحله از دست می‌دهید، IPهای دقیق در **لاگ‌های دسترسی Nginx** است. اگر این برای شما مهم است، موارد زیر را داخل بلوک `server {}` در کانفیگ Nginx اضافه کنید:
+موارد زیر را داخل بلوک `server {}` در کانفیگ Nginx اضافه کنید (یا برای اینکه با اجرای دوباره نصاب از بین نرود، در یک فایل زیر `/etc/nginx/conf.d/` که برای همه سایت‌ها اعمال می‌شود):
 
 ```nginx
 # اعتماد به محدوده‌های IP Cloudflare و خواندن IP واقعی کلاینت از هدر.
@@ -122,6 +122,12 @@ sudo systemctl reload nginx
 :::info
 
 Cloudflare به‌صورت دوره‌ای محدوده‌های IP خود را به‌روز می‌کند. لیست کامل و به‌روز در [cloudflare.com/ips](https://www.cloudflare.com/ips/) موجود است.
+
+:::
+
+:::warning اجازه ندهید CDN سیاست Content-Security-Policy خودش را اضافه کند
+
+Aurelle از قبل یک `Content-Security-Policy` سخت‌گیرانه (و [هدرهای امنیتی](./Security-Headers.md) دیگر) می‌فرستد. دومی از سمت CDN *همراه* آن اعمال می‌شود و می‌تواند صفحه را خالی کند. در Cloudflare نگذارید *Transform Rules → Modify Response Header* و *Managed Transforms → Add security headers* برای نام میزبان Aurelle یک `Content-Security-Policy` تنظیم کنند، و *Rocket Loader*، *Email Address Obfuscation* و *Auto Minify* برای HTML را خاموش کنید: این‌ها اسکریپت درون‌خطی تزریق می‌کنند که سیاست مسدودش می‌کند.
 
 :::
 

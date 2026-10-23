@@ -111,6 +111,11 @@ add("dark", "call-chip", 4.5, A(200), [CALL_CHIP, CALL_CHIP_BRIGHT], "the encryp
 // Fixed colours (not the accent), listed so that nobody lightens the banner without the table noticing.
 add("dark", "sharing-banner", 4.5, ["#fff1f2", "#ffe4e6"], [SHARING_BANNER, SHARING_BANNER_BRIGHT], "the screen-sharing banner (rose-50 and rose-100 text) over a video, a dark one or the brightest frame");
 add("dark", "sharing-banner-stop", 4.5, WHITE, "#e11d48", "the white label of the banner's Stop sharing button (rose-600)");
+// The key-change notices of a direct chat are drawn with fixed amber and rose (opaque, so a bright wallpaper cannot wash them out).
+add("light", "key-notice-warning", 4.5, "#78350f", "#fffbeb", "the amber notice \"a contact added a new device\" (amber-900 on amber-50)");
+add("light", "key-notice-danger", 4.5, "#881337", "#fff1f2", "the red notice \"Safety number changed\" (rose-900 on rose-50)");
+add("dark", "key-notice-warning", 4.5, "#fef3c7", "#451a03", "the amber notice in dark mode (amber-100 on amber-950)");
+add("dark", "key-notice-danger", 4.5, "#ffe4e6", ROSE_950, "the red notice in dark mode (rose-100 on rose-950)");
 
 export const AUDIT_PAIRS = Object.freeze(PAIRS.map((pair) => Object.freeze(pair)));
 

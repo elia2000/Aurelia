@@ -58,9 +58,15 @@ describe("applyTrustEvent", () => {
     expect(applyTrustEvent(start, assessed(), ctx())).toBe(start);
   });
 
-  test("a person's very first device is not a change", () => {
+  test("seeing a person for the first time pins what they have: no line", () => {
     const start = [];
-    expect(applyTrustEvent(start, addedEvent([D1], { known: 0 }), ctx())).toBe(start);
+    expect(applyTrustEvent(start, assessed({ status: TRUST.NEW, known: 0, listed: [D1] }), ctx())).toBe(start);
+  });
+
+  test("a device that appears for a contact pinned with none is a new device like any other", () => {
+    const list = applyTrustEvent([], addedEvent([D1], { known: 0, listed: [D1] }), ctx());
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ kind: K.ADDED, state: S.OPEN, deviceIds: [D1] });
   });
 
   test("an added device makes one open line, however often it is reported", () => {

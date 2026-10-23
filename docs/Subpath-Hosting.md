@@ -40,7 +40,7 @@ npm run build
 
 ## 2. Check asset references in `index.html`
 
-`client/index.html` references icons and the manifest with absolute paths such as `/favicon.ico` and `/manifest.webmanifest`. With a Vite `base` set, asset URLs emitted by the bundler are rewritten automatically, but hardcoded absolute paths in `index.html` are not. Confirm these resolve correctly under your subpath, and adjust them to be relative or subpath-prefixed if your icons or manifest 404 after deploying.
+`client/index.html` references icons and the manifest with absolute paths such as `/favicon.ico` and `/manifest.webmanifest`. With a Vite `base` set, asset URLs emitted by the bundler are rewritten automatically, but hardcoded absolute paths in `index.html` are not. Confirm these resolve correctly under your subpath, and adjust them to be relative or subpath-prefixed if your icons or manifest 404 after deploying. The same goes for `<script src="/theme-init.js">`, the small blocking script that applies the dark theme before the first paint (it is a file, not inline code, because of the [Content-Security-Policy](./Security-Headers.md)): without the subpath prefix it 404s and dark-theme users see a white flash on load.
 
 ## 3. Add the Nginx location block
 

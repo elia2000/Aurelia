@@ -18,6 +18,12 @@ When `STORAGE_DRIVER=remote` is active, file uploads stream directly from the br
 
 :::
 
+:::warning Do not add security headers here
+
+Aurelle sends its own `Content-Security-Policy`, `Strict-Transport-Security`, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy` and `Permissions-Policy` (see [Security Headers](./Security-Headers.md)). Do **not** add the same headers with `add_header` in these blocks: a browser enforces two `Content-Security-Policy` headers together, the stricter wins, and the app can end up on a blank page. Nginx passes the app's headers through untouched.
+
+:::
+
 ## HTTP only
 
 Use this if you are not enabling SSL yet:

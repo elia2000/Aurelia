@@ -11,13 +11,13 @@ const TONE = {
       "border-emerald-200 bg-white text-emerald-700 hover:border-emerald-300 dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-200",
   },
   warning: {
-    box: "rounded-2xl border border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-100",
+    box: "rounded-2xl border border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-400/40 dark:bg-amber-950 dark:text-amber-100",
     icon: "text-amber-600 dark:text-amber-300",
     button:
       "border-amber-300 bg-white text-amber-900 hover:border-amber-400 dark:border-amber-400/40 dark:bg-slate-950 dark:text-amber-100",
   },
   danger: {
-    box: "rounded-2xl border border-rose-300 border-s-4 border-s-rose-500 bg-rose-50 text-rose-900 dark:border-rose-500/40 dark:border-s-rose-400 dark:bg-rose-500/10 dark:text-rose-100",
+    box: "rounded-2xl border border-rose-300 border-s-4 border-s-rose-500 bg-rose-50 text-rose-900 dark:border-rose-500/40 dark:border-s-rose-400 dark:bg-rose-950 dark:text-rose-100",
     icon: "text-rose-600 dark:text-rose-300",
     button:
       "border-rose-300 bg-white text-rose-800 hover:border-rose-400 dark:border-rose-400/40 dark:bg-slate-950 dark:text-rose-100",

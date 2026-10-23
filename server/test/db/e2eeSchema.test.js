@@ -28,6 +28,8 @@ describe("E2EE schema (migrations 042 and 043)", () => {
         "label",
         "last_seen_at",
         "revoked_at",
+        // which sign-in registered the device (migration 050), so signing that session out can retire it
+        "session_public_id",
         "user_id",
       ].sort(),
     );

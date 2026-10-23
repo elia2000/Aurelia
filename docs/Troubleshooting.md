@@ -31,6 +31,7 @@ The [deployment script](./Deployment-Script.md) has a built-in **View Logs** men
 | Videos not playing | ffmpeg / transcoding | [Video transcoding](#video-transcoding-issues) |
 | Docker build seems stuck | Dependency download | [Docker build issues](#docker-build-issues) |
 | TLS/certificate errors | Cert paths or renewal | [TLS / certificate problems](#tls--certificate-problems) |
+| Blank page, or `Refused to ...` in the browser console | Content-Security-Policy | [Blank page / Refused to load](#blank-page-refused-to-load-content-security-policy) |
 | PostgreSQL SSL / CA error | Cloud DB SSL / CA cert | [PostgreSQL SSL & CA errors](#postgresql-ssl--ca-certificate-errors) |
 | Calls stay on "Connecting" or fail | No relay / firewall | [Calls not connecting](#calls-not-connecting) |
 | Remote Channel not mirroring | Telegram creds / queue | [Remote Channel](#remote-channel-not-mirroring) |
@@ -214,6 +215,19 @@ Other checks:
 | Self-signed warning (Docker default) | Expected with the default self-signed cert. Replace with real certs for production. |
 
 See [SSL Certificates](./SSL-Certificates.md) for the full setup options.
+
+## Blank page / "Refused to load" (Content-Security-Policy)
+
+Aurelle sends a strict Content-Security-Policy with every page. If the page stays blank, or pictures, videos or uploads from your object storage or CDN do not work, open the browser console (`F12`). A line such as `Refused to load the image '...' because it violates the following Content Security Policy directive` names what the policy blocked.
+
+| Check | What to do |
+|---|---|
+| Files come from a bucket or CDN | The origins of `STORAGE_ENDPOINT` and `STORAGE_PUBLIC_URL` are allowed automatically; list any other host in `CSP_EXTRA_SOURCES` (comma-separated). |
+| Need the page back right now | Set `CSP_MODE=report-only` (or `off`) in `.env` and restart. Nothing is blocked, and the console shows what would have been. Then fix the cause and return to `enforce`. |
+| Two `Content-Security-Policy` headers in `curl -sI` | Nginx or your CDN adds one next to Aurelle's; browsers apply both and the stricter wins. Remove the one in Nginx/CDN. |
+| `Refused to execute inline script` | A proxy feature (Cloudflare Rocket Loader, Web Analytics, Email Obfuscation) injects script. Turn it off for the Aurelle hostname. |
+
+Full details: [Security Headers](./Security-Headers.md).
 
 ## PostgreSQL SSL & CA certificate errors
 

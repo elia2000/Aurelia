@@ -9,6 +9,7 @@ import {
 } from "../../../api/securityApi.js";
 import { copyTextToClipboard } from "../../../utils/clipboard.js";
 import { formatShortDate } from "../../../utils/relativeTime.js";
+import { groupSecret } from "../../../utils/sessionLabels.js";
 import SafetyQrCode from "../../calls/SafetyQrCode.jsx";
 import { InlineError } from "../common/InlineError.jsx";
 
@@ -20,11 +21,6 @@ const quietButton =
   "inline-flex items-center justify-center gap-2 rounded-full border border-emerald-200 bg-white px-4 py-2 text-xs font-semibold text-emerald-700 transition duration-150 hover:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-200";
 const dangerButton =
   "inline-flex items-center justify-center gap-2 rounded-full border border-rose-200 bg-rose-50 px-4 py-2 text-xs font-semibold text-rose-600 transition duration-150 hover:border-rose-300 hover:shadow-[0_0_14px_rgba(244,63,94,0.2)] disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-500/30 dark:bg-rose-900/40 dark:text-rose-200";
-
-/** "JBSW Y3DP EHPK 3PXP ..." - the key as people copy it by eye. */
-export function groupSecret(secret) {
-  return String(secret || "").replace(/\s+/g, "").replace(/(.{4})/g, "$1 ").trim();
-}
 
 function Field({ id, label, children, hint }) {
   return (
@@ -190,7 +186,6 @@ export function TwoFactorSection({ variant = "desktop" }) {
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load]);
 
