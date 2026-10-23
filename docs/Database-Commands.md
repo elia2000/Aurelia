@@ -61,6 +61,7 @@ Do not run individual scripts with `sudo node` or `sudo npm`. Those direct invoc
 | [`npm run db:user:generate`](#db-user-generate) | Generate random test users. |
 | [`npm run db:user:edit`](#db-user-edit) | Edit a user profile. |
 | [`npm run db:user:ban`](#db-user-ban) | Toggle a user's ban state. |
+| [`npm run db:user:reset-2fa`](#db-user-reset-2fa) | Turn off a user's two-factor sign-in (lost phone and recovery codes). |
 | [`npm run db:user:verify`](#db-user-verify) | Toggle a user's verified status. |
 | [`npm run db:user:delete`](#db-user-delete) | Delete one, many, or all users. |
 | [`npm run db:chat:create`](#db-chat-create) | Create a group or channel (optionally a Remote Channel). |
@@ -308,6 +309,19 @@ Toggles a user's ban state. Running it again unbans. Banning also expires all of
 npm run db:user:ban -- songbird.sage
 # run again to unban:
 npm run db:user:ban -- songbird.sage
+```
+
+### `db:user:reset-2fa`
+
+Turns off two-factor sign-in for a user who lost both their authenticator and their recovery codes: the secret and the recovery codes are removed and every session of the user ends, so they sign in with the password alone and can turn 2FA on again. This is the way back in for the **owner**, whom no admin can reset from the panel. See [Account security](./Account-Security.md).
+
+| Argument / Flag | Required | Description |
+|---|---|---|
+| `<user-id-or-username>` | Yes | The user whose two-factor sign-in to turn off. |
+| `-y`, `--yes` | No | Skip the confirmation prompt. |
+
+```bash
+npm run db:user:reset-2fa -- songbird.sage
 ```
 
 ### `db:user:verify`

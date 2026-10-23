@@ -61,6 +61,7 @@ cd /opt/songbird/server
 | [`npm run db:user:generate`](#db-user-generate) | تولید کاربران آزمایشی تصادفی. |
 | [`npm run db:user:edit`](#db-user-edit) | ویرایش پروفایل یک کاربر. |
 | [`npm run db:user:ban`](#db-user-ban) | تغییر وضعیت مسدودیت یک کاربر. |
+| [`npm run db:user:reset-2fa`](#db-user-reset-2fa) | خاموش‌کردن ورود دومرحله‌ای یک کاربر (گم‌شدن گوشی و کدهای بازیابی). |
 | [`npm run db:user:verify`](#db-user-verify) | تغییر وضعیت تأییدشده بودن یک کاربر. |
 | [`npm run db:user:delete`](#db-user-delete) | حذف یک، چند یا همه کاربران. |
 | [`npm run db:chat:create`](#db-chat-create) | ایجاد یک گروه یا کانال (بهصورت اختیاری یک کانال ریموت). |
@@ -306,6 +307,19 @@ npm run db:user:edit -- 1 --username songbird.admin --status invisible
 npm run db:user:ban -- songbird.sage
 # run again to unban:
 npm run db:user:ban -- songbird.sage
+```
+
+### `db:user:reset-2fa`
+
+ورود دومرحله‌ای را برای کاربری که هم برنامه‌ی احراز هویت و هم کدهای بازیابی‌اش را گم کرده خاموش می‌کند: راز و کدهای بازیابی حذف می‌شوند و همه‌ی نشست‌های کاربر پایان می‌یابد؛ پس او فقط با گذرواژه وارد می‌شود و می‌تواند دوباره 2FA را روشن کند. این راه بازگشت برای **مالک** است که هیچ مدیری نمی‌تواند از پنل او را بازنشانی کند. [امنیت حساب](./Account-Security.md) را ببینید.
+
+| آرگومان / پرچم | موردنیاز | توضیح |
+|---|---|---|
+| `<user-id-or-username>` | بله | کاربری که ورود دومرحله‌ایش باید خاموش شود. |
+| `-y`، `--yes` | خیر | رد شدن از پرسش تأیید. |
+
+```bash
+npm run db:user:reset-2fa -- songbird.sage
 ```
 
 ### `db:user:verify`

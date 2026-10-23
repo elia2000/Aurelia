@@ -152,7 +152,15 @@ export function applyTrustEvent(list, event, { now, newId = defaultId }) {
   // pinned (see trust.js), so their first device is first contact and gets no line.
   if (event.status === TRUST.DEVICES_ADDED && added.length) {
     const key = added.slice(0, MAX_DEVICE_IDS);
-    const seen = next.find((n) => n.kind === NOTICE_KIND.ADDED && sameIds(n.deviceIds, key));
+    // A line that ended because the person accepted or verified stays ended (a late report must
+    // not reopen it). One that ended because the device vanished does not: if it is listed
+    // again and pending, that is news.
+    const seen = next.find(
+      (n) =>
+        n.kind === NOTICE_KIND.ADDED &&
+        sameIds(n.deviceIds, key) &&
+        !(n.state === NOTICE_STATE.RESOLVED && n.resolution === NOTICE_RESOLUTION.GONE),
+    );
     if (!seen) {
       const earlier = next.filter((n) => n.kind === NOTICE_KIND.ADDED && n.state === NOTICE_STATE.OPEN);
       // One open line per contact: a newer, larger set replaces the older line.
@@ -399,14 +407,21 @@ export function createKeyNoticeStore({ storage = defaultStorage(), now = () => D
       return;
     }
     const frozen = next.length ? Object.freeze([...next]) : EMPTY;
+    // `raw` is what a later read of the storage will return. It only moves when
+    // the write went through: after a refused write (full quota, private mode) or
+    // without storage it stays what was stored, so the lines kept in memory are
+    // still the ones used next time, not thrown away and parsed again.
     let raw = stored;
     try {
       if (frozen.length) {
-        raw = JSON.stringify(frozen);
-        storage?.setItem(key, raw);
-      } else {
+        const text = JSON.stringify(frozen);
+        if (storage) {
+          storage.setItem(key, text);
+          raw = text;
+        }
+      } else if (storage) {
+        storage.removeItem(key);
         raw = null;
-        storage?.removeItem(key);
       }
     } catch {
       // Not remembered after a reload; still shown for now.

@@ -4882,7 +4882,21 @@ export function revokeAllUserSessions(userId, { revokeDevices = false } = {}) {
 /** Deletes sessions created before `cutoff` ("YYYY-MM-DD HH:MM:SS", UTC). They could not be used any more anyway. */
 export function purgeExpiredSessions(cutoff) {
   if (!cutoff) return isPostgresMode() ? Promise.resolve(0) : 0;
-  return run(dbKnex("sessions").where("created_at", "<", String(cutoff)).del());
+  const when = String(cutoff);
+  // The push subscriptions an expired session registered go with it: nobody can
+  // sign in with it any more, so nothing should keep sending it message previews.
+  return maybeThen(listExpiredSessionIds(when), (ids) =>
+    maybeThen(removeSessionLinks(ids), () => run(dbKnex("sessions").where("created_at", "<", when).del())),
+  );
+}
+
+/** Public ids of the sessions created before `cutoff` ("YYYY-MM-DD HH:MM:SS", UTC). */
+export function listExpiredSessionIds(cutoff) {
+  if (!cutoff) return isPostgresMode() ? Promise.resolve([]) : [];
+  return maybeThen(
+    getAll(dbKnex("sessions").select("public_id").where("created_at", "<", String(cutoff))),
+    (rows) => (rows || []).map((row) => row.public_id).filter(Boolean),
+  );
 }
 
 // ─── Two-factor sign-in ───────────────────────────────────────────────────────
@@ -4933,18 +4947,26 @@ export function replaceRecoveryCodes(userId, hashes) {
   );
 }
 
-/** Turns 2FA on: stores the recovery codes, remembers the confirming step and flips the flag. Resolves to true when it switched. */
+/**
+ * Turns 2FA on: flips the flag, remembers the confirming step and stores the
+ * recovery codes. Resolves to true when it switched. The flag goes first and
+ * only the call that flipped it stores codes, so two confirmations sent at the
+ * same moment cannot replace the codes the winner shows to the person.
+ */
 export function enableTwoFactor(userId, step, recoveryHashes) {
   if (!userId) return isPostgresMode() ? Promise.resolve(false) : false;
-  return maybeThen(replaceRecoveryCodes(userId, recoveryHashes), () =>
-    maybeThen(
-      run(
-        dbKnex("user_two_factor")
-          .where({ user_id: userId, enabled: 0 })
-          .update({ enabled: 1, last_used_step: step ?? null, enabled_at: nowDbTimestamp() }),
-      ),
-      (changed) => Number(changed) > 0,
+  return maybeThen(
+    run(
+      dbKnex("user_two_factor")
+        .where({ user_id: userId, enabled: 0 })
+        .update({ enabled: 1, last_used_step: step ?? null, enabled_at: nowDbTimestamp() }),
     ),
+    (changed) =>
+      Number(changed) > 0
+        ? maybeThen(replaceRecoveryCodes(userId, recoveryHashes), () => true)
+        : isPostgresMode()
+          ? Promise.resolve(false)
+          : false,
   );
 }
 

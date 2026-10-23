@@ -1231,6 +1231,38 @@ function registerAdminRoutes(app, deps) {
         });
       }
 
+      if (action === "reset_user_2fa") {
+        const userSelector = String(payload.userSelector || "").trim();
+        const user = await resolveUserRow(
+          { getRow: adminGetRow, getAll: adminGetAll },
+          userSelector,
+        );
+        if (!user?.id) {
+          return res.status(404).json({ error: "User not found." });
+        }
+
+        // Same effect as "Reset two-factor" in the admin panel: the secret and the
+        // recovery codes are removed and every session of the person ends.
+        const removed = Boolean(await deps.disableTwoFactor?.(user.id));
+        if (removed) {
+          try {
+            await deps.revokeAllUserSessions?.(user.id);
+            deps.closeSessionStreams?.({
+              username: user.username,
+              payload: { type: "session_revoked", reason: "two_factor_reset" },
+            });
+          } catch {
+            // the 2FA rows are gone either way
+          }
+          adminSave();
+        }
+
+        return res.json({
+          ok: true,
+          result: { id: user.id, username: user.username, reset: removed },
+        });
+      }
+
       if (action === "toggle_user_ban") {
         const userSelector = String(payload.userSelector || "").trim();
         const user = await resolveUserRow(
@@ -1257,6 +1289,18 @@ function registerAdminRoutes(app, deps) {
         adminSave();
 
         if (nextBanned) {
+          // The session rows are already gone. Drop the push subscriptions they
+          // registered and close the open SSE / WebSocket streams, like the
+          // admin panel's ban does.
+          try {
+            await deps.revokeAllUserSessions?.(user.id);
+            deps.closeSessionStreams?.({
+              username: user.username,
+              payload: { type: "session_revoked", reason: "banned" },
+            });
+          } catch {
+            // the sessions are gone either way
+          }
           emitSseEvent(user.username, {
             type: "session_revoked",
             reason: "banned",

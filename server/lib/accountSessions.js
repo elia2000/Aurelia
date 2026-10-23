@@ -76,6 +76,17 @@ export function isSessionExpired(createdAt, now = Date.now()) {
   return sessionAgeMs(createdAt, now) > SESSION_MAX_AGE_MS;
 }
 
+/**
+ * The session when it is still inside its 14 days, otherwise null. For the
+ * paths that look a session up by token without going through the cookie
+ * helpers (the WebSocket upgrade). A row without a date is kept.
+ */
+export function liveSessionOrNull(session, now = Date.now()) {
+  if (!session) return null;
+  if (session.session_created_at && isSessionExpired(session.session_created_at, now)) return null;
+  return session;
+}
+
 /** What the API returns for one session. Never includes the token. */
 export function serializeSession(row, currentPublicId) {
   const summary = String(row.user_agent || "").trim();

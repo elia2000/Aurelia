@@ -54,6 +54,45 @@ describe("login guard", () => {
     expect(guard.check(who({ account: "ALICE" })).allowed).toBe(false);
   });
 
+  test("enter() lets one attempt per account run at a time and checks the limit when it is that attempt's turn", async () => {
+    const guard = createLoginGuard();
+    const evaluated = [];
+    const attempt = async (n) => {
+      const res = { once: (_event, done) => { res.done = done; } };
+      const gate = await guard.enter(who(), res);
+      if (!gate.allowed) return "blocked";
+      evaluated.push(n);
+      await new Promise((resolve) => setTimeout(resolve, 5)); // the password check
+      guard.recordFailure(who());
+      res.done();
+      return "checked";
+    };
+    const outcomes = await Promise.all(Array.from({ length: 30 }, (_, n) => attempt(n)));
+    expect(outcomes.filter((o) => o === "checked")).toHaveLength(8);
+    expect(outcomes.filter((o) => o === "blocked")).toHaveLength(22);
+    expect(evaluated).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  test("enter() lets different accounts run side by side", async () => {
+    const guard = createLoginGuard();
+    const first = await guard.enter(who({ account: "alice" }), { once: () => {} });
+    const second = await Promise.race([
+      guard.enter(who({ account: "bob" }), { once: () => {} }),
+      new Promise((resolve) => setTimeout(() => resolve("waited"), 50)),
+    ]);
+    expect(first.allowed).toBe(true);
+    expect(second).not.toBe("waited");
+  });
+
+  test("enter() lets go of an account when the response closes, or after the safety timeout", async () => {
+    const guard = createLoginGuard({ holdMaxMs: 20 });
+    await guard.enter(who(), { once: () => {} }); // never released by its response
+    const started = Date.now();
+    const next = await guard.enter(who(), { once: () => {} });
+    expect(next.allowed).toBe(true);
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
   test("loginGuardFor hands every route module the same guard", () => {
     const deps = {};
     expect(loginGuardFor(deps)).toBe(loginGuardFor(deps));

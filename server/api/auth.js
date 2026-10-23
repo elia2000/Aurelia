@@ -173,7 +173,7 @@ function registerAuthRoutes(app, deps) {
 
     const trimmed = username.trim().toLowerCase();
     const who = { ip: req.ip, account: trimmed };
-    if (!guard.check(who).allowed) return sendTooManyAttempts(res, guard);
+    if (!(await guard.enter(who, res)).allowed) return sendTooManyAttempts(res, guard);
 
     const user = await maybe(findUserByUsername(trimmed));
 
@@ -224,22 +224,27 @@ function registerAuthRoutes(app, deps) {
     const payload = verifyLoginChallenge(challenge);
     if (!payload) return expired();
 
-    const state = challenges.status(payload.jti);
-    if (state === "used") return expired();
-    if (state === "locked") {
-      return res
-        .status(429)
-        .json({ error: "Too many wrong codes. Enter your password again.", restart: true });
-    }
+    const stateError = () => {
+      const state = challenges.status(payload.jti);
+      if (state === "used") return expired();
+      if (state === "locked") {
+        return res
+          .status(429)
+          .json({ error: "Too many wrong codes. Enter your password again.", restart: true });
+      }
+      return null;
+    };
+    if (stateError()) return;
 
     const user = await maybe(deps.findUserById(payload.uid));
     if (!user || Number(user.banned)) return expired();
 
     // Same buckets as the password step, so wrong codes and wrong passwords add up.
     const who = { ip: req.ip, account: String(user.username || "").toLowerCase() };
-    if (!guard.check(who).allowed || twoFactor.isBlocked(user.id)) {
-      return sendTooManyAttempts(res, guard);
-    }
+    if (!(await guard.enter(who, res)).allowed) return sendTooManyAttempts(res, guard);
+    // Earlier attempts on this account have been counted by now: look at the challenge again.
+    if (stateError()) return;
+    if (twoFactor.isBlocked(user.id)) return sendTooManyAttempts(res, guard);
 
     const hasInput =
       (typeof code === "string" && code.trim() !== "") ||

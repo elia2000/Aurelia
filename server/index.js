@@ -31,6 +31,8 @@ import { createTextRetentionJobs } from "./lib/textRetentionJobs.js";
 import { emitUnpinnedMessages } from "./lib/pins.js";
 import { createInspector } from "./lib/inspect.js";
 import { createSessionHelpers } from "./lib/sessions.js";
+import { liveSessionOrNull } from "./lib/accountSessions.js";
+import { createSessionPurger } from "./lib/sessionPurge.js";
 import { redactSensitive } from "./lib/redact.js";
 import { createRedisClient, createRedisSessionStore } from "./lib/redis.js";
 import { storageEncryption } from "./lib/storageEncryption.js";
@@ -103,6 +105,7 @@ import {
   revokeOtherUserSessions,
   revokeAllUserSessions,
   purgeExpiredSessions,
+  listExpiredSessionIds,
   getUserTwoFactor,
   beginTwoFactorEnrollment,
   enableTwoFactor,
@@ -729,6 +732,13 @@ function getSessionCombined(token) {
   const cached = redisSessionStore.getSession(token);
   if (cached && typeof cached.then !== "function") return cached;
   return getSession(token);
+}
+
+// The WebSocket upgrade looks the session up by token itself: it honours the
+// same 14 days as the cookie.
+function getSessionForSocket(token) {
+  const raw = getSessionCombined(token);
+  return raw && typeof raw.then === "function" ? raw.then((session) => liveSessionOrNull(session)) : liveSessionOrNull(raw);
 }
 
 async function touchSessionCombined(token) {
@@ -1554,7 +1564,7 @@ const wsGateway = createWebSocketGateway({
   server,
   sseHub,
   redisClient,
-  getSessionFromToken: getSessionCombined,
+  getSessionFromToken: getSessionForSocket,
   onSessionsRevoked: (target, payload) => sseHub.closeStreams({ ...target, payload }),
   onUserConnected: (username, ws) => presenceTracker.markConnected(username, ws),
   onUserDisconnected: (username, ws) => presenceTracker.markDisconnected(username, ws),
@@ -1566,15 +1576,17 @@ wsGlobalBroadcaster = (payload) => wsGateway.broadcastAll(payload);
 wsSessionRevoker = (target, payload) => wsGateway.revokeSessions(target, payload);
 
 // Sessions older than their cookie (14 days) can not be used any more; drop the
-// rows so the list of active sessions stays honest. Hourly, best effort.
+// rows so the list of active sessions stays honest. Hourly, best effort (the
+// purger never throws, so a busy database cannot end the process).
 const SESSION_PURGE_INTERVAL_MS = 60 * 60 * 1000;
-const purgeStaleSessions = () => {
-  const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000)
-    .toISOString()
-    .replace("T", " ")
-    .slice(0, 19);
-  Promise.resolve(purgeExpiredSessions(cutoff)).catch(() => {});
-};
+const purgeStaleSessions = createSessionPurger({
+  listExpiredSessionIds,
+  purgeExpiredSessions,
+  closeSessionStreams: (target) => {
+    sseHub.closeStreams(target);
+    wsSessionRevoker?.(target, target?.payload);
+  },
+});
 setImmediate(purgeStaleSessions);
 const sessionPurgeTimer = setInterval(purgeStaleSessions, SESSION_PURGE_INTERVAL_MS);
 if (typeof sessionPurgeTimer.unref === "function") sessionPurgeTimer.unref();

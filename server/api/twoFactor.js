@@ -64,7 +64,7 @@ function registerTwoFactorRoutes(app, deps) {
   // count against the same limits as sign-in.
   const checkPassword = async (req, res, user) => {
     const who = { ip: req.ip, account: String(user.username || "").toLowerCase() };
-    if (!guard.check(who).allowed) {
+    if (!(await guard.enter(who, res)).allowed) {
       sendTooManyAttempts(res, guard);
       return false;
     }

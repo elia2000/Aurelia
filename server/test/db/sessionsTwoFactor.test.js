@@ -32,6 +32,7 @@ const {
   listUserSessions,
   markTotpStepUsed,
   purgeExpiredSessions,
+  listExpiredSessionIds,
   replaceRecoveryCodes,
   revokeAllUserSessions,
   revokeOtherUserSessions,
@@ -227,6 +228,33 @@ describe("revoking sessions", () => {
   });
 });
 
+describe("expired sessions leave nothing behind", () => {
+  test("purgeExpiredSessions also removes the push subscriptions the expired session registered", async () => {
+    const owner = await newUser();
+    const old = await newSession(owner);
+    const fresh = await newSession(owner);
+    const oldEndpoint = `https://push.example/${unique()}`;
+    const freshEndpoint = `https://push.example/${unique()}`;
+    await upsertPushSubscription(owner, oldEndpoint, "p", "a", 1, old.publicId);
+    await upsertPushSubscription(owner, freshEndpoint, "p", "a", 1, fresh.publicId);
+    await run("UPDATE sessions SET created_at = ? WHERE token = ?", ["2000-01-01 00:00:00", old.token]);
+    await purgeExpiredSessions("2020-01-01 00:00:00");
+    const left = (await listPushSubscriptionsByUserIds([owner])).map((row) => row.endpoint);
+    expect(left).toEqual([freshEndpoint]);
+  });
+
+  test("listExpiredSessionIds names the sessions older than the cutoff and nothing else", async () => {
+    const owner = await newUser();
+    const old = await newSession(owner);
+    const fresh = await newSession(owner);
+    await run("UPDATE sessions SET created_at = ? WHERE token = ?", ["2000-01-01 00:00:00", old.token]);
+    const ids = await listExpiredSessionIds("2020-01-01 00:00:00");
+    expect(ids).toContain(old.publicId);
+    expect(ids).not.toContain(fresh.publicId);
+    expect(await listExpiredSessionIds("")).toEqual([]);
+  });
+});
+
 describe("two-factor storage", () => {
   test("enrolment is pending until confirmed, and a pending secret can be replaced", async () => {
     const userId = await newUser();
@@ -245,6 +273,9 @@ describe("two-factor storage", () => {
     expect(await countUnusedRecoveryCodes(userId)).toBe(3);
     // enabling twice does nothing; replacing the secret is refused while enabled
     expect(await enableTwoFactor(userId, 9999, ["z"])).toBe(false);
+    // ...and the call that lost the race leaves the recovery codes the person was shown alone
+    expect(await countUnusedRecoveryCodes(userId)).toBe(3);
+    expect(await consumeRecoveryCode(userId, "h1")).toBe(true);
     await beginTwoFactorEnrollment(userId, "tfa1:attacker");
     expect((await getUserTwoFactor(userId)).secret_enc).toBe("tfa1:secret");
   });

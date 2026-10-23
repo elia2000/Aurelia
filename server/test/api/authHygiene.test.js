@@ -33,6 +33,13 @@ describe("login rate limiting", () => {
     expect((await signIn(app, "bob")).res.status).toBe(200);
   });
 
+  test("a burst of parallel wrong passwords is stopped at eight, not after the first one has been checked", async () => {
+    const { app } = makeAccountApp();
+    const results = await Promise.all(Array.from({ length: 40 }, () => wrongLogin(app)));
+    expect(results.filter((res) => res.status === 401)).toHaveLength(8);
+    expect(results.filter((res) => res.status === 429)).toHaveLength(32);
+  });
+
   test("unknown account names are limited exactly like real ones (no way to tell them apart)", async () => {
     const { app } = makeAccountApp();
     for (let i = 0; i < 8; i += 1) expect((await wrongLogin(app, "ghost")).status).toBe(401);

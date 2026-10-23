@@ -131,6 +131,14 @@ describe("applyTrustEvent", () => {
     expect(describeNotice(gone[0]).headline).toBe("{name}'s new device is no longer listed");
   });
 
+  test("a pending device that left the list and then came back is announced again", () => {
+    const open = applyTrustEvent([], addedEvent([D2]), ctx());
+    const gone = applyTrustEvent(open, assessed({ listed: [D1] }), ctx());
+    expect(gone[0]).toMatchObject({ state: S.RESOLVED, resolution: R.GONE });
+    const back = applyTrustEvent(gone, addedEvent([D2]), ctx());
+    expect(back.filter((n) => n.kind === K.ADDED && n.state === S.OPEN)).toHaveLength(1);
+  });
+
   test("a removed device makes one line, reported once, that can be dismissed at once", () => {
     let list = applyTrustEvent([], assessed({ removed: [D2] }), ctx());
     expect(list[0]).toMatchObject({ kind: K.REMOVED, state: S.OPEN, deviceIds: [D2] });
@@ -244,6 +252,24 @@ describe("the store", () => {
   const make = (storage = memoryStorage(), extra = {}) => ({
     storage,
     store: createKeyNoticeStore({ storage, now: () => 5_000, newId: () => `id${(counter += 1)}`, ...extra }),
+  });
+
+  test("lines survive a storage that refuses writes or does not exist: they stay as they were, not re-created", () => {
+    let n = 0;
+    const refusing = { getItem: () => null, setItem: () => { throw new Error("QuotaExceededError"); }, removeItem: () => {} };
+    for (const storage of [refusing, null]) {
+      const store = createKeyNoticeStore({ storage, now: () => (n += 1000), newId: () => `id${(n += 1)}` });
+      store.handleTrustEvent("alice", addedEvent());
+      const [line] = store.list("alice", "bob");
+      expect(line).toMatchObject({ kind: K.ADDED, state: S.OPEN });
+      // the next routine lookup (nothing new) keeps the very same line
+      store.handleTrustEvent("alice", addedEvent());
+      expect(store.list("alice", "bob")).toEqual([line]);
+      // a removal that is reported only once is still there after the lookup that follows it
+      store.handleTrustEvent("alice", assessed({ removed: [D3], listed: [D1, D2] }));
+      store.handleTrustEvent("alice", addedEvent());
+      expect(store.list("alice", "bob").some((x) => x.kind === K.REMOVED)).toBe(true);
+    }
   });
 
   test("remembers lines per signed-in person and contact, across a reload", () => {

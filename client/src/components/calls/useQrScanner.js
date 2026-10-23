@@ -44,14 +44,16 @@ export function useQrScanner({ active, onResult }) {
           video: { facingMode: { ideal: "environment" } },
           audio: false,
         });
-        if (cancelled) return;
+        // Stopped while the browser was still opening the camera: the cleanup
+        // ran before there was a stream to release, so release it here.
+        if (cancelled) return release();
         const video = videoRef.current;
         if (!video) throw new Error("no video element");
         video.muted = true;
         video.playsInline = true;
         video.srcObject = stream;
         await video.play().catch(() => {});
-        if (cancelled) return;
+        if (cancelled) return release();
         setState({ phase: "scanning", error: "" });
 
         const look = async () => {

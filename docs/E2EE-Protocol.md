@@ -218,6 +218,7 @@ Anything you cache (decrypted media, previews) must be keyed by the sender's acc
 - **Metadata** such as who talks to whom, when, and message sizes.
 - **A malicious server that serves a modified web app.** In a browser the encryption code is delivered by the server you are trying not to trust. Safety numbers and the emoji code detect a swapped key directory or a man in the middle, but not backdoored JavaScript. A native app removes this gap.
 - **Key directory at first contact.** Until you verify the safety number, the first keys you see for a contact are trusted. After that, a new device is reported until acknowledged (and blocked for verified contacts), and changed keys are detected.
+- **Several accounts in one browser share their trust marks.** What a browser remembers about a contact (the pinned devices and whether you verified their number) is kept per browser profile, not per account. If two people sign in with different accounts in the same browser profile, they see and change each other's marks for a contact they both know. Use a separate browser profile (or a private window) per person.
 - **The relay and the peer see IP addresses** unless `CALLS_FORCE_RELAY` is on, in which case only the relay sees both.
 - **A compromised endpoint** can of course read everything shown on it.
 - The emoji code has 32 bits. Because of the key commitment an attacker gets one 2^-32 chance per call, but it is still a quick check, not a replacement for verifying the safety number of a contact you care about.

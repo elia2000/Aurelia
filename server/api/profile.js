@@ -369,7 +369,7 @@ function registerProfileRoutes(app, deps) {
     // Wrong passwords here count like wrong passwords at sign-in: a stolen
     // session cookie must not become a way to guess the password.
     const who = { ip: req.ip, account: String(username).toLowerCase() };
-    if (!guard.check(who).allowed) return sendTooManyAttempts(res, guard);
+    if (!(await guard.enter(who, res)).allowed) return sendTooManyAttempts(res, guard);
 
     const rawUser = findUserByUsername(username.toLowerCase());
     const user = rawUser && typeof rawUser.then === "function" ? await rawUser : rawUser;
@@ -440,7 +440,7 @@ function registerProfileRoutes(app, deps) {
     if (!requireSessionUsernameMatch(res, session, username)) return;
 
     const who = { ip: req.ip, account: String(username).toLowerCase() };
-    if (!guard.check(who).allowed) return sendTooManyAttempts(res, guard);
+    if (!(await guard.enter(who, res)).allowed) return sendTooManyAttempts(res, guard);
 
     const rawUser = findUserByUsername(String(username || "").toLowerCase());
     const user = rawUser && typeof rawUser.then === "function" ? await rawUser : rawUser;

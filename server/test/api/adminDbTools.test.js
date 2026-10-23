@@ -28,6 +28,7 @@ function makeAdminDbToolsApp({
   adminRun = vi.fn(async () => 1),
   adminTransaction,
   adminResetDatabase,
+  extraDeps = {},
 } = {}) {
   process.env.ADMIN_API_TOKEN = "test-admin-token";
   const transaction =
@@ -52,6 +53,7 @@ function makeAdminDbToolsApp({
       adminTransaction: transaction,
       adminResetDatabase: adminResetDatabase || vi.fn(async () => ({ storedNames: [] })),
       adminSave: vi.fn(),
+      ...extraDeps,
     },
   }).app;
 }
@@ -247,6 +249,85 @@ describe("POST /api/admin/db-tools database edits", () => {
       expect.stringMatching(/update/i),
       expect.arrayContaining([1, user.id]),
     );
+  });
+
+  test("banning from the command line signs the person out everywhere: open streams closed, push subscriptions dropped", async () => {
+    const adminGetRow = vi.fn(async (sql) => {
+      const lower = String(sql || "").toLowerCase();
+      if (lower.includes("users")) return { ...user, banned: 0 };
+      if (lower.includes("sessions")) return { count: 1 };
+      return null;
+    });
+    const closeSessionStreams = vi.fn();
+    const revokeAllUserSessions = vi.fn(async () => []);
+    const app = makeAdminDbToolsApp({ adminGetRow, extraDeps: { closeSessionStreams, revokeAllUserSessions } });
+
+    const ban = await request(app)
+      .post("/api/admin/db-tools")
+      .set("x-songbird-admin-token", "test-admin-token")
+      .send({ action: "toggle_user_ban", payload: { userSelector: "alice" } });
+    expect(ban.status).toBe(200);
+    expect(ban.body.result.banned).toBe(true);
+    expect(revokeAllUserSessions).toHaveBeenCalledWith(user.id);
+    expect(closeSessionStreams).toHaveBeenCalledWith({
+      username: user.username,
+      payload: { type: "session_revoked", reason: "banned" },
+    });
+
+    // unbanning signs nobody out
+    closeSessionStreams.mockClear();
+    revokeAllUserSessions.mockClear();
+    adminGetRow.mockImplementation(async (sql) => {
+      const lower = String(sql || "").toLowerCase();
+      if (lower.includes("users")) return { ...user, banned: 1 };
+      if (lower.includes("sessions")) return { count: 0 };
+      return null;
+    });
+    const unban = await request(app)
+      .post("/api/admin/db-tools")
+      .set("x-songbird-admin-token", "test-admin-token")
+      .send({ action: "toggle_user_ban", payload: { userSelector: "alice" } });
+    expect(unban.body.result.banned).toBe(false);
+    expect(closeSessionStreams).not.toHaveBeenCalled();
+    expect(revokeAllUserSessions).not.toHaveBeenCalled();
+  });
+
+  test("reset_user_2fa switches two-factor off for the person and signs them out everywhere", async () => {
+    const adminGetRow = vi.fn(async (sql) => (String(sql || "").toLowerCase().includes("users") ? user : null));
+    const disableTwoFactor = vi.fn(async () => true);
+    const closeSessionStreams = vi.fn();
+    const revokeAllUserSessions = vi.fn(async () => []);
+    const app = makeAdminDbToolsApp({
+      adminGetRow,
+      extraDeps: { disableTwoFactor, closeSessionStreams, revokeAllUserSessions },
+    });
+    const send = (selector) =>
+      request(app)
+        .post("/api/admin/db-tools")
+        .set("x-songbird-admin-token", "test-admin-token")
+        .send({ action: "reset_user_2fa", payload: { userSelector: selector } });
+
+    const done = await send("alice");
+    expect(done.status).toBe(200);
+    expect(done.body.result).toMatchObject({ id: user.id, username: "alice", reset: true });
+    expect(disableTwoFactor).toHaveBeenCalledWith(user.id);
+    expect(revokeAllUserSessions).toHaveBeenCalledWith(user.id);
+    expect(closeSessionStreams).toHaveBeenCalledWith({
+      username: "alice",
+      payload: { type: "session_revoked", reason: "two_factor_reset" },
+    });
+
+    // two-factor was not on: nothing is signed out
+    disableTwoFactor.mockResolvedValueOnce(false);
+    revokeAllUserSessions.mockClear();
+    const none = await send("alice");
+    expect(none.status).toBe(200);
+    expect(none.body.result).toMatchObject({ reset: false });
+    expect(revokeAllUserSessions).not.toHaveBeenCalled();
+
+    // unknown person
+    adminGetRow.mockResolvedValue(null);
+    expect((await send("ghost")).status).toBe(404);
   });
 
   test("handles verify and add-member actions with PostgreSQL promise-based chat lookups", async () => {

@@ -35,6 +35,7 @@
     "db:file:delete": "/bin/bash -p ../scripts/run-data-command.sh node scripts/delete-file.js",
     "db:user:edit": "/bin/bash -p ../scripts/run-data-command.sh node scripts/edit-user.js",
     "db:user:ban": "/bin/bash -p ../scripts/run-data-command.sh node scripts/ban-user.js",
+    "db:user:reset-2fa": "/bin/bash -p ../scripts/run-data-command.sh node scripts/reset-2fa.js",
     "db:user:verify": "/bin/bash -p ../scripts/run-data-command.sh node scripts/verify-user.js",
     "db:user:delete": "/bin/bash -p ../scripts/run-data-command.sh node scripts/delete-user.js",
     "db:user:create": "/bin/bash -p ../scripts/run-data-command.sh node scripts/create-user.js",
