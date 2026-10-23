@@ -30,11 +30,25 @@ describe("Database Schema Integration", () => {
       "remote_channel_sources",
       "remote_channel_queue",
       "app_settings",
+      "user_two_factor",
+      "user_recovery_codes",
     ];
 
     for (const table of keyTables) {
       expect(dbHelper.tableExists(table), `table ${table} exists`).toBe(true);
     }
+  });
+
+  test("sessions carry their metadata and the links to push subscriptions and E2EE devices (migrations 050, 051)", () => {
+    for (const column of ["public_id", "user_agent", "auth_method", "created_at", "last_seen"]) {
+      expect(dbHelper.hasColumn("sessions", column), `sessions.${column}`).toBe(true);
+    }
+    expect(dbHelper.hasColumn("push_subscriptions", "session_public_id")).toBe(true);
+    expect(dbHelper.hasColumn("e2ee_devices", "session_public_id")).toBe(true);
+    for (const column of ["secret_enc", "enabled", "last_used_step"]) {
+      expect(dbHelper.hasColumn("user_two_factor", column), `user_two_factor.${column}`).toBe(true);
+    }
+    expect(dbHelper.hasColumn("user_recovery_codes", "code_hash")).toBe(true);
   });
 
   test("creates expected columns on key tables", () => {

@@ -420,6 +420,21 @@ function registerAdminPanelRoutes(app, deps) {
     }
   };
 
+  // Ends every session of a user and closes their live streams. The sessions are
+  // deleted first (so every API call with their cookies answers 401 at once),
+  // then the open SSE / WebSocket streams are told and closed.
+  const signOutEverywhere = async (user, reason) => {
+    await resolveMaybePromise(deps.revokeAllUserSessions(user.id));
+    try {
+      deps.closeSessionStreams?.({
+        username: user.username,
+        payload: { type: "session_revoked", reason },
+      });
+    } catch {
+      // the sessions are gone either way
+    }
+  };
+
   // ─── Dashboard ───────────────────────────────────────────────────────────────
 
   app.get("/api/admin/stats", async (req, res) => {
@@ -831,7 +846,7 @@ function registerAdminPanelRoutes(app, deps) {
     await resolveMaybePromise(adminBanUser(userId, banned));
     // Banning revokes any elevated role; unbanning restores the default user role.
     await resolveMaybePromise(setUserRole(userId, "user"));
-    if (banned) await resolveMaybePromise(callAdminRun(dbKnex("sessions").where("user_id", userId).del()));
+    if (banned) await signOutEverywhere(user, "banned");
     adminSave();
     log(session, banned ? "user.ban" : "user.unban", { targetType: "user", targetLabel: `@${user.username}` });
     res.json({ ok: true, banned });
@@ -891,9 +906,35 @@ function registerAdminPanelRoutes(app, deps) {
 
     const hash = await bcrypt.hash(newPassword, 10);
     await resolveMaybePromise(callAdminRun(dbKnex("users").where("id", userId).update({ password_hash: hash })));
-    await resolveMaybePromise(callAdminRun(dbKnex("sessions").where("user_id", userId).del()));
+    await signOutEverywhere(user, "password_reset");
     adminSave();
     log(session, "user.reset_password", { targetType: "user", targetLabel: `@${user.username}` });
+    res.json({ ok: true });
+  });
+
+  // ─── Users — reset two-factor ────────────────────────────────────────────────
+  // There is no email recovery: when somebody loses their authenticator and
+  // their recovery codes, an admin removes the second factor. The person signs
+  // in with the password again and can set 2FA up anew. All their sessions end
+  // (the person who asked for the reset is not necessarily the one signed in).
+
+  app.post("/api/admin/users/:id/reset-2fa", validateUuidParams("id"), async (req, res) => {
+    const session = requireAdmin(req, res);
+    if (!session) return;
+    const userId = req.params.id;
+    const user = await resolveMaybePromise(findUserById(userId));
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    // Non-owners cannot touch the owner's sign-in protection
+    if (user.role === "owner" && !(await actorIsOwner(session))) {
+      return res.status(403).json({ error: "Cannot reset the owner's two-factor authentication." });
+    }
+
+    const removed = await resolveMaybePromise(deps.disableTwoFactor(userId));
+    if (!removed) return res.status(400).json({ error: "Two-factor authentication is not on for this user." });
+    await signOutEverywhere(user, "two_factor_reset");
+    adminSave();
+    log(session, "user.reset_2fa", { targetType: "user", targetLabel: `@${user.username}` });
     res.json({ ok: true });
   });
 
@@ -1006,6 +1047,14 @@ function registerAdminPanelRoutes(app, deps) {
     // Their private GIF collection goes with them, files included.
     await removeSavedGifFilesQuietly(deps.savedGifStorage, savedGifs);
     if (user?.avatar_url) removeAvatarByUrl(user.avatar_url);
+    try {
+      deps.closeSessionStreams?.({
+        username: user.username,
+        payload: { type: "session_revoked", reason: "account_deleted" },
+      });
+    } catch {
+      // the account and its sessions are already gone
+    }
     log(session, "user.delete", { targetType: "user", targetLabel: `@${user.username}` });
     res.json({ ok: true });
   });

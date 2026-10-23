@@ -55,7 +55,7 @@
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^13.0.3",
     "bullmq": "^6.3.4",
-    "compression": "^1.8.1",
+    "compression": "^1.8.2",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "express-rate-limit": "^8.7.0",
@@ -71,10 +71,10 @@
     "ws": "^8.21.3"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^5.0.0",
-    "@vitest/ui": "^5.0.0",
+    "@vitest/coverage-v8": "^5.0.5",
+    "@vitest/ui": "^5.0.5",
     "fast-check": "^4.9.0",
     "supertest": "^7.2.2",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.5"
   }
 }

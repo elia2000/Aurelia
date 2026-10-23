@@ -14,6 +14,8 @@ import NewVersionBanner from './components/pwa/NewVersionBanner.jsx'
 import { useThemeColor } from './hooks/useThemeColor.js'
 import { setThemeDefault, setThemePalette } from './utils/themeStore.js'
 import InstallGuideModal from './components/pwa/InstallGuideModal.jsx'
+import { takeSignedOutNotice, rememberSignedOutNotice } from './utils/signedOutNotice.js'
+import { UNAUTHORIZED_EVENT } from './api/chatApi.js'
 import {
   getSavedSessionUser,
   saveSessionUser,
@@ -42,6 +44,7 @@ const ChatPage = lazy(loadChatPage)
 const CallLayer = lazy(loadCallLayer)
 const InvitePage = lazy(loadInvitePage)
 const AdminPage = lazy(loadAdminPage)
+const TwoFactorLoginStep = lazy(() => import('./components/auth/TwoFactorLoginStep.jsx'))
 
 function getPreloadMode() {
   if (typeof navigator === 'undefined') return 'eager'
@@ -182,6 +185,10 @@ export default function App() {
   const [authStatus, setAuthStatus] = useState('')
   const [authChecked, setAuthChecked] = useState(false)
   const [authLoading, setAuthLoading] = useState(false)
+  // Set after the password was right for an account that uses two-factor sign-in.
+  const [twoFactor, setTwoFactor] = useState(null)
+  // A short note on the sign-in page (for example: signed out from another device).
+  const [authNotice, setAuthNotice] = useState('')
   // Seeded from the build-time default so there's no flash of the wrong UI
   // before the live value loads; the effect below overwrites it with the
   // server's current setting (which can change via the admin panel without
@@ -802,6 +809,36 @@ export default function App() {
     }
   }, [user, route, authChecked, authLoading])
 
+  // Land on the sign-in page with a note when the app was signed out from elsewhere.
+  useEffect(() => {
+    if (route !== 'login' || user) return
+    const note = takeSignedOutNotice()
+    if (note) setAuthNotice(note)
+  }, [route, user])
+
+  // An API call answered 401: check whether the session is really gone (another
+  // device may have signed this one out while the live connection was down).
+  useEffect(() => {
+    let checking = false
+    const onUnauthorized = async () => {
+      if (!userState || checking) return
+      checking = true
+      try {
+        await fetchSessionUser(API_BASE)
+      } catch (err) {
+        if (err.isUnauthenticated) {
+          rememberSignedOutNotice('signed_out')
+          setUser(null)
+        }
+      } finally {
+        checking = false
+      }
+    }
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userState])
+
   function navigate(path, replace = false) {
     if (replace) {
       window.history.replaceState({}, '', path)
@@ -812,9 +849,33 @@ export default function App() {
     setInviteToken(getInviteToken(path))
   }
 
+  // Everything that follows a successful sign-in, with or without a second step.
+  async function finishLogin(data) {
+    const fallbackUser = {
+      id: data.id,
+      username: data.username,
+      nickname: data.nickname || null,
+      avatarUrl: data.avatarUrl || null,
+      color: data.color || null,
+      status: data.status || 'online',
+    }
+    const nextUser = await resolveSessionUserWithRetry(fallbackUser)
+    setTwoFactor(null)
+    setAuthNotice('')
+    setUser(nextUser)
+    const redirectPath = window.sessionStorage.getItem(AUTH_REDIRECT_KEY)
+    if (redirectPath && redirectPath.startsWith('/invite/')) {
+      window.sessionStorage.removeItem(AUTH_REDIRECT_KEY)
+      navigate(redirectPath, true)
+    } else {
+      navigate('/chat', true)
+    }
+  }
+
   async function handleLogin(event) {
     event.preventDefault()
     setAuthStatus('')
+    setAuthNotice('')
     setAuthLoading(true)
     const form = event.currentTarget
     const formData = new FormData(form)
@@ -842,23 +903,12 @@ export default function App() {
       if (!res.ok) {
         throw new Error(data?.error || 'Unable to sign in.')
       }
-      const fallbackUser = {
-        id: data.id,
-        username: data.username,
-        nickname: data.nickname || null,
-        avatarUrl: data.avatarUrl || null,
-        color: data.color || null,
-        status: data.status || 'online',
+      if (data?.twoFactorRequired && data?.challenge) {
+        // The password was right; the account asks for a code before a session exists.
+        setTwoFactor({ challenge: data.challenge })
+        return
       }
-      const nextUser = await resolveSessionUserWithRetry(fallbackUser)
-      setUser(nextUser)
-      const redirectPath = window.sessionStorage.getItem(AUTH_REDIRECT_KEY)
-      if (redirectPath && redirectPath.startsWith('/invite/')) {
-        window.sessionStorage.removeItem(AUTH_REDIRECT_KEY)
-        navigate(redirectPath, true)
-      } else {
-        navigate('/chat', true)
-      }
+      await finishLogin(data)
     } catch (err) {
       setAuthStatus(err.message)
     } finally {
@@ -1041,13 +1091,38 @@ export default function App() {
                   onSubmit={handleLogin}
                   onSwitchMode={() => {
                     setAuthStatus('')
+                    setAuthNotice('')
                     navigate('/signup')
                   }}
                   status={authStatus}
+                  notice={authNotice}
                   loading={authLoading}
                   showSigningOverlay={authLoading}
                   allowSignup={accountCreationEnabled}
-                />
+                  {...(twoFactor
+                    ? {
+                        title: 'Two-step verification',
+                        subtitle: 'Your account asks for a second proof that it is you.',
+                      }
+                    : {})}
+                >
+                  {twoFactor ? (
+                    <TwoFactorLoginStep
+                      challenge={twoFactor.challenge}
+                      onSuccess={async (data) => {
+                        await finishLogin(data)
+                      }}
+                      onRestart={(message) => {
+                        setTwoFactor(null)
+                        setAuthStatus(message || 'Enter your password again.')
+                      }}
+                      onCancel={() => {
+                        setTwoFactor(null)
+                        setAuthStatus('')
+                      }}
+                    />
+                  ) : null}
+                </AuthPage>
               )}
               {route === 'signup' && (
                 <AuthPage

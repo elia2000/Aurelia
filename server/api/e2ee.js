@@ -66,7 +66,9 @@ function registerE2eeRoutes(app, deps) {
       res.status(404).json({ error: "User not found." });
       return null;
     }
-    return user;
+    // Remember which sign-in registered a device, so signing that session out
+    // can retire its key.
+    return { ...user, session_public_id: session.session_public_id || null };
   };
 
   // Register (or re-confirm) this device's public keys. Keys of an existing
@@ -89,7 +91,7 @@ function registerE2eeRoutes(app, deps) {
         existing.ecdh_public === ecdhPublic &&
         existing.ecdsa_public === ecdsaPublic
       ) {
-        await maybe(touchE2eeDevice(user.id, existing.id));
+        await maybe(touchE2eeDevice(user.id, existing.id, user.session_public_id));
         return res.json({ device: serializeDevice(existing) });
       }
     }
@@ -122,6 +124,7 @@ function registerE2eeRoutes(app, deps) {
         label: sanitizeDeviceLabel(label),
         ecdhPublic,
         ecdsaPublic,
+        sessionPublicId: user.session_public_id,
       }),
     );
     return res.status(201).json({ device: serializeDevice(device) });

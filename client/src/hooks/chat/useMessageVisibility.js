@@ -130,6 +130,8 @@ export function useMessageVisibility({
     (msg) => {
       const messageId = msg?._serverId || msg?.id || "";
       if (!messageId) return null;
+      // A line made on this device (a key-change notice) is not a message of the server.
+      if (msg?._localOnly) return null;
       if (!user) return null;
       if (!isMessageFromOtherUser(msg, user)) return null;
       if (msg._readByMe) return null;

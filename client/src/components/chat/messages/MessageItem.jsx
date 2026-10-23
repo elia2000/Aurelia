@@ -18,6 +18,7 @@ import { MessageMeta } from "./MessageMeta.jsx";
 import CallEntry from "./CallEntry.jsx";
 import UnsupportedMessage from "./UnsupportedMessage.jsx";
 import ServiceChip from "./ServiceChip.jsx";
+import KeyChangeNotice from "./KeyChangeNotice.jsx";
 import { describeCall, isCallMessage } from "../../../utils/callEntry.js";
 import { isUnsupportedMessage } from "../../../utils/messageKind.js";
 import HeartBurst from "../reactions/HeartBurst.jsx";
@@ -122,6 +123,8 @@ const getSystemEventSignature = (systemEvent) => {
     systemEvent?.text ?? "",
     systemEvent?.name ?? "",
     systemEvent?.suffix ?? "",
+    systemEvent?.notice?.state ?? "",
+    systemEvent?.notice?.dismissible ? 1 : 0,
   ].join("::");
 };
 
@@ -1347,10 +1350,15 @@ export const MessageItem = memo(function MessageItem({
           {...selectionRowProps}
         >
           {leadingGutter}
-          <ServiceChip
-            event={msg._systemEvent}
-            onJump={selectionMode ? null : onJumpToMessage}
-          />
+          {msg._systemEvent.notice ? (
+            // A change in a contact's devices or keys, made on this device (never a server message).
+            <KeyChangeNotice event={msg._systemEvent} interactive={!selectionMode} />
+          ) : (
+            <ServiceChip
+              event={msg._systemEvent}
+              onJump={selectionMode ? null : onJumpToMessage}
+            />
+          )}
         </div>
       ) : null}
       {!msg?._systemEvent ? (

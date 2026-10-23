@@ -2185,6 +2185,8 @@ async function deleteUserByIdPostgres(userId) {
     await trx("chat_message_reads").where("user_id", userId).del();
     await trx("push_subscriptions").where("user_id", userId).del();
     await trx("e2ee_devices").where("user_id", userId).del();
+    await trx("user_recovery_codes").where("user_id", userId).del();
+    await trx("user_two_factor").where("user_id", userId).del();
     await trx("chat_messages")
       .where("read_by_user_id", userId)
       .update({ read_by_user_id: null });
@@ -2340,6 +2342,8 @@ function deleteUserByIdSqlite(userId) {
     runWithoutSave(dbKnex("chat_message_reads").where("user_id", userId).del());
     runWithoutSave(dbKnex("push_subscriptions").where("user_id", userId).del());
     runWithoutSave(dbKnex("e2ee_devices").where("user_id", userId).del());
+    runWithoutSave(dbKnex("user_recovery_codes").where("user_id", userId).del());
+    runWithoutSave(dbKnex("user_two_factor").where("user_id", userId).del());
     runWithoutSave(
       dbKnex("chat_messages")
         .where("read_by_user_id", userId)
@@ -4470,7 +4474,7 @@ export function setChatMuted(userId, chatId, muted) {
   );
 }
 
-export function upsertPushSubscription(userId, endpoint, p256dh, auth, messagePreview = 1) {
+export function upsertPushSubscription(userId, endpoint, p256dh, auth, messagePreview = 1, sessionPublicId = null) {
   const safeEndpoint = String(endpoint || "").trim();
   if (!userId || !safeEndpoint) {
     return isPostgresMode() ? Promise.resolve() : undefined;
@@ -4484,6 +4488,7 @@ export function upsertPushSubscription(userId, endpoint, p256dh, auth, messagePr
         p256dh: String(p256dh || ""),
         auth: String(auth || ""),
         message_preview: preview,
+        session_public_id: sessionPublicId || null,
         updated_at: dbKnex.raw("datetime('now')"),
       })
       .onConflict("endpoint")
@@ -4492,6 +4497,7 @@ export function upsertPushSubscription(userId, endpoint, p256dh, auth, messagePr
         p256dh: String(p256dh || ""),
         auth: String(auth || ""),
         message_preview: preview,
+        session_public_id: sessionPublicId || null,
         updated_at: dbKnex.raw("datetime('now')"),
       }),
   );
@@ -4611,7 +4617,7 @@ export function countActiveE2eeDevices(userId) {
   return Number(row?.total || 0);
 }
 
-export function createE2eeDevice({ userId, label, ecdhPublic, ecdsaPublic }) {
+export function createE2eeDevice({ userId, label, ecdhPublic, ecdsaPublic, sessionPublicId = null }) {
   const id = generateUuid();
   const ts = nowDbTimestamp();
   const record = {
@@ -4624,18 +4630,21 @@ export function createE2eeDevice({ userId, label, ecdhPublic, ecdsaPublic }) {
     last_seen_at: ts,
     revoked_at: null,
   };
-  const res = run(dbKnex("e2ee_devices").insert(record));
+  const res = run(dbKnex("e2ee_devices").insert({ ...record, session_public_id: sessionPublicId || null }));
   if (res && typeof res.then === "function") return res.then(() => record);
   return record;
 }
 
-export function touchE2eeDevice(userId, deviceId) {
+export function touchE2eeDevice(userId, deviceId, sessionPublicId = null) {
   if (!userId || !deviceId) return isPostgresMode() ? Promise.resolve(0) : 0;
   return run(
     dbKnex("e2ee_devices")
       .where({ user_id: userId, id: deviceId })
       .whereNull("revoked_at")
-      .update({ last_seen_at: nowDbTimestamp() }),
+      .update({
+        last_seen_at: nowDbTimestamp(),
+        ...(sessionPublicId ? { session_public_id: sessionPublicId } : {}),
+      }),
   );
 }
 
@@ -4731,13 +4740,20 @@ export function listMutedUserIdsForChat(chatId) {
     .filter(Boolean);
 }
 
-export function createSession(userId, token) {
+export function createSession(userId, token, meta = {}) {
   if (!userId || !token) {
     const err = new Error(`Invalid session parameters: userId=${userId}, token=${token}`);
     return isPostgresMode() ? Promise.reject(err) : (() => { throw err; })();
   }
+  const userAgent = String(meta?.userAgent || "").trim().slice(0, 120);
   return run(
-    dbKnex("sessions").insert({ user_id: userId, token }),
+    dbKnex("sessions").insert({
+      user_id: userId,
+      token,
+      public_id: generateUuid(),
+      user_agent: userAgent || null,
+      auth_method: meta?.authMethod ? String(meta.authMethod).slice(0, 32) : null,
+    }),
   );
 }
 
@@ -4746,7 +4762,8 @@ export function getSession(token) {
   return getRow(
     dbKnex("sessions")
       .select(
-        "sessions.id as session_id", "sessions.token", "users.id", "users.username", "users.nickname",
+        "sessions.id as session_id", "sessions.token", "sessions.public_id as session_public_id",
+        "sessions.created_at as session_created_at", "users.id", "users.username", "users.nickname",
         "users.avatar_url", "users.color", "users.status", "users.banned", "users.role", "users.verified",
       )
       .join("users", "users.id", "sessions.user_id")
@@ -4765,12 +4782,224 @@ export function touchSession(token) {
   );
 }
 
+// Signing a session out also drops the push subscriptions it registered, so a
+// signed-out browser stops getting notifications. The E2EE device key is left
+// alone here: a normal sign-out is routine and the same browser signs in again.
 export function deleteSession(token) {
   if (!token) return isPostgresMode() ? Promise.resolve() : undefined;
-  return run(
+  const removeRow = (row) => {
+    const publicId = row?.public_id;
+    const finish = () => run(dbKnex("sessions").where("token", token).del());
+    if (!publicId) return finish();
+    const cleared = run(dbKnex("push_subscriptions").where("session_public_id", publicId).del());
+    return cleared && typeof cleared.then === "function" ? cleared.then(finish) : finish();
+  };
+  const raw = getRow(dbKnex("sessions").select("public_id").where("token", token).first());
+  return raw && typeof raw.then === "function" ? raw.then(removeRow) : removeRow(raw);
+}
+
+// ─── Active sessions ──────────────────────────────────────────────────────────
+
+const maybeThen = (value, fn) =>
+  value && typeof value.then === "function" ? value.then(fn) : fn(value);
+
+/** The person's own sessions, newest first. Never returns tokens. */
+export function listUserSessions(userId) {
+  if (!userId) return isPostgresMode() ? Promise.resolve([]) : [];
+  return getAll(
     dbKnex("sessions")
-      .where("token", token)
-      .del(),
+      .select("public_id", "user_agent", "auth_method", "created_at", "last_seen")
+      .where("user_id", userId)
+      .orderBy("id", "desc"),
+  );
+}
+
+/**
+ * Retires the browser behind some sessions: drops the push subscriptions they
+ * registered and, when asked, revokes the E2EE device keys they registered.
+ */
+export function removeSessionLinks(publicIds = [], { revokeDevices = false } = {}) {
+  const ids = Array.from(new Set((publicIds || []).filter(Boolean)));
+  if (!ids.length) return isPostgresMode() ? Promise.resolve() : undefined;
+  const dropPush = () => run(dbKnex("push_subscriptions").whereIn("session_public_id", ids).del());
+  const revoke = () =>
+    revokeDevices
+      ? run(
+          dbKnex("e2ee_devices")
+            .whereIn("session_public_id", ids)
+            .whereNull("revoked_at")
+            .update({ revoked_at: nowDbTimestamp() }),
+        )
+      : undefined;
+  return maybeThen(dropPush(), () => revoke());
+}
+
+function revokeSessionRows(rows, { revokeDevices }) {
+  const list = (rows || []).filter((row) => row?.public_id);
+  if (!list.length) return isPostgresMode() ? Promise.resolve([]) : [];
+  const ids = list.map((row) => row.public_id);
+  const deleted = run(dbKnex("sessions").whereIn("public_id", ids).del());
+  return maybeThen(deleted, () =>
+    maybeThen(removeSessionLinks(ids, { revokeDevices }), () =>
+      list.map((row) => ({ publicId: row.public_id, token: row.token })),
+    ),
+  );
+}
+
+/** Revokes one of the person's own sessions. Resolves to { publicId, token } or null (not theirs / not found). */
+export function revokeUserSession(userId, publicId, { revokeDevices = true } = {}) {
+  if (!userId || !publicId) return isPostgresMode() ? Promise.resolve(null) : null;
+  const raw = getRow(
+    dbKnex("sessions")
+      .select("public_id", "token")
+      .where({ user_id: userId, public_id: String(publicId) })
+      .first(),
+  );
+  return maybeThen(raw, (row) =>
+    row ? maybeThen(revokeSessionRows([row], { revokeDevices }), (done) => done[0] || null) : null,
+  );
+}
+
+/** Revokes every session of the person except `keepPublicId`. Resolves to [{ publicId, token }]. */
+export function revokeOtherUserSessions(userId, keepPublicId, { revokeDevices = true } = {}) {
+  if (!userId) return isPostgresMode() ? Promise.resolve([]) : [];
+  const qb = dbKnex("sessions").select("public_id", "token").where("user_id", userId);
+  if (keepPublicId) qb.whereNot("public_id", String(keepPublicId));
+  return maybeThen(getAll(qb), (rows) => revokeSessionRows(rows, { revokeDevices }));
+}
+
+/** Revokes every session of the person (ban, admin reset, account deletion). Push subscriptions go too. */
+export function revokeAllUserSessions(userId, { revokeDevices = false } = {}) {
+  if (!userId) return isPostgresMode() ? Promise.resolve([]) : [];
+  const qb = dbKnex("sessions").select("public_id", "token").where("user_id", userId);
+  return maybeThen(getAll(qb), (rows) =>
+    maybeThen(revokeSessionRows(rows, { revokeDevices }), (done) =>
+      maybeThen(run(dbKnex("push_subscriptions").where("user_id", userId).del()), () => done),
+    ),
+  );
+}
+
+/** Deletes sessions created before `cutoff` ("YYYY-MM-DD HH:MM:SS", UTC). They could not be used any more anyway. */
+export function purgeExpiredSessions(cutoff) {
+  if (!cutoff) return isPostgresMode() ? Promise.resolve(0) : 0;
+  return run(dbKnex("sessions").where("created_at", "<", String(cutoff)).del());
+}
+
+// ─── Two-factor sign-in ───────────────────────────────────────────────────────
+
+export function getUserTwoFactor(userId) {
+  if (!userId) return isPostgresMode() ? Promise.resolve(null) : null;
+  return maybeThen(
+    getRow(
+      dbKnex("user_two_factor")
+        .select("user_id", "secret_enc", "enabled", "last_used_step", "created_at", "enabled_at")
+        .where("user_id", userId)
+        .first(),
+    ),
+    (row) => (row ? { ...row, enabled: Number(row.enabled) === 1, last_used_step: row.last_used_step === null || row.last_used_step === undefined ? null : Number(row.last_used_step) } : null),
+  );
+}
+
+/** Stores a not-yet-confirmed secret (replacing an earlier unconfirmed one). Does nothing for a user that already has 2FA on. */
+export function beginTwoFactorEnrollment(userId, secretEnc) {
+  if (!userId || !secretEnc) return isPostgresMode() ? Promise.resolve(0) : 0;
+  const ts = nowDbTimestamp();
+  return run(
+    dbKnex("user_two_factor")
+      .insert({ user_id: userId, secret_enc: secretEnc, enabled: 0, last_used_step: null, created_at: ts, enabled_at: null })
+      .onConflict("user_id")
+      .merge({ secret_enc: secretEnc, enabled: 0, last_used_step: null, created_at: ts, enabled_at: null })
+      .whereRaw("user_two_factor.enabled = 0"),
+  );
+}
+
+function insertRecoveryCodes(userId, hashes) {
+  const ts = nowDbTimestamp();
+  const rows = Array.from(new Set((hashes || []).filter(Boolean))).map((code_hash) => ({
+    user_id: userId,
+    code_hash,
+    created_at: ts,
+    used_at: null,
+  }));
+  if (!rows.length) return isPostgresMode() ? Promise.resolve(0) : 0;
+  return run(dbKnex("user_recovery_codes").insert(rows));
+}
+
+/** Replaces every recovery code of the person (used when generating a new set). */
+export function replaceRecoveryCodes(userId, hashes) {
+  if (!userId) return isPostgresMode() ? Promise.resolve(0) : 0;
+  return maybeThen(run(dbKnex("user_recovery_codes").where("user_id", userId).del()), () =>
+    insertRecoveryCodes(userId, hashes),
+  );
+}
+
+/** Turns 2FA on: stores the recovery codes, remembers the confirming step and flips the flag. Resolves to true when it switched. */
+export function enableTwoFactor(userId, step, recoveryHashes) {
+  if (!userId) return isPostgresMode() ? Promise.resolve(false) : false;
+  return maybeThen(replaceRecoveryCodes(userId, recoveryHashes), () =>
+    maybeThen(
+      run(
+        dbKnex("user_two_factor")
+          .where({ user_id: userId, enabled: 0 })
+          .update({ enabled: 1, last_used_step: step ?? null, enabled_at: nowDbTimestamp() }),
+      ),
+      (changed) => Number(changed) > 0,
+    ),
+  );
+}
+
+/**
+ * Remembers that a code of time step `step` was accepted. Resolves to false when
+ * a code for this step or a later one was already accepted (a replay).
+ */
+export function markTotpStepUsed(userId, step) {
+  if (!userId || !Number.isFinite(Number(step))) return isPostgresMode() ? Promise.resolve(false) : false;
+  return maybeThen(
+    run(
+      dbKnex("user_two_factor")
+        .where({ user_id: userId })
+        .andWhere(function () {
+          this.whereNull("last_used_step").orWhere("last_used_step", "<", Number(step));
+        })
+        .update({ last_used_step: Number(step) }),
+    ),
+    (changed) => Number(changed) > 0,
+  );
+}
+
+/** Spends a recovery code. Resolves to true for exactly one caller (single use). */
+export function consumeRecoveryCode(userId, codeHash) {
+  if (!userId || !codeHash) return isPostgresMode() ? Promise.resolve(false) : false;
+  return maybeThen(
+    run(
+      dbKnex("user_recovery_codes")
+        .where({ user_id: userId, code_hash: codeHash })
+        .whereNull("used_at")
+        .update({ used_at: nowDbTimestamp() }),
+    ),
+    (changed) => Number(changed) > 0,
+  );
+}
+
+export function countUnusedRecoveryCodes(userId) {
+  if (!userId) return isPostgresMode() ? Promise.resolve(0) : 0;
+  return maybeThen(
+    getRow(
+      dbKnex("user_recovery_codes")
+        .where("user_id", userId)
+        .whereNull("used_at")
+        .count({ total: "*" })
+        .first(),
+    ),
+    (row) => Number(row?.total || 0),
+  );
+}
+
+/** Turns 2FA off and forgets the secret and the recovery codes. Resolves to true when there was something to remove. */
+export function disableTwoFactor(userId) {
+  if (!userId) return isPostgresMode() ? Promise.resolve(false) : false;
+  return maybeThen(run(dbKnex("user_recovery_codes").where("user_id", userId).del()), () =>
+    maybeThen(run(dbKnex("user_two_factor").where("user_id", userId).del()), (changed) => Number(changed) > 0),
   );
 }
 
@@ -4936,6 +5165,7 @@ export function adminListUsers({ limit = 200, offset = 0, search = "", sortBy = 
   let qb = dbKnex("users").select(
     "id", "username", "nickname", "avatar_url", "color", "status", "role", "banned", "verified", "created_at", "last_seen",
     dbKnex.raw("CASE WHEN status = 'online' THEN 1 ELSE 0 END AS online"),
+    dbKnex.raw("CASE WHEN EXISTS (SELECT 1 FROM user_two_factor tf WHERE tf.user_id = users.id AND tf.enabled = 1) THEN 1 ELSE 0 END AS two_factor"),
     dbKnex.raw("COUNT(*) OVER() AS _total")
   );
 
@@ -5644,6 +5874,8 @@ const RESET_TABLES = [
   "remote_channel_provider_state",
   "push_subscriptions",
   "e2ee_devices",
+  "user_recovery_codes",
+  "user_two_factor",
   "sessions",
   "chats",
   "users",

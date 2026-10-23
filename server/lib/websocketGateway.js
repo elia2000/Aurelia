@@ -7,6 +7,9 @@ export function createWebSocketGateway({
   getSessionFromToken,
   onUserConnected,
   onUserDisconnected,
+  // Called on every instance when sessions are revoked, so the SSE hub (which
+  // is not shared through Redis) can close its own streams too.
+  onSessionsRevoked = null,
   heartbeatIntervalMs = 30000,
   heartbeatTimeoutMs = 10000,
 }) {
@@ -58,8 +61,15 @@ export function createWebSocketGateway({
     pubsubSub.on("message", (channel, message) => {
       if (channel === "songbird:events") {
         try {
-          const { username, chatId, payload, broadcast, senderInstance } = JSON.parse(message);
+          const { username, chatId, payload, broadcast, senderInstance, revoke } = JSON.parse(message);
           if (senderInstance === instanceId) return;
+          if (revoke) {
+            revokeLocal(revoke, payload);
+            try {
+              onSessionsRevoked?.(revoke, payload);
+            } catch (_) {}
+            return;
+          }
           if (broadcast) {
             broadcastLocal(payload);
           } else if (chatId && sseHub) {
@@ -80,6 +90,39 @@ export function createWebSocketGateway({
         } catch (_) {}
       }
     });
+  }
+
+  // Sends `payload` to, then closes, the sockets of the given sessions (or of
+  // every session of `username`). Returns how many were closed.
+  function revokeLocal(target = {}, payload = null) {
+    const wanted = new Set((target.sessionIds || []).filter(Boolean).map(String));
+    const byUsername = String(target.username || "").toLowerCase();
+    if (!wanted.size && !byUsername) return 0;
+    const data = payload ? JSON.stringify(payload) : null;
+    let closed = 0;
+    clientsByUsername.forEach((clients, key) => {
+      [...clients].forEach((ws) => {
+        const matches = byUsername ? key === byUsername : wanted.has(ws._sessionId);
+        if (!matches) return;
+        try {
+          if (data && ws.readyState === WebSocket.OPEN) ws.send(data);
+          ws.close(4001, "session revoked");
+        } catch (_) {}
+        closed += 1;
+      });
+    });
+    return closed;
+  }
+
+  function revokeSessions(target = {}, payload = null) {
+    const closed = revokeLocal(target, payload);
+    if (redisClient) {
+      redisClient.publish(
+        "songbird:events",
+        JSON.stringify({ revoke: target, payload, senderInstance: instanceId }),
+      );
+    }
+    return closed;
   }
 
   function broadcastLocal(payload) {
@@ -171,6 +214,7 @@ export function createWebSocketGateway({
     }
 
     const handleConnection = (session) => {
+      ws._sessionId = session?.session_public_id ? String(session.session_public_id) : null;
       const username = session?.username
         ? String(session.username).toLowerCase()
         : null;
@@ -262,6 +306,7 @@ export function createWebSocketGateway({
     sendEvent,
     sendChatEvent,
     broadcastAll,
+    revokeSessions,
     close() {
       clearInterval(heartbeatTimer);
       if (wss.clients && typeof wss.clients.forEach === "function") {

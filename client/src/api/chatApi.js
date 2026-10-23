@@ -7,7 +7,33 @@ const withCredentials = (options = {}) => ({
   ...options,
 });
 
-export const apiFetch = (url, options = {}) => fetch(url, withCredentials(options));
+// Fired (at most every few seconds) when an API call answers 401. The app then
+// checks whether the session is really gone: another device may have signed
+// this one out while the live connection was down.
+export const UNAUTHORIZED_EVENT = "aurelle:api-unauthorized";
+let lastUnauthorizedAt = 0;
+
+const noteUnauthorized = () => {
+  if (typeof window === "undefined") return;
+  const now = Date.now();
+  if (now - lastUnauthorizedAt < 5000) return;
+  lastUnauthorizedAt = now;
+  try {
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+  } catch {
+    // no window to tell
+  }
+};
+
+export const apiFetch = (url, options = {}) => {
+  const pending = fetch(url, withCredentials(options));
+  if (pending && typeof pending.then === "function") {
+    pending.then((res) => {
+      if (res?.status === 401) noteUnauthorized();
+    }, () => {});
+  }
+  return pending;
+};
 
 export const fetchHealth = () => apiFetch(`${API_BASE}/api/health`);
 

@@ -1,4 +1,22 @@
 import { userEvents } from "../lib/workers/autoAddWorker.js";
+import { AUTH_METHODS, summarizeUserAgent } from "../lib/accountSessions.js";
+import { loginGuardFor, sendTooManyAttempts } from "../lib/loginGuard.js";
+import {
+  createChallengeGuard,
+  signLoginChallenge,
+  verifyLoginChallenge,
+} from "../lib/twoFactor.js";
+import { twoFactorServiceFor } from "../lib/twoFactorService.js";
+
+const maybe = async (value) => (value && typeof value.then === "function" ? await value : value);
+
+// Compared against when the account name is unknown, so a wrong name costs the
+// same time as a wrong password (no user enumeration through timing).
+let decoyHash = null;
+const decoyHashFor = (bcrypt, crypto) => {
+  if (!decoyHash) decoyHash = bcrypt.hashSync(crypto.randomBytes(16).toString("hex"), 10);
+  return decoyHash;
+};
 
 function registerAuthRoutes(app, deps) {
   const {
@@ -20,6 +38,40 @@ function registerAuthRoutes(app, deps) {
     updateLastSeen,
     getSessionFromRequest,
   } = deps;
+
+  const guard = loginGuardFor(deps);
+  const twoFactor = twoFactorServiceFor(deps);
+  const challenges = deps.challengeGuard || (deps.challengeGuard = createChallengeGuard());
+
+  // A new login never reuses a token: it always gets a fresh random id, and the
+  // session the browser was holding (if any) is retired so it does not linger
+  // in the list of active sessions or stay usable.
+  const startSession = async (req, res, userId, authMethod) => {
+    const previous = parseCookies(req).sid;
+    if (previous) {
+      try {
+        await maybe(deleteSession(previous));
+      } catch {
+        // best effort: the old session is also removed by expiry
+      }
+    }
+    const token = crypto.randomBytes(24).toString("hex");
+    await createSession(userId, token, {
+      userAgent: summarizeUserAgent(req.headers?.["user-agent"]),
+      authMethod,
+    });
+    setSessionCookie(req, res, token);
+    return token;
+  };
+
+  const userPayload = (user) => ({
+    id: user.id,
+    username: user.username,
+    nickname: user.nickname || null,
+    avatarUrl: ensureAvatarExists(user.id, user.avatar_url) || null,
+    color: user.color || USER_COLORS[0],
+    status: user.status || "online",
+  });
 
   app.post("/api/register", async (req, res) => {
     if (!getSetting("SIGN_UP")) {
@@ -95,10 +147,7 @@ function registerAuthRoutes(app, deps) {
       userEvents.emit("user:created", { userId: id });
     }
 
-    const token = crypto.randomBytes(24).toString("hex");
-
-    await createSession(id, token);
-    setSessionCookie(req, res, token);
+    await startSession(req, res, id, AUTH_METHODS.REGISTRATION);
 
     return res.json({
       id,
@@ -118,35 +167,119 @@ function registerAuthRoutes(app, deps) {
         .status(400)
         .json({ error: "Username and password are required." });
     }
-
-    const trimmed = username.trim().toLowerCase();
-    const rawUser = findUserByUsername(trimmed);
-    const user = rawUser && typeof rawUser.then === "function" ? await rawUser : rawUser;
-
-    // NB: Postgres returns BIGINT columns (e.g. users.banned) as strings,
-    // and "0" is truthy in JS, so coerce to Number before the check.
-    if (user && Number(user.banned)) {
-      return res.status(403).json({ error: "Account is banned." });
+    if (typeof username !== "string" || typeof password !== "string") {
+      return res.status(400).json({ error: "Invalid credentials." });
     }
 
-    if (!user || !user.password_hash || !bcrypt.compareSync(password, user.password_hash)) {
+    const trimmed = username.trim().toLowerCase();
+    const who = { ip: req.ip, account: trimmed };
+    if (!guard.check(who).allowed) return sendTooManyAttempts(res, guard);
+
+    const user = await maybe(findUserByUsername(trimmed));
+
+    // Always compare against a hash, even for an unknown name, so the response
+    // time does not tell whether the account exists.
+    const hash = user?.password_hash || decoyHashFor(bcrypt, crypto);
+    const passwordOk = (await bcrypt.compare(password, hash)) && Boolean(user?.password_hash);
+
+    if (!passwordOk) {
+      guard.recordFailure(who);
       return res.status(401).json({ error: "Invalid credentials." });
     }
 
+    // NB: Postgres returns BIGINT columns (e.g. users.banned) as strings,
+    // and "0" is truthy in JS, so coerce to Number before the check.
+    // Checked after the password, so the ban state of an account is not
+    // visible to somebody who does not know its password.
+    if (Number(user.banned)) {
+      return res.status(403).json({ error: "Account is banned." });
+    }
+
+    const tf = typeof deps.getUserTwoFactor === "function" ? await maybe(deps.getUserTwoFactor(user.id)) : null;
+    if (tf?.enabled) {
+      // Right password, second factor still owed: no session and no cookie yet.
+      const challenge = signLoginChallenge({ userId: user.id });
+      return res.json({
+        twoFactorRequired: true,
+        challenge: challenge.token,
+        expiresInSeconds: Math.round((challenge.exp - Date.now()) / 1000),
+      });
+    }
+
+    guard.recordSuccess(who);
     await updateLastSeen(user.id);
+    await startSession(req, res, user.id, AUTH_METHODS.PASSWORD);
 
-    const token = crypto.randomBytes(24).toString("hex");
+    return res.json(userPayload(user));
+  });
 
-    await createSession(user.id, token);
-    setSessionCookie(req, res, token);
+  // Second step of a sign-in with 2FA: the challenge from /api/login plus a
+  // code from the authenticator app, or one recovery code.
+  app.post("/api/login/2fa", async (req, res) => {
+    const { challenge, code, recoveryCode } = req.body || {};
+    const expired = () =>
+      res.status(401).json({ error: "This sign-in has expired. Enter your password again.", restart: true });
 
+    if (typeof challenge !== "string" || !challenge) return expired();
+    const payload = verifyLoginChallenge(challenge);
+    if (!payload) return expired();
+
+    const state = challenges.status(payload.jti);
+    if (state === "used") return expired();
+    if (state === "locked") {
+      return res
+        .status(429)
+        .json({ error: "Too many wrong codes. Enter your password again.", restart: true });
+    }
+
+    const user = await maybe(deps.findUserById(payload.uid));
+    if (!user || Number(user.banned)) return expired();
+
+    // Same buckets as the password step, so wrong codes and wrong passwords add up.
+    const who = { ip: req.ip, account: String(user.username || "").toLowerCase() };
+    if (!guard.check(who).allowed || twoFactor.isBlocked(user.id)) {
+      return sendTooManyAttempts(res, guard);
+    }
+
+    const hasInput =
+      (typeof code === "string" && code.trim() !== "") ||
+      (typeof recoveryCode === "string" && recoveryCode.trim() !== "");
+    const result = hasInput
+      ? await twoFactor.verify(user.id, {
+          code: typeof code === "string" ? code : "",
+          recoveryCode: typeof recoveryCode === "string" ? recoveryCode : "",
+        })
+      : { ok: false, reason: "format" };
+
+    if (!result.ok) {
+      guard.recordFailure(who);
+      twoFactor.recordFailure(user.id);
+      const left = challenges.fail(payload.jti, payload.exp);
+      if (left === 0) {
+        return res
+          .status(429)
+          .json({ error: "Too many wrong codes. Enter your password again.", restart: true });
+      }
+      return res.status(401).json({ error: "Invalid code.", attemptsLeft: left });
+    }
+
+    challenges.consume(payload.jti, payload.exp);
+    guard.recordSuccess(who);
+    await updateLastSeen(user.id);
+    await startSession(
+      req,
+      res,
+      user.id,
+      result.method === "recovery" ? AUTH_METHODS.RECOVERY_CODE : AUTH_METHODS.PASSWORD_2FA,
+    );
+
+    let recoveryCodesRemaining;
+    if (result.method === "recovery" && typeof deps.countUnusedRecoveryCodes === "function") {
+      recoveryCodesRemaining = Number(await maybe(deps.countUnusedRecoveryCodes(user.id)));
+    }
     return res.json({
-      id: user.id,
-      username: user.username,
-      nickname: user.nickname || null,
-      avatarUrl: ensureAvatarExists(user.id, user.avatar_url) || null,
-      color: user.color || USER_COLORS[0],
-      status: user.status || "online",
+      ...userPayload(user),
+      ...(result.method === "recovery" ? { usedRecoveryCode: true, recoveryCodesRemaining } : {}),
     });
   });
 

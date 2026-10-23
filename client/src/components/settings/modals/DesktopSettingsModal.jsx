@@ -9,6 +9,8 @@ import { AboutSettingsPanel } from "../panels/AboutSettingsPanel.jsx";
 import { AppearanceSettingsPanel } from "../panels/AppearanceSettingsPanel.jsx";
 import { CallSoundsSettingsPanel } from "../panels/CallSoundsSettingsPanel.jsx";
 import { DataSettingsPanel } from "../panels/DataSettingsPanel.jsx";
+import { SecuritySettingsPanel } from "../security/SecuritySettingsPanel.jsx";
+import { TwoFactorCodeField } from "../security/TwoFactorCodeField.jsx";
 import ConfirmPasswordModal from "../../modals/ConfirmPasswordModal.jsx";
 import Avatar from "../../common/Avatar.jsx";
 
@@ -255,10 +257,8 @@ export function DesktopSettingsModal({
         ) : null}
 
         {settingsPanel === "security" ? (
-          <form
-            className="app-scroll mt-4 min-h-0 flex-1 space-y-4 overflow-y-auto px-6 pb-6"
-            onSubmit={handlePasswordSave}
-          >
+          <div className="app-scroll mt-4 min-h-0 flex-1 space-y-6 overflow-y-auto px-6 pb-6">
+          <form className="space-y-4" onSubmit={handlePasswordSave}>
             <label className="block">
               <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">
                 Current password
@@ -362,6 +362,14 @@ export function DesktopSettingsModal({
                 </button>
               </div>
             </label>
+            {passwordForm.needsTwoFactor ? (
+              <TwoFactorCodeField
+                value={passwordForm.twoFactorCode || ""}
+                onChange={(value) =>
+                  setPasswordForm((prev) => ({ ...prev, twoFactorCode: value }))
+                }
+              />
+            ) : null}
             <button
               type="submit"
               className="w-full rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 hover:shadow-[0_0_20px_color-mix(in_srgb,var(--color-emerald-500)_40%,transparent)]"
@@ -370,6 +378,8 @@ export function DesktopSettingsModal({
             </button>
             <InlineError message={passwordError} />
           </form>
+          <SecuritySettingsPanel variant="desktop" />
+          </div>
         ) : null}
 
         {settingsPanel === "data" ? (
@@ -416,8 +426,8 @@ export function DesktopSettingsModal({
         confirmLabel="Continue"
         deleteLabel="Delete"
         onClose={() => setDeleteModalOpen(false)}
-        onConfirm={async (password) => {
-          await onDeleteAccount?.(password);
+        onConfirm={async (password, code) => {
+          await onDeleteAccount?.(password, code);
         }}
       />
     </div>,

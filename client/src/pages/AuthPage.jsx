@@ -12,6 +12,7 @@ export default function AuthPage({
   onSubmit,
   onSwitchMode,
   status,
+  notice = "",
   loading,
   showSigningOverlay = false,
   allowSignup = true,
@@ -123,7 +124,7 @@ export default function AuthPage({
         />
       )}
 
-      <AuthStatusBanner status={status} />
+      <AuthStatusBanner status={status} notice={notice} />
 
       {!children && (
         <AuthFooter

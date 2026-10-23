@@ -7,6 +7,7 @@ function registerHealthRoutes(app, deps) {
     requireSessionUsernameMatch,
     connectPresence,
     disconnectPresence,
+    getSessionFromRequest,
   } = deps;
 
   app.get("/api/health", (_req, res) => {
@@ -37,14 +38,27 @@ function registerHealthRoutes(app, deps) {
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders?.();
 
-    addSseClient(username, res);
+    addSseClient(username, res, session.session_public_id || null);
     connectPresence(username, res);
 
     res.write(`data: ${JSON.stringify({ type: "connected" })}\n\n`);
 
-    const keepAlive = setInterval(() => {
+    const keepAlive = setInterval(async () => {
       res.write(`: ping\n\n`);
-    }, 25000);
+      // A stream outlives the request that opened it. If its session was
+      // ended some other way (another instance, the CLI, an expiry), close it
+      // within one ping instead of leaving it open until the browser leaves.
+      if (typeof getSessionFromRequest !== "function") return;
+      try {
+        const stillValid = await getSessionFromRequest(req);
+        if (!stillValid) {
+          res.write(`data: ${JSON.stringify({ type: "session_revoked", reason: "signed_out" })}\n\n`);
+          res.end();
+        }
+      } catch {
+        // a failed lookup is not a sign-out: try again on the next ping
+      }
+    }, deps.eventsRecheckIntervalMs || 25000);
 
     req.on("close", () => {
       clearInterval(keepAlive);

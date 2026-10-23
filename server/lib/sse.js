@@ -140,12 +140,41 @@ export function createSseHub({ listChatMembers }) {
     return list;
   }
 
-  function addSseClient(username, res) {
+  // Which session (public id) each open stream belongs to, so a revoked
+  // session can have its streams closed without touching the person's others.
+  const sessionByClient = new WeakMap();
+
+  function addSseClient(username, res, sessionId = null) {
     const key = String(username || "").toLowerCase();
     if (!key) return;
     const clients = sseClientsByUsername.get(key) || new Set();
     clients.add(res);
     sseClientsByUsername.set(key, clients);
+    if (sessionId) sessionByClient.set(res, String(sessionId));
+  }
+
+  // Tells the streams of the given sessions (or of every session of `username`)
+  // that they were signed out, then ends them. Returns how many were closed.
+  function closeStreams({ sessionIds = [], username = null, payload = null } = {}) {
+    const wanted = new Set((sessionIds || []).filter(Boolean).map(String));
+    const byUsername = String(username || "").toLowerCase();
+    if (!wanted.size && !byUsername) return 0;
+    const message = payload ? `data: ${JSON.stringify(payload)}\n\n` : null;
+    let closed = 0;
+    sseClientsByUsername.forEach((clients, key) => {
+      clients.forEach((client) => {
+        const matches = byUsername ? key === byUsername : wanted.has(sessionByClient.get(client));
+        if (!matches) return;
+        try {
+          if (message) client.write(message);
+          client.end();
+        } catch (_) {
+          // the connection is already gone; its close handler cleans up
+        }
+        closed += 1;
+      });
+    });
+    return closed;
   }
 
   function removeSseClient(username, res) {
@@ -224,6 +253,7 @@ export function createSseHub({ listChatMembers }) {
   return {
     addSseClient,
     removeSseClient,
+    closeStreams,
     emitSseEvent,
     emitChatEvent,
     onChatEvent,

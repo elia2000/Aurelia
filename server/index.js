@@ -22,6 +22,7 @@ import { createPresenceTracker } from "./lib/presenceTracker.js";
 import { createPushService } from "./lib/push.js";
 import { createUploadTools } from "./lib/uploads.js";
 import { resolveAppOrigins, ensureBucketCors } from "./lib/bucketCors.js";
+import { createSecurityHeaders } from "./lib/securityHeaders.js";
 import { resolveWebhookCallbackUrl } from "./lib/webhookUrl.js";
 import { createVideoTranscodeManager } from "./lib/videoTranscode.js";
 import { createMessageFileJobs } from "./lib/messageFileJobs.js";
@@ -30,6 +31,7 @@ import { createTextRetentionJobs } from "./lib/textRetentionJobs.js";
 import { emitUnpinnedMessages } from "./lib/pins.js";
 import { createInspector } from "./lib/inspect.js";
 import { createSessionHelpers } from "./lib/sessions.js";
+import { redactSensitive } from "./lib/redact.js";
 import { createRedisClient, createRedisSessionStore } from "./lib/redis.js";
 import { storageEncryption } from "./lib/storageEncryption.js";
 import { createStorageProvider } from "./lib/storage/index.js";
@@ -96,6 +98,19 @@ import {
   setMessageExpiresAt,
   setMessageForwardOrigin,
   getSession,
+  listUserSessions,
+  revokeUserSession,
+  revokeOtherUserSessions,
+  revokeAllUserSessions,
+  purgeExpiredSessions,
+  getUserTwoFactor,
+  beginTwoFactorEnrollment,
+  enableTwoFactor,
+  replaceRecoveryCodes,
+  markTotpStepUsed,
+  consumeRecoveryCode,
+  countUnusedRecoveryCodes,
+  disableTwoFactor,
   isMember,
   isGroupMemberRemoved,
   listChatMembers,
@@ -296,6 +311,14 @@ if (typeof debugSummaryTimer.unref === "function") debugSummaryTimer.unref();
 
 app.set("trust proxy", 1);
 
+// Security headers (CSP, nosniff, HSTS on HTTPS, ...). First in the chain so that
+// even a body-parser error or a 404 carries them. See docs/Security-Headers.md.
+const securityHeaders = createSecurityHeaders({ env: process.env, isProduction });
+app.use(securityHeaders);
+if (securityHeaders.config.mode !== "enforce") {
+  console.log(`[security] Content-Security-Policy mode: ${securityHeaders.config.mode}`);
+}
+
 app.use(express.json({ limit: "1mb" }));
 app.use(
   compression({
@@ -308,14 +331,6 @@ app.use(
     },
   }),
 );
-app.use((req, res, next) => {
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
-  next();
-});
-
 // Always registered; each request checks the live setting so toggling
 // APP_DEBUG in the admin panel takes effect without a restart.
 app.use((req, res, next) => {
@@ -345,10 +360,10 @@ app.use((req, res, next) => {
       path: req.originalUrl || req.url || "",
       query: req.query || {},
       params: req.params || {},
-      body: req.body || {},
+      body: redactSensitive(req.body || {}),
       status: Number(res.statusCode || 0),
       durationMs: Date.now() - startedAt,
-      response: responseBody,
+      response: redactSensitive(responseBody),
     });
   });
   next();
@@ -605,6 +620,7 @@ const { addSseClient, removeSseClient, emitSseEvent, emitChatEvent, broadcastAll
 
 let wsPresenceBroadcaster = null;
 let wsGlobalBroadcaster = null;
+let wsSessionRevoker = null;
 const presenceTracker = createPresenceTracker({
   updateLastSeen,
   getUserPresence,
@@ -704,8 +720,8 @@ const mediaQueueManager = createMediaQueueManager({
   getSetting,
 });
 
-async function createSessionCombined(userId, token) {
-  await createSession(userId, token);
+async function createSessionCombined(userId, token, meta = {}) {
+  await createSession(userId, token, meta);
   await redisSessionStore.createSession(userId, token);
 }
 
@@ -725,9 +741,32 @@ async function deleteSessionCombined(token) {
   await redisSessionStore.deleteSession(token);
 }
 
+// Session revocation: the rows go first (every API call with those cookies
+// answers 401 at once), then the Redis copies. Only public ids leave this
+// layer; the tokens stay here.
+async function forgetTokens(revoked) {
+  await Promise.all(
+    (revoked || []).map((entry) => redisSessionStore.deleteSession(entry.token).catch(() => {})),
+  );
+  return (revoked || []).map((entry) => entry.publicId);
+}
+async function revokeUserSessionCombined(userId, publicId) {
+  const revoked = await revokeUserSession(userId, publicId);
+  if (!revoked) return null;
+  await forgetTokens([revoked]);
+  return { publicId: revoked.publicId };
+}
+async function revokeOtherUserSessionsCombined(userId, keepPublicId) {
+  return forgetTokens(await revokeOtherUserSessions(userId, keepPublicId));
+}
+async function revokeAllUserSessionsCombined(userId) {
+  return forgetTokens(await revokeAllUserSessions(userId));
+}
+
 const sessionHelpers = createSessionHelpers({
   getSession: getSessionCombined,
   touchSession: touchSessionCombined,
+  deleteSession: deleteSessionCombined,
   isProduction,
 });
 const {
@@ -923,6 +962,24 @@ const apiDeps = {
   createMessageFiles,
   editMessage,
   createSession: createSessionCombined,
+  listUserSessions,
+  revokeUserSession: revokeUserSessionCombined,
+  revokeOtherUserSessions: revokeOtherUserSessionsCombined,
+  revokeAllUserSessions: revokeAllUserSessionsCombined,
+  // Tells the live SSE / WebSocket streams of the given sessions (or of every
+  // session of a username) that they were signed out, then closes them.
+  closeSessionStreams: (target) => {
+    sseHub.closeStreams(target);
+    wsSessionRevoker?.(target, target?.payload);
+  },
+  getUserTwoFactor,
+  beginTwoFactorEnrollment,
+  enableTwoFactor,
+  replaceRecoveryCodes,
+  markTotpStepUsed,
+  consumeRecoveryCode,
+  countUnusedRecoveryCodes,
+  disableTwoFactor,
   createUser,
   crypto,
   debugLog,
@@ -1498,6 +1555,7 @@ const wsGateway = createWebSocketGateway({
   sseHub,
   redisClient,
   getSessionFromToken: getSessionCombined,
+  onSessionsRevoked: (target, payload) => sseHub.closeStreams({ ...target, payload }),
   onUserConnected: (username, ws) => presenceTracker.markConnected(username, ws),
   onUserDisconnected: (username, ws) => presenceTracker.markDisconnected(username, ws),
   heartbeatIntervalMs: wsHeartbeatIntervalMs,
@@ -1505,6 +1563,21 @@ const wsGateway = createWebSocketGateway({
 });
 wsPresenceBroadcaster = (username, payload) => wsGateway.sendEvent(username, payload);
 wsGlobalBroadcaster = (payload) => wsGateway.broadcastAll(payload);
+wsSessionRevoker = (target, payload) => wsGateway.revokeSessions(target, payload);
+
+// Sessions older than their cookie (14 days) can not be used any more; drop the
+// rows so the list of active sessions stays honest. Hourly, best effort.
+const SESSION_PURGE_INTERVAL_MS = 60 * 60 * 1000;
+const purgeStaleSessions = () => {
+  const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .replace("T", " ")
+    .slice(0, 19);
+  Promise.resolve(purgeExpiredSessions(cutoff)).catch(() => {});
+};
+setImmediate(purgeStaleSessions);
+const sessionPurgeTimer = setInterval(purgeStaleSessions, SESSION_PURGE_INTERVAL_MS);
+if (typeof sessionPurgeTimer.unref === "function") sessionPurgeTimer.unref();
 
 // Graceful shutdown for container orchestrators
 process.on("SIGTERM", () => {

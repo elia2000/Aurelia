@@ -17,6 +17,9 @@ export default function ConfirmPasswordModal({
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  // Set when the server says the account has two-factor authentication on.
+  const [needsCode, setNeedsCode] = useState(false);
+  const [code, setCode] = useState("");
   const dialogRef = useRef(null);
   useFocusTrap(dialogRef, open);
 
@@ -27,12 +30,14 @@ export default function ConfirmPasswordModal({
       setShowPassword(false);
       setError("");
       setLoading(false);
+      setNeedsCode(false);
+      setCode("");
     }
   }, [open]);
 
   const canSubmit = useMemo(
-    () => Boolean(password.trim()) && !loading,
-    [password, loading],
+    () => Boolean(password.trim()) && (!needsCode || Boolean(code.trim())) && !loading,
+    [password, loading, needsCode, code],
   );
 
   if (!open) return null;
@@ -115,6 +120,26 @@ export default function ConfirmPasswordModal({
               </div>
             </label>
 
+            {needsCode ? (
+              <label className="block">
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                  Authentication code
+                </span>
+                <input
+                  type="text"
+                  value={code}
+                  onChange={(event) => setCode(event.target.value)}
+                  autoComplete="one-time-code"
+                  maxLength={16}
+                  placeholder="123456"
+                  className="mt-2 w-full rounded-2xl border border-emerald-200 bg-white px-4 py-3 text-sm tracking-widest text-slate-700 outline-hidden transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-300/60 dark:border-emerald-500/30 dark:bg-slate-900 dark:text-slate-100"
+                />
+                <span className="mt-1 block text-[11px] text-slate-500 dark:text-slate-400">
+                  The 6 digits from your authenticator app, or a recovery code.
+                </span>
+              </label>
+            ) : null}
+
             {error ? (
               <p className="text-xs text-rose-600 dark:text-rose-200">
                 {error}
@@ -137,10 +162,11 @@ export default function ConfirmPasswordModal({
                   setLoading(true);
                   setError("");
                   try {
-                    await onConfirm?.(password);
+                    await onConfirm?.(password, needsCode ? code : undefined);
                     setLoading(false);
                     onClose?.();
                   } catch (err) {
+                    if (err?.twoFactorRequired) setNeedsCode(true);
                     setError(String(err?.message || "Unable to delete."));
                     setLoading(false);
                     return;

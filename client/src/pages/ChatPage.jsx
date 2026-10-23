@@ -15,6 +15,8 @@ import { useBatchMessageActions } from "../hooks/chat/useBatchMessageActions.js"
 import { buildSavedGifPreviewFile, resolveSaveGifTarget } from "../gifs/gifMessageActions.js";
 import { savedGifs } from "../gifs/savedGifsStore.js";
 import { showToast } from "../utils/toast.js";
+import { splitAuthCode } from "../utils/authCode.js";
+import { rememberSignedOutNotice } from "../utils/signedOutNotice.js";
 import { CHAT_PAGE_CONFIG } from "../settings/chatPageConfig.js";
 import { getAvatarInitials } from "../utils/avatarInitials.js";
 import { getRandomAvatarColor } from "../utils/avatarColor.js";
@@ -808,6 +810,9 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     currentPassword: "",
     newPassword: "",
     confirmPassword: "",
+    // Shown once the server asks for it (the account has two-factor on).
+    twoFactorCode: "",
+    needsTwoFactor: false,
   });
   const [statusSelection, setStatusSelection] = useState(
     user?.status || "online",
@@ -3717,7 +3722,10 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         });
       }
     },
-    onSessionRevoked: () => {
+    onSessionRevoked: (payload) => {
+      // Signed out from elsewhere (another device, an admin, a password change):
+      // leave a short note for the sign-in page.
+      rememberSignedOutNotice(payload?.reason);
       handleLogout();
     },
   });
@@ -5826,15 +5834,21 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         username: user.username,
         currentPassword: passwordForm.currentPassword,
         newPassword: passwordForm.newPassword,
+        ...splitAuthCode(passwordForm.twoFactorCode),
       });
       const data = await res.json();
       if (!res.ok) {
+        if (data?.twoFactorRequired) {
+          setPasswordForm((prev) => ({ ...prev, needsTwoFactor: true }));
+        }
         throw new Error(data?.error || "Unable to update password.");
       }
       setPasswordForm({
         currentPassword: "",
         newPassword: "",
         confirmPassword: "",
+        twoFactorCode: "",
+        needsTwoFactor: false,
       });
       setSettingsPanel(null);
     } catch (err) {
@@ -6680,16 +6694,22 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     }
   }, [activeChatId, closeContextMenu, contextMenu, messages]);
 
-  async function handleDeleteAccount(password) {
+  async function handleDeleteAccount(password, authCode) {
     if (!user?.username) return;
     const trimmed = String(password || "").trim();
     if (!trimmed) {
       throw new Error("Password is required.");
     }
-    const res = await deleteAccount({ username: user.username, password: trimmed });
+    const res = await deleteAccount({
+      username: user.username,
+      password: trimmed,
+      ...splitAuthCode(authCode),
+    });
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data?.error || "Unable to delete account.");
+      const failure = new Error(data?.error || "Unable to delete account.");
+      failure.twoFactorRequired = Boolean(data?.twoFactorRequired);
+      throw failure;
     }
     setSettingsPanel(null);
     setShowSettings(false);

@@ -3,6 +3,7 @@ import CallOverlay from "../components/calls/CallOverlay.jsx";
 import { CallProvider } from "./CallProvider.jsx";
 import { clearE2eeSession } from "../e2ee/services.js";
 import { useDeviceRegistration } from "../e2ee/useDeviceRegistration.js";
+import { retainKeyNoticeRecorder } from "../e2ee/useKeyChangeTimeline.js";
 import { clearVideoNoteCaches } from "../videoNote/receive.js";
 
 /**
@@ -22,6 +23,10 @@ export default function CallLayer({ user, children }) {
     },
     [userId],
   );
+
+  // What the trust tracker sees (a contact's new device, even during a call) is written down as a
+  // note for that contact's chat, wherever in the app it happens.
+  useEffect(() => retainKeyNoticeRecorder(userId), [userId]);
 
   return (
     <CallProvider user={user}>

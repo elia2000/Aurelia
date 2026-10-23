@@ -29,6 +29,8 @@ import { AppearanceSettingsPanel } from "./AppearanceSettingsPanel.jsx";
 import { CallSoundsSettingsPanel } from "./CallSoundsSettingsPanel.jsx";
 import { useCallSoundsAvailable } from "../../../calls/useCallSoundPrefs.js";
 import { DataSettingsPanel } from "./DataSettingsPanel.jsx";
+import { SecuritySettingsPanel } from "../security/SecuritySettingsPanel.jsx";
+import { TwoFactorCodeField } from "../security/TwoFactorCodeField.jsx";
 import { NotificationsSettingsPanel } from "./NotificationsSettingsPanel.jsx";
 import ConfirmPasswordModal from "../../modals/ConfirmPasswordModal.jsx";
 import Avatar from "../../common/Avatar.jsx";
@@ -400,6 +402,7 @@ export function MobileSettingsPanel({
   );
 
   const renderSecurityPanel = () => (
+    <div className="space-y-5">
     <form className="space-y-4" onSubmit={handlePasswordSave}>
       <label className="block">
         <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">
@@ -498,6 +501,15 @@ export function MobileSettingsPanel({
           </button>
         </div>
       </label>
+      {passwordForm.needsTwoFactor ? (
+        <TwoFactorCodeField
+          compact
+          value={passwordForm.twoFactorCode || ""}
+          onChange={(value) =>
+            setPasswordForm((prev) => ({ ...prev, twoFactorCode: value }))
+          }
+        />
+      ) : null}
       <button
         type="submit"
         className="w-full rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-white shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 hover:shadow-[0_0_20px_color-mix(in_srgb,var(--color-emerald-500)_40%,transparent)]"
@@ -506,6 +518,8 @@ export function MobileSettingsPanel({
       </button>
       <InlineError message={passwordError} />
     </form>
+    <SecuritySettingsPanel variant="mobile" />
+    </div>
   );
 
   const renderDetailPanel = () => {
@@ -764,8 +778,8 @@ export function MobileSettingsPanel({
         confirmLabel="Continue"
         deleteLabel="Delete"
         onClose={() => setDeleteModalOpen(false)}
-        onConfirm={async (password) => {
-          await onDeleteAccount?.(password);
+        onConfirm={async (password, code) => {
+          await onDeleteAccount?.(password, code);
         }}
       />
     </>

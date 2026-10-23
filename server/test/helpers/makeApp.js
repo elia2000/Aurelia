@@ -18,19 +18,114 @@ import { createCallRegistry } from "../../lib/calls.js";
 import { makeE2eeStore, makeEventRecorder } from "./e2eeStore.js";
 
 // ─── Minimal in-memory session store ─────────────────────────────────────────
+//
+// Mirrors the session functions of db.js: a session has a public id (what the
+// API shows), the browser summary and how it was created. Revoking returns
+// public ids only, like the wrappers in index.js.
 
 export function makeSessionStore() {
   const sessions = new Map();
+  const now = () => new Date().toISOString().replace("T", " ").slice(0, 19);
+  const publicIdsOf = (records) => records.map((record) => record.publicId);
+  const drop = (records) => records.forEach((record) => sessions.delete(record.token));
   return {
     sessions,
-    createSession: (userId, token) => {
-      sessions.set(token, { userId, token });
+    createSession: (userId, token, meta = {}) => {
+      sessions.set(token, {
+        userId,
+        token,
+        publicId: generateUuid(),
+        userAgent: meta.userAgent ?? null,
+        authMethod: meta.authMethod ?? null,
+        createdAt: meta.createdAt ?? now(),
+        lastSeen: now(),
+      });
     },
     deleteSession: (token) => {
       sessions.delete(token);
     },
     getSession: (token) => sessions.get(token) ?? null,
-    touchSession: () => {},
+    touchSession: (token) => {
+      const record = sessions.get(token);
+      if (record) record.lastSeen = now();
+    },
+    listUserSessions: (userId) =>
+      [...sessions.values()]
+        .filter((record) => record.userId === userId)
+        .map((record) => ({
+          public_id: record.publicId,
+          user_agent: record.userAgent,
+          auth_method: record.authMethod,
+          created_at: record.createdAt,
+          last_seen: record.lastSeen,
+        })),
+    revokeUserSession: (userId, publicId) => {
+      const record = [...sessions.values()].find(
+        (r) => r.userId === userId && r.publicId === publicId,
+      );
+      if (!record) return null;
+      drop([record]);
+      return { publicId: record.publicId };
+    },
+    revokeOtherUserSessions: (userId, keepPublicId) => {
+      const records = [...sessions.values()].filter(
+        (r) => r.userId === userId && r.publicId !== keepPublicId,
+      );
+      drop(records);
+      return publicIdsOf(records);
+    },
+    revokeAllUserSessions: (userId) => {
+      const records = [...sessions.values()].filter((r) => r.userId === userId);
+      drop(records);
+      return publicIdsOf(records);
+    },
+  };
+}
+
+// ─── Minimal in-memory two-factor store (mirrors the db.js functions) ────────
+
+export function makeTwoFactorStore() {
+  const rows = new Map(); // userId -> { secret_enc, enabled, last_used_step, enabled_at }
+  const codes = new Map(); // userId -> Map(hash -> usedAt|null)
+  return {
+    rows,
+    codes,
+    getUserTwoFactor: (userId) => (rows.has(userId) ? { user_id: userId, ...rows.get(userId) } : null),
+    beginTwoFactorEnrollment: (userId, secretEnc) => {
+      if (rows.get(userId)?.enabled) return 0;
+      rows.set(userId, { secret_enc: secretEnc, enabled: false, last_used_step: null, enabled_at: null });
+      return 1;
+    },
+    replaceRecoveryCodes: (userId, hashes) => {
+      codes.set(userId, new Map(hashes.map((hash) => [hash, null])));
+      return hashes.length;
+    },
+    enableTwoFactor: (userId, step, hashes) => {
+      const row = rows.get(userId);
+      codes.set(userId, new Map(hashes.map((hash) => [hash, null])));
+      if (!row || row.enabled) return false;
+      Object.assign(row, { enabled: true, last_used_step: step ?? null, enabled_at: new Date().toISOString() });
+      return true;
+    },
+    markTotpStepUsed: (userId, step) => {
+      const row = rows.get(userId);
+      if (!row) return false;
+      if (row.last_used_step !== null && row.last_used_step >= step) return false;
+      row.last_used_step = step;
+      return true;
+    },
+    consumeRecoveryCode: (userId, hash) => {
+      const own = codes.get(userId);
+      if (!own || !own.has(hash) || own.get(hash) !== null) return false;
+      own.set(hash, new Date().toISOString());
+      return true;
+    },
+    countUnusedRecoveryCodes: (userId) =>
+      [...(codes.get(userId)?.values() ?? [])].filter((used) => used === null).length,
+    disableTwoFactor: (userId) => {
+      codes.delete(userId);
+      return rows.delete(userId);
+    },
   };
 }
 
@@ -83,12 +178,18 @@ export function makeApp(overrides = {}) {
     const record = sessionStore.getSession(cookies.sid);
     if (!record) return null;
     sessionStore.touchSession(cookies.sid);
-    return userStore.findUserById(record.userId) ?? null;
+    const user = userStore.findUserById(record.userId);
+    // The row carries the public id of the session it came from (like db.getSession).
+    if (!user) return null;
+    return { ...user, session_public_id: record.publicId, session_created_at: record.createdAt };
   };
 
   const pendingUploadsStore = [];
   const e2eeStore = overrides.e2eeStore ?? makeE2eeStore();
   const eventRecorder = overrides.eventRecorder ?? makeEventRecorder();
+  const twoFactorStore = overrides.twoFactorStore ?? makeTwoFactorStore();
+  // Streams that were told to close because their session ended.
+  const closedStreams = [];
   const defaultStorageProvider =
     overrides.storageProvider ||
     overrides.deps?.storageProvider ||
@@ -139,6 +240,22 @@ export function makeApp(overrides = {}) {
     deleteSession: sessionStore.deleteSession,
     getSession: sessionStore.getSession,
     touchSession: sessionStore.touchSession,
+    listUserSessions: sessionStore.listUserSessions,
+    revokeUserSession: sessionStore.revokeUserSession,
+    revokeOtherUserSessions: sessionStore.revokeOtherUserSessions,
+    revokeAllUserSessions: sessionStore.revokeAllUserSessions,
+    closeSessionStreams: (target) => {
+      closedStreams.push(target);
+    },
+    // Two-factor sign-in
+    getUserTwoFactor: twoFactorStore.getUserTwoFactor,
+    beginTwoFactorEnrollment: twoFactorStore.beginTwoFactorEnrollment,
+    enableTwoFactor: twoFactorStore.enableTwoFactor,
+    replaceRecoveryCodes: twoFactorStore.replaceRecoveryCodes,
+    markTotpStepUsed: twoFactorStore.markTotpStepUsed,
+    consumeRecoveryCode: twoFactorStore.consumeRecoveryCode,
+    countUnusedRecoveryCodes: twoFactorStore.countUnusedRecoveryCodes,
+    disableTwoFactor: twoFactorStore.disableTwoFactor,
     parseCookies: sessionHelpers.parseCookies,
     setSessionCookie: sessionHelpers.setSessionCookie,
     clearSessionCookie: sessionHelpers.clearSessionCookie,
@@ -539,5 +656,7 @@ export function makeApp(overrides = {}) {
     pendingUploadsStore,
     e2eeStore,
     eventRecorder,
+    twoFactorStore,
+    closedStreams,
   };
 }

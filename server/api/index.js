@@ -1,6 +1,8 @@
 import { registerAppRoutes } from "./app.js";
 import { registerAdminRoutes } from "./admin.js";
 import { registerAuthRoutes } from "./auth.js";
+import { registerSessionRoutes } from "./sessions.js";
+import { registerTwoFactorRoutes } from "./twoFactor.js";
 import { registerCallRoutes } from "./calls.js";
 import { registerE2eeRoutes } from "./e2ee.js";
 import { registerChatRoutes } from "./chats.js";
@@ -25,6 +27,8 @@ function registerApiRoutes(app, deps) {
   registerHealthRoutes(app, deps);
   registerAppRoutes(app, deps);
   registerAuthRoutes(app, deps);
+  registerSessionRoutes(app, deps);
+  registerTwoFactorRoutes(app, deps);
   registerPresenceRoutes(app, deps);
   registerProfileRoutes(app, deps);
   registerChatRoutes(app, deps);

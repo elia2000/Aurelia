@@ -22,6 +22,7 @@ import VerifiedBadge from "../common/VerifiedBadge.jsx";
 import Tooltip from "../common/Tooltip.jsx";
 import CallButtons from "../calls/CallButtons.jsx";
 import { useHeaderActions } from "../../calls/useHeaderActions.js";
+import { useKeyChangeTimeline } from "../../e2ee/useKeyChangeTimeline.js";
 import {
   FocusedMediaModal,
   MessageComposer,
@@ -70,7 +71,7 @@ export default function ChatWindowPanel({
   isAtBottomRef,
   onChatScroll,
   onStartReached,
-  messages,
+  messages: chatMessages,
   user,
   formatTime,
   unreadMarkerId,
@@ -158,6 +159,16 @@ export default function ChatWindowPanel({
       : false,
   );
   const headerActions = useHeaderActions(activeHeaderPeer);
+  // The chat's messages with this device's own notes put in ("Alice added a new device"):
+  // service lines that exist only here, so everything below treats them like the others.
+  const messages = useKeyChangeTimeline({
+    messages: chatMessages,
+    chatId: activeChatId,
+    chatType: activeChat?.type,
+    peer: activeHeaderPeer,
+    selfUserId: user?.id,
+    hasOlderMessages,
+  });
   const { pins: messagePins } = useChatMessagePins(activeChatId);
   const hasPinnedBar = Boolean(activeChatId) && messagePins.length > 0;
   // Stable: a message row keeps the first one it was given.

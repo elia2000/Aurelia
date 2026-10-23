@@ -13,6 +13,10 @@
 //    safety number. A verified person who gains a device must be re-verified:
 //    callers refuse to send to or accept calls from unacknowledged devices of
 //    verified people.
+//
+// The tracker also says what it saw to whoever listens (`subscribe`): the chat
+// uses that to write "Bob added a new device" into the conversation. Listening
+// changes no answer, and a listener that throws is ignored.
 
 import { deviceFingerprint } from "./safetyNumber.js";
 
@@ -25,7 +29,38 @@ export const TRUST = Object.freeze({
 
 const MAX_RETIRED = 64;
 
+/** What a listener gets: its own copy, so one listener cannot change what the next one sees. */
+const copyEvent = (event) =>
+  Object.fromEntries(Object.entries(event).map(([key, value]) => [key, Array.isArray(value) ? [...value] : value]));
+
 export function createTrustTracker(store) {
+  const listeners = new Set();
+
+  /**
+   * Events, all with the `userId` they are about:
+   *  - `assessed`     {status, added, removed, mismatched, listed, known, verified}: every lookup.
+   *                   `removed` lists devices dropped by THIS lookup (they are reported once),
+   *                   `listed` every device id the server listed, `known` how many
+   *                   devices were pinned before it.
+   *  - `acknowledged` the person accepted the devices listed at that moment
+   *  - `verified`     {verified: boolean} the safety number was marked / unmarked
+   */
+  function emit(event) {
+    for (const listener of [...listeners]) {
+      try {
+        const result = listener(copyEvent(event));
+        if (result && typeof result.catch === "function") result.catch(() => {});
+      } catch {
+        // A broken listener must never break a trust check.
+      }
+    }
+  }
+
+  function subscribe(listener) {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  }
+
   // Device ids come from the server. Plain-object lookups would treat names
   // like "__proto__" or "constructor" as already known, so every lookup is an
   // own-property check and the maps carry no prototype.
@@ -46,19 +81,25 @@ export function createTrustTracker(store) {
     const pin = (await store.getPeer(userId)) || null;
     const known = pin?.devices || {};
     const verified = Boolean(pin?.verifiedNumber);
+    const knownCount = Object.keys(known).length;
     const added = [];
     const mismatched = [];
 
     const current = await fingerprints(devices);
+    const listed = devices.map((device) => device.id);
     for (const device of devices) {
       if (!has(known, device.id)) added.push(device.id);
       else if (known[device.id] !== current[device.id]) mismatched.push(device.id);
     }
-    if (mismatched.length) return { status: TRUST.KEY_MISMATCH, added, mismatched, verified };
+    if (mismatched.length) {
+      emit({ type: "assessed", userId, status: TRUST.KEY_MISMATCH, added, removed: [], mismatched, listed, known: knownCount, verified });
+      return { status: TRUST.KEY_MISMATCH, added, mismatched, verified };
+    }
 
     if (!pin) {
       // First contact: take what we see as the baseline.
       await store.putPeer(userId, { devices: current, verifiedNumber: null, updatedAt: Date.now() });
+      emit({ type: "assessed", userId, status: TRUST.NEW, added: [], removed: [], mismatched: [], listed, known: 0, verified: false });
       return { status: TRUST.NEW, added: [], mismatched: [], verified: false };
     }
 
@@ -69,10 +110,14 @@ export function createTrustTracker(store) {
     const stillListed = Object.fromEntries(
       Object.entries(known).filter(([id]) => has(current, id)),
     );
+    const removed = [];
     if (Object.keys(stillListed).length !== Object.keys(known).length) {
       const retired = { ...(pin.retired || {}) };
       for (const [id, fingerprint] of Object.entries(known)) {
-        if (!has(current, id)) retired[id] = fingerprint;
+        if (!has(current, id)) {
+          retired[id] = fingerprint;
+          removed.push(id);
+        }
       }
       await store.putPeer(userId, {
         ...pin,
@@ -81,12 +126,9 @@ export function createTrustTracker(store) {
         updatedAt: Date.now(),
       });
     }
-    return {
-      status: added.length ? TRUST.DEVICES_ADDED : TRUST.OK,
-      added,
-      mismatched: [],
-      verified,
-    };
+    const status = added.length ? TRUST.DEVICES_ADDED : TRUST.OK;
+    emit({ type: "assessed", userId, status, added, removed, mismatched: [], listed, known: knownCount, verified });
+    return { status, added, mismatched: [], verified };
   }
 
   /**
@@ -101,6 +143,7 @@ export function createTrustTracker(store) {
       verifiedNumber: null,
       updatedAt: Date.now(),
     });
+    emit({ type: "acknowledged", userId });
   }
 
   /**
@@ -137,7 +180,8 @@ export function createTrustTracker(store) {
       verifiedNumber: verified ? safetyNumberDigits : null,
       updatedAt: Date.now(),
     });
+    emit({ type: "verified", userId, verified: Boolean(verified) });
   }
 
-  return { assess, acknowledge, isVerified, wasVerified, wasRetiredDevice, setVerified };
+  return { assess, acknowledge, isVerified, wasVerified, wasRetiredDevice, setVerified, subscribe };
 }

@@ -1,6 +1,8 @@
 import { ownsPendingAvatarUpload } from "../lib/pendingAvatar.js";
 import path from "node:path";
 import { removeSavedGifFilesQuietly } from "../lib/savedGifCleanup.js";
+import { loginGuardFor, sendTooManyAttempts } from "../lib/loginGuard.js";
+import { twoFactorServiceFor } from "../lib/twoFactorService.js";
 
 function registerProfileRoutes(app, deps) {
   const {
@@ -39,6 +41,24 @@ function registerProfileRoutes(app, deps) {
     updateUserStatus,
     uploadAvatar,
   } = deps;
+
+  const guard = loginGuardFor(deps);
+  const twoFactor = twoFactorServiceFor(deps);
+  const maybe = async (value) => (value && typeof value.then === "function" ? await value : value);
+
+  // Ends the other sessions of a person and closes their live streams.
+  const signOutOtherSessions = async (userId, keepPublicId, reason) => {
+    if (typeof deps.revokeOtherUserSessions !== "function") return 0;
+    const revoked = (await maybe(deps.revokeOtherUserSessions(userId, keepPublicId || null))) || [];
+    if (revoked.length) {
+      try {
+        deps.closeSessionStreams?.({ sessionIds: revoked, payload: { type: "session_revoked", reason } });
+      } catch {
+        // the rows are gone; streams also notice on their next ping
+      }
+    }
+    return revoked.length;
+  };
 
   const emitProfileUpdate = async (user, options = {}) => {
     if (!user?.id) return;
@@ -346,16 +366,39 @@ function registerProfileRoutes(app, deps) {
 
     if (!requireSessionUsernameMatch(res, session, username)) return;
 
+    // Wrong passwords here count like wrong passwords at sign-in: a stolen
+    // session cookie must not become a way to guess the password.
+    const who = { ip: req.ip, account: String(username).toLowerCase() };
+    if (!guard.check(who).allowed) return sendTooManyAttempts(res, guard);
+
     const rawUser = findUserByUsername(username.toLowerCase());
     const user = rawUser && typeof rawUser.then === "function" ? await rawUser : rawUser;
-    if (!user || !user.password_hash || !bcrypt.compareSync(currentPassword, user.password_hash)) {
+    if (
+      !user ||
+      !user.password_hash ||
+      typeof currentPassword !== "string" ||
+      !(await bcrypt.compare(currentPassword, user.password_hash))
+    ) {
+      guard.recordFailure(who);
       return res.status(401).json({ error: "Invalid credentials." });
     }
+
+    const blocked = await twoFactor.requireSecondFactor(user, req.body || {});
+    if (blocked) return res.status(blocked.status).json(blocked.body);
+    guard.recordSuccess(who);
 
     const passwordHash = bcrypt.hashSync(newPassword, 10);
     await updateUserPassword(user.id, passwordHash);
 
-    res.json({ ok: true });
+    // Whoever else was signed in with the old password is signed out; this
+    // device stays.
+    const signedOut = await signOutOtherSessions(
+      user.id,
+      session.session_public_id,
+      "password_changed",
+    );
+
+    res.json({ ok: true, otherSessionsSignedOut: signedOut });
   });
 
   app.put("/api/status", async (req, res) => {
@@ -396,11 +439,19 @@ function registerProfileRoutes(app, deps) {
     }
     if (!requireSessionUsernameMatch(res, session, username)) return;
 
+    const who = { ip: req.ip, account: String(username).toLowerCase() };
+    if (!guard.check(who).allowed) return sendTooManyAttempts(res, guard);
+
     const rawUser = findUserByUsername(String(username || "").toLowerCase());
     const user = rawUser && typeof rawUser.then === "function" ? await rawUser : rawUser;
-    if (!user || !user.password_hash || !bcrypt.compareSync(String(password || ""), user.password_hash)) {
+    if (!user || !user.password_hash || !(await bcrypt.compare(String(password || ""), user.password_hash))) {
+      guard.recordFailure(who);
       return res.status(401).json({ error: "Invalid credentials." });
     }
+
+    const blocked = await twoFactor.requireSecondFactor(user, req.body || {});
+    if (blocked) return res.status(blocked.status).json(blocked.body);
+    guard.recordSuccess(who);
 
     if (user.avatar_url) {
       removeAvatarByUrl(user.avatar_url);
@@ -450,6 +501,16 @@ function registerProfileRoutes(app, deps) {
     }
     // Their private GIF collection goes with them, files included.
     await removeSavedGifFilesQuietly(deps.savedGifStorage, savedGifs);
+
+    // The account is gone: every other device of this person lands on the login page.
+    try {
+      deps.closeSessionStreams?.({
+        username: user.username,
+        payload: { type: "session_revoked", reason: "account_deleted" },
+      });
+    } catch {
+      // nothing left to protect: the sessions were deleted with the account
+    }
 
     clearSessionCookie(req, res);
     return res.json({ ok: true });

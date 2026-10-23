@@ -39,6 +39,7 @@ function registerPushRoutes(app, deps) {
         subscription.keys?.p256dh,
         subscription.keys?.auth,
         messagePreview === false ? 0 : 1,
+        session.session_public_id || null,
       );
       return res.json({ ok: true });
     } catch (error) {

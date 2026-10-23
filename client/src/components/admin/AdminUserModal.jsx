@@ -178,6 +178,24 @@ export default function AdminUserModal({ mode = "edit", user = null, onClose, on
     } catch { setPwErr("Request failed."); } finally { setPwBusy(false); }
   };
 
+  // ─── Two-factor reset (edit mode only) ───────────────────────────────────
+  // The server only lists 2FA as on once it is confirmed; "reset" removes it
+  // and signs the person out everywhere (there is no email recovery).
+
+  const [tfOn, setTfOn] = useState(Boolean(user?.two_factor));
+  const [tfConfirmOpen, setTfConfirmOpen] = useState(false);
+  const [tfBusy, setTfBusy] = useState(false);
+  const [tfErr, setTfErr] = useState("");
+
+  const doTwoFactorReset = async () => {
+    setTfErr(""); setTfBusy(true);
+    try {
+      const r = await api.post(`/api/admin/users/${user.id}/reset-2fa`, {});
+      if (!r.ok) { const d = await r.json().catch(() => ({})); setTfErr(d.error || "Failed"); return; }
+      setTfOn(false); setTfConfirmOpen(false); onSaved();
+    } catch { setTfErr("Request failed."); } finally { setTfBusy(false); }
+  };
+
   // ─── Derived ──────────────────────────────────────────────────────────────
 
   const nickHasPersian  = hasPersian(nick);
@@ -350,6 +368,25 @@ export default function AdminUserModal({ mode = "edit", user = null, onClose, on
               {pwErr && <p className="mt-2 text-xs text-rose-500">{pwErr}</p>}
             </div>
 
+            {/* Two-factor authentication — edit only */}
+            {!creating ? (
+              <div className="rounded-2xl border border-emerald-200 p-3 dark:border-emerald-500/30" data-testid="admin-two-factor">
+                <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Two-factor authentication</p>
+                <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
+                  {tfOn
+                    ? "On. If this user lost their authenticator and recovery codes, reset it: they sign in with their password again and can set it up anew."
+                    : "Off. This user signs in with their password only."}
+                </p>
+                {tfOn ? (
+                  <button type="button" disabled={tfBusy} onClick={() => { setTfErr(""); setTfConfirmOpen(true); }}
+                    className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-600 transition hover:border-rose-300 hover:bg-rose-100 disabled:opacity-50 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300 dark:hover:bg-rose-500/20">
+                    Reset two-factor
+                  </button>
+                ) : null}
+                {tfErr && <p className="mt-2 text-xs text-rose-500">{tfErr}</p>}
+              </div>
+            ) : null}
+
             {/* Profile error */}
             {profileErr && <p className="text-xs text-rose-500">{profileErr}</p>}
 
@@ -362,6 +399,19 @@ export default function AdminUserModal({ mode = "edit", user = null, onClose, on
           </form>
         </div>
       </div>
+
+      {/* Reset two-factor confirm (edit only) */}
+      {!creating ? (
+        <ConfirmModal
+          open={tfConfirmOpen}
+          title="Reset two-factor authentication"
+          message={`Remove two-factor authentication for @${user.username}? They will be signed out of all sessions and can sign in with their password only until they set it up again.`}
+          confirmLabel={tfBusy ? "Resetting…" : "Reset"}
+          busy={tfBusy}
+          onConfirm={doTwoFactorReset}
+          onClose={() => setTfConfirmOpen(false)}
+        />
+      ) : null}
 
       {/* Reset password confirm (edit only) */}
       {!creating ? (

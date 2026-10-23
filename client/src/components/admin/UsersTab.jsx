@@ -1,5 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
-import { Ban, CirclePlus, Pencil, ShieldCheck, ShieldOff, Trash, UserPlus } from "../../icons/lucide.js";
+import { Ban, CirclePlus, KeyRound, Pencil, ShieldCheck, ShieldOff, Trash, UserPlus } from "../../icons/lucide.js";
 import { api, cardCls, btnPrimary, iconBtn, fmtDate, DEFAULT_PAGE_SIZE } from "./adminShared.js";
 import { LoadingRows, EmptyState, FilterPopover, SortTh, RoleBadge, Pagination, TabToolbar, TabSearchInput } from "./AdminCommon.jsx";
 import AdminUserModal from "./AdminUserModal.jsx";
@@ -185,6 +185,7 @@ const UsersTab = forwardRef(function UsersTab({ currentUser, active = true, onMu
                               <span className={`truncate ${nameHasPersian ? "font-fa" : ""}`} dir="auto">{displayName}</span>
                               {Boolean(u.verified) && <VerifiedBadge size={14} />}
                               <UserRoleBadge role={u.role} size={14} />
+                              {Boolean(u.two_factor) && <Tooltip label="Two-factor authentication on"><KeyRound size={13} aria-label="Two-factor authentication on" className="ml-1 shrink-0 text-emerald-600 dark:text-emerald-300" /></Tooltip>}
                             </p>
                             {Boolean(u.banned) && <RoleBadge role={u.role} banned />}
                           </div>
@@ -291,6 +292,7 @@ const UsersTab = forwardRef(function UsersTab({ currentUser, active = true, onMu
                                 <span className={`truncate ${nameHasPersian ? "font-fa" : ""}`} dir="auto">{displayName}</span>
                                 {Boolean(u.verified) && <VerifiedBadge size={14} />}
                                 <UserRoleBadge role={u.role} size={14} />
+                                {Boolean(u.two_factor) && <Tooltip label="Two-factor authentication on"><KeyRound size={13} aria-label="Two-factor authentication on" className="ml-1 shrink-0 text-emerald-600 dark:text-emerald-300" /></Tooltip>}
                               </p>
                               <p className="text-[11px] text-slate-400 dark:text-slate-500">@{u.username}</p>
                             </div>

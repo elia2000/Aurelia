@@ -1,8 +1,44 @@
+import {
+  SESSION_MAX_AGE_MS,
+  SESSION_TOUCH_INTERVAL_MS,
+  isSessionExpired,
+} from "./accountSessions.js";
+
 export function createSessionHelpers({
   getSession,
   touchSession,
   isProduction,
+  // Optional: lets a session older than its cookie be removed when it is used.
+  deleteSession = null,
+  // last_seen is written at most this often per session (a write per request
+  // would make every API call a database write).
+  touchIntervalMs = SESSION_TOUCH_INTERVAL_MS,
+  now = () => Date.now(),
 }) {
+  const lastTouched = new Map(); // token -> ms of the last touch
+
+  const shouldTouch = (token) => {
+    const at = now();
+    const last = lastTouched.get(token);
+    if (last !== undefined && at - last < touchIntervalMs) return false;
+    lastTouched.set(token, at);
+    if (lastTouched.size > 5000) {
+      for (const [key, when] of lastTouched) {
+        if (at - when >= touchIntervalMs) lastTouched.delete(key);
+      }
+    }
+    return true;
+  };
+
+  // A malformed %-escape in a cookie value must not turn into a 500.
+  const safeDecode = (value) => {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  };
+
   const parseCookies = (req) => {
     const cookieHeader = req.headers.cookie;
     if (!cookieHeader) return {};
@@ -11,7 +47,7 @@ export function createSessionHelpers({
       const [name, ...rest] = cookie.trim().split("=");
       if (!name) return acc;
 
-      acc[name] = decodeURIComponent(rest.join("="));
+      acc[name] = safeDecode(rest.join("="));
 
       return acc;
     }, {});
@@ -41,7 +77,7 @@ export function createSessionHelpers({
       "Path=/",
       "HttpOnly",
       "SameSite=Lax",
-      "Max-Age=1209600",
+      `Max-Age=${Math.floor(SESSION_MAX_AGE_MS / 1000)}`,
     ];
 
     if (shouldUseSecureCookie(req)) {
@@ -61,25 +97,37 @@ export function createSessionHelpers({
     res.setHeader("Set-Cookie", parts.join("; "));
   };
 
+  // A session row older than the cookie that carries it is dead: the browser
+  // drops the cookie after Max-Age, and a copy of it must not outlive that.
+  const acceptSession = (session, token) => {
+    if (!session) return null;
+    if (session.session_created_at && isSessionExpired(session.session_created_at, now())) {
+      try {
+        const removed = deleteSession?.(token);
+        if (removed && typeof removed.catch === "function") removed.catch(() => {});
+      } catch {
+        // best effort
+      }
+      return null;
+    }
+    if (shouldTouch(token)) {
+      const touched = touchSession(token);
+      if (touched && typeof touched.catch === "function") touched.catch(() => {});
+    }
+    return session;
+  };
+
   const getSessionFromRequest = (req) => {
     const cookies = parseCookies(req);
     if (!cookies.sid) return null;
+    const token = cookies.sid;
 
-    const rawSession = getSession(cookies.sid);
+    const rawSession = getSession(token);
     if (rawSession && typeof rawSession.then === "function") {
-      return rawSession.then((session) => {
-        if (session) {
-          touchSession(cookies.sid);
-        }
-        return session;
-      });
+      return rawSession.then((session) => acceptSession(session, token));
     }
 
-    if (rawSession) {
-      touchSession(cookies.sid);
-    }
-
-    return rawSession;
+    return acceptSession(rawSession, token);
   };
 
   const requireSession = (req, res) => {
