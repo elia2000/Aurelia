@@ -33,6 +33,7 @@ import { createInspector } from "./lib/inspect.js";
 import { createSessionHelpers } from "./lib/sessions.js";
 import { liveSessionOrNull } from "./lib/accountSessions.js";
 import { createSessionPurger } from "./lib/sessionPurge.js";
+import { DEFAULT_API_RATE_LIMIT, DEFAULT_STATIC_RATE_LIMIT, rateLimitMax } from "./lib/rateLimitSettings.js";
 import { redactSensitive } from "./lib/redact.js";
 import { createRedisClient, createRedisSessionStore } from "./lib/redis.js";
 import { storageEncryption } from "./lib/storageEncryption.js";
@@ -381,7 +382,7 @@ function apiRequestPath(req) {
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 1000,
+  max: rateLimitMax(process.env.API_RATE_LIMIT, DEFAULT_API_RATE_LIMIT),
   // SSE is long-lived (one hit opens a stream). Admin routes have their own
   // bucket so dashboard polling cannot 429 chat health / messages.
   skip: (req) => {
@@ -399,7 +400,7 @@ const adminApiLimiter = rateLimit({
 
 const staticLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 1000,
+  max: rateLimitMax(process.env.STATIC_RATE_LIMIT, DEFAULT_STATIC_RATE_LIMIT),
 });
 
 const MB = 1024 * 1024;
