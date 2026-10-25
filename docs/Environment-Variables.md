@@ -149,6 +149,8 @@ Settings for [voice and video calls](./Calls-and-Video-Messages.md). They are re
 | Variable | Type | Default | Description |
 |---|---|---:|---|
 | `CALLS_ENABLED` | `boolean` | `true` | Turn calling on or off for everyone. When off, the call buttons are hidden. |
+| `CALLS_TURN_HOST` | `string` | `""` | The relay's host name, e.g. `turn.example.com`: the short way to set `CALLS_TURN_URLS` (it becomes `stun:` and `turn:` addresses on `CALLS_TURN_PORT`, default `3478`; `turn:` is also offered over TCP). `CALLS_TURN_URLS`, when set, wins. **That DNS record must be "DNS only": turn off the proxy (grey cloud in Cloudflare).** A proxy cannot carry TURN, and calls then stay on *Connecting*. The host must also point straight at this server, with UDP and TCP `3478` and the relay port range open. |
+| `CALLS_TURN_PORT` | `number` | `3478` | Port used with `CALLS_TURN_HOST`. |
 | `CALLS_TURN_URLS` | `string` | `""` | Comma-separated `stun:`, `turn:` or `turns:` URLs of your relay, for example `stun:turn.example.com:3478,turn:turn.example.com:3478`. Every `turn:` address is also offered over TCP (see `CALLS_TURN_TCP_FALLBACK`). |
 | `CALLS_TURN_SECRET` | `string` | `""` | The relay's `static-auth-secret`. Short-lived per-user credentials are derived from it. Without it no relay is offered. |
 | `CALLS_TURN_CREDENTIAL_TTL_SECONDS` | `integer` | `21600` | Lifetime of the relay credentials, in seconds. Values below 60 are ignored and the default (21600, six hours) is used. Keep it longer than your longest calls. |

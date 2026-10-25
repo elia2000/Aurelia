@@ -11,6 +11,22 @@ describe("readCallsConfig", () => {
     expect(cfg.credentialTtlSeconds).toBe(21600);
   });
 
+  test("CALLS_TURN_HOST is the short way to name the relay: turn.example.com becomes the stun: and turn: addresses", () => {
+    expect(readCallsConfig({ CALLS_TURN_HOST: "turn.example.com" }).turnUrls).toEqual(["turn:turn.example.com:3478"]);
+    expect(readCallsConfig({ CALLS_TURN_HOST: "turn.example.com" }).stunUrls).toEqual(["stun:turn.example.com:3478"]);
+    const custom = readCallsConfig({ CALLS_TURN_HOST: " TURN.Example.com ", CALLS_TURN_PORT: "5000" });
+    expect(custom.turnUrls).toEqual(["turn:turn.example.com:5000"]);
+    expect(readCallsConfig({ CALLS_TURN_HOST: "203.0.113.7" }).turnUrls).toEqual(["turn:203.0.113.7:3478"]);
+    // an explicit URL list wins, and junk is ignored
+    expect(readCallsConfig({ CALLS_TURN_HOST: "turn.example.com", CALLS_TURN_URLS: "turn:other.example.com:3478" }).turnUrls).toEqual([
+      "turn:other.example.com:3478",
+    ]);
+    for (const bad of ["https://turn.example.com", "turn.example.com/x", "a b", "turn.example.com:3478", "x;y"]) {
+      expect(readCallsConfig({ CALLS_TURN_HOST: bad }).turnUrls).toEqual([]);
+    }
+    expect(readCallsConfig({ CALLS_TURN_HOST: "turn.example.com", CALLS_TURN_PORT: "99999" }).turnUrls).toEqual(["turn:turn.example.com:3478"]);
+  });
+
   test("parses URL lists, ignoring junk schemes", () => {
     const cfg = readCallsConfig({
       CALLS_TURN_URLS: "turn:t.example.com:3478?transport=udp, turns:t.example.com:5349, http://evil, ",

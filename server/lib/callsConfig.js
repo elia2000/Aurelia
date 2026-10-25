@@ -3,6 +3,10 @@ import crypto from "node:crypto";
 // Call (WebRTC) configuration, read from the environment.
 //
 //   CALLS_ENABLED                     default true
+//   CALLS_TURN_HOST                   the relay's host name, e.g. turn.example.com
+//                                     (CALLS_TURN_PORT, default 3478): the short way to
+//                                     set CALLS_TURN_URLS. The record must be DNS only
+//                                     (no CDN proxy), a proxy cannot carry TURN.
 //   CALLS_TURN_URLS                   comma-separated turn:/turns:/stun: URLs
 //                                     (turn: URLs are also offered over TCP,
 //                                     see CALLS_TURN_TCP_FALLBACK)
@@ -31,12 +35,28 @@ const truthy = (raw, fallback) => {
   return ["1", "true", "yes", "y", "on"].includes(String(raw).trim().toLowerCase());
 };
 
+const HOST_PATTERN =
+  /^(?:\d{1,3}(?:\.\d{1,3}){3}|[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*)$/i;
+
+/** { stun, turn } addresses for CALLS_TURN_HOST (+ CALLS_TURN_PORT), or null when it is empty or not a plain host name or IPv4 address. */
+function relayFromHost(env) {
+  const host = String(env.CALLS_TURN_HOST || "").trim().toLowerCase();
+  if (!host || host.length > 253 || !HOST_PATTERN.test(host)) return null;
+  const portRaw = String(env.CALLS_TURN_PORT || "").trim();
+  const port = /^\d+$/.test(portRaw) && Number(portRaw) >= 1 && Number(portRaw) <= 65535 ? Number(portRaw) : 3478;
+  return { stun: [`stun:${host}:${port}`], turn: [`turn:${host}:${port}`] };
+}
+
 export function readCallsConfig(env = process.env) {
   const ttlRaw = Number(env.CALLS_TURN_CREDENTIAL_TTL_SECONDS);
+  const fromHost = relayFromHost(env);
+  const turnUrls = splitUrls(env.CALLS_TURN_URLS);
+  const stunUrls = splitUrls(env.CALLS_STUN_URLS);
   return {
     enabled: truthy(env.CALLS_ENABLED, true),
-    turnUrls: splitUrls(env.CALLS_TURN_URLS),
-    stunUrls: splitUrls(env.CALLS_STUN_URLS),
+    // CALLS_TURN_URLS, when set, wins over CALLS_TURN_HOST.
+    turnUrls: turnUrls.length ? turnUrls : fromHost?.turn || [],
+    stunUrls: stunUrls.length || turnUrls.length ? stunUrls : fromHost?.stun || [],
     turnSecret: String(env.CALLS_TURN_SECRET || "").trim(),
     forceRelay: truthy(env.CALLS_FORCE_RELAY, false),
     turnTcpFallback: truthy(env.CALLS_TURN_TCP_FALLBACK, true),
